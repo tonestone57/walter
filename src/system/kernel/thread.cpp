@@ -2965,7 +2965,8 @@ static int32
 thread_block_timeout(timer* timer)
 {
 	Thread* thread = (Thread*)timer->user_data;
-	thread_unblock(thread, B_TIMED_OUT);
+	InterruptsSpinLocker locker(thread->scheduler_lock);
+	thread_unblock_locked(thread, B_TIMED_OUT, NULL);
 
 	timer->user_data = NULL;
 	return B_HANDLED_INTERRUPT;
@@ -3092,8 +3093,9 @@ thread_block_with_timeout(uint32 timeoutFlags, bigtime_t timeout)
 void
 thread_unblock(Thread* thread, status_t status)
 {
+	Thread* waker = thread_get_current_thread();
 	InterruptsSpinLocker locker(thread->scheduler_lock);
-	thread_unblock_locked(thread, status);
+	thread_unblock_locked(thread, status, waker);
 }
 
 
@@ -3101,7 +3103,7 @@ thread_unblock(Thread* thread, status_t status)
 	The caller must not hold any locks.
 */
 static status_t
-user_unblock_thread(thread_id threadID, status_t status)
+user_unblock_thread(thread_id threadID, status_t status, Thread* waker)
 {
 	// get the thread
 	Thread* thread = Thread::GetAndLock(threadID);
@@ -3130,7 +3132,7 @@ user_unblock_thread(thread_id threadID, status_t status)
 		// case that this thread is actually blocked on something else.
 		if (thread->wait.status > 0
 				&& thread->wait.type == THREAD_BLOCK_TYPE_USER) {
-			thread_unblock_locked(thread, status);
+			thread_unblock_locked(thread, status, waker);
 		}
 	}
 	return B_OK;
@@ -3924,7 +3926,8 @@ _user_block_thread(uint32 flags, bigtime_t timeout)
 status_t
 _user_unblock_thread(thread_id threadID, status_t status)
 {
-	status_t error = user_unblock_thread(threadID, status);
+	status_t error = user_unblock_thread(threadID, status,
+		thread_get_current_thread());
 
 	if (error == B_OK)
 		scheduler_reschedule_if_necessary();
@@ -3949,8 +3952,9 @@ _user_unblock_threads(thread_id* userThreads, uint32 count, status_t status)
 	if (user_memcpy(threads, userThreads, count * sizeof(thread_id)) != B_OK)
 		return B_BAD_ADDRESS;
 
+	Thread* waker = thread_get_current_thread();
 	for (uint32 i = 0; i < count; i++)
-		user_unblock_thread(threads[i], status);
+		user_unblock_thread(threads[i], status, waker);
 
 	scheduler_reschedule_if_necessary();
 

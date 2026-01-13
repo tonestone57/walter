@@ -351,14 +351,16 @@ thread_prepare_to_block(Thread* thread, uint32 flags, uint32 type,
 		call to thread_block_locked() will return.
 */
 static inline void
-thread_unblock_locked(Thread* thread, status_t status)
+thread_unblock_locked(Thread* thread, status_t status, Thread* waker)
 {
 	if (atomic_test_and_set(&thread->wait.status, status, 1) != 1)
 		return;
 
 	// wake up the thread, if it is sleeping
-	if (thread->state == B_THREAD_WAITING)
+	if (thread->state == B_THREAD_WAITING) {
+		thread->waker = waker;
 		scheduler_enqueue_in_run_queue(thread);
+	}
 }
 
 
@@ -391,7 +393,7 @@ thread_interrupt(Thread* thread, bool kill)
 	if (thread_is_blocked(thread)) {
 		if ((thread->wait.flags & B_CAN_INTERRUPT) != 0
 			|| (kill && (thread->wait.flags & B_KILL_CAN_INTERRUPT) != 0)) {
-			thread_unblock_locked(thread, B_INTERRUPTED);
+			thread_unblock_locked(thread, B_INTERRUPTED, NULL);
 			return B_OK;
 		}
 	}

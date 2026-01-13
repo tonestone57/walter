@@ -91,13 +91,13 @@ UpdatePriorityBoost(CoreEntry* core, ThreadData* running)
 }
 
 
-static void enqueue(Thread* thread, bool newOne);
+static void enqueue(Thread* thread, bool newOne, Thread* waker);
 
 
 void
 ThreadEnqueuer::operator()(ThreadData* thread)
 {
-	enqueue(thread->GetThread(), false);
+	enqueue(thread->GetThread(), false, NULL);
 }
 
 
@@ -109,7 +109,7 @@ scheduler_dump_thread_data(Thread* thread)
 
 
 static void
-enqueue(Thread* thread, bool newOne)
+enqueue(Thread* thread, bool newOne, Thread* waker)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -126,6 +126,8 @@ enqueue(Thread* thread, bool newOne)
 		targetCPU = &gCPUEntries[thread->previous_cpu->cpu_num];
 	} else if (gSingleCore) {
 		targetCore = &gCoreEntries[0];
+	} else if (waker != NULL && waker->scheduler_data->Core() != NULL) {
+		targetCore = waker->scheduler_data->Core();
 	} else if (threadData->Core() != NULL
 		&& (!newOne || !threadData->HasCacheExpired())) {
 		targetCore = threadData->Rebalance();
@@ -173,9 +175,11 @@ scheduler_enqueue_in_run_queue(Thread *thread)
 		thread->priority);
 
 	ThreadData* threadData = thread->scheduler_data;
+	Thread* waker = thread->waker;
+	thread->waker = NULL;
 
 	threadData->ResetPriorityBoost();
-	enqueue(thread, true);
+	enqueue(thread, true, waker);
 }
 
 
@@ -227,7 +231,7 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 		thread);
 
 	if (threadData->Dequeue())
-		enqueue(thread, true);
+		enqueue(thread, true, NULL);
 
 	return oldPriority;
 }
@@ -429,7 +433,7 @@ reschedule(int32 nextState)
 				putOldThreadAtBack);
 
 		if (oldThreadShouldMigrate) {
-			enqueue(oldThread, true);
+			enqueue(oldThread, true, NULL);
 			// replace with the idle thread, if no other thread could be found
 			if (oldThreadData == nextThreadData)
 				nextThreadData = cpu->PeekIdleThread();
@@ -448,7 +452,7 @@ reschedule(int32 nextState)
 	if (nextThread != oldThread) {
 		if (enqueueOldThread) {
 			if (putOldThreadAtBack)
-				enqueue(oldThread, false);
+				enqueue(oldThread, false, NULL);
 			else
 				oldThreadData->PutBack();
 		}
