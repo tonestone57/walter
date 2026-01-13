@@ -810,6 +810,15 @@ switch_sem_etc(sem_id semToBeReleased, sem_id id, int32 count,
 		sSems[slot].queue.Add(&queueEntry);
 		queueEntry.queued = true;
 
+		if (sSems[slot].u.used.last_acquirer > 0) {
+			Thread* holder = Thread::Get(sSems[slot].u.used.last_acquirer);
+			if (holder != NULL) {
+				if (thread->priority > holder->priority)
+					thread->scheduler_data->DonateTimesliceTo(holder);
+				holder->ReleaseReference();
+			}
+		}
+
 		thread_prepare_to_block(thread, flags, THREAD_BLOCK_TYPE_SEMAPHORE,
 			(void*)(addr_t)id);
 

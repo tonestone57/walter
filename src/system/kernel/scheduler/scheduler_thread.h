@@ -65,6 +65,7 @@ public:
 	inline	bigtime_t	GetQuantumLeft();
 	inline	void		StartQuantum();
 	inline	bool		HasQuantumEnded(bool wasPreempted, bool hasYielded);
+			void		DonateTimesliceTo(Thread* beneficiary);
 
 	inline	void		Continues();
 	inline	void		GoesAway();
@@ -265,9 +266,8 @@ ThreadData::GetQuantumLeft()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	bigtime_t stolenTime = std::min(fStolenTime, gCurrentMode->minimal_quantum);
-	ASSERT(stolenTime >= 0);
-	fStolenTime -= stolenTime;
+	bigtime_t stolenTime = fStolenTime;
+	fStolenTime = 0;
 
 	bigtime_t quantum = ComputeQuantum() - fTimeUsed;
 	quantum += stolenTime;

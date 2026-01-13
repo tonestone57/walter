@@ -267,6 +267,32 @@ ThreadData::_GetSkipCount() const
 
 
 void
+ThreadData::DonateTimesliceTo(Thread* beneficiary)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	if (beneficiary == NULL)
+		return;
+
+	ThreadData* beneficiaryData = beneficiary->scheduler_data;
+	if (beneficiaryData == NULL)
+		return;
+
+	bigtime_t timeUsed = system_time() - fQuantumStart;
+	ASSERT(timeUsed >= 0);
+	fTimeUsed += timeUsed;
+
+	bigtime_t timeLeft = ComputeQuantum() - fTimeUsed;
+	if (timeLeft > 0) {
+		InterruptsSpinLocker locker(beneficiary->scheduler_lock);
+		beneficiaryData->fStolenTime += timeLeft;
+	}
+
+	fTimeUsed = 0;
+}
+
+
+void
 ThreadData::_ComputeNeededLoad()
 {
 	SCHEDULER_ENTER_FUNCTION();
