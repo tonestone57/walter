@@ -27,10 +27,10 @@ ThreadData::_InitBase()
 
 	fEnqueued = false;
 	fReady = false;
+	fQuickStartCredit = false;
 
 	fSkipCount = 0;
 	fPriorityBoost = 0;
-	fAdditionalPenalty = 0;
 
 	fEffectivePriority = GetPriority();
 	fBaseQuantum = sQuantumLengths[GetEffectivePriority()];
@@ -115,7 +115,6 @@ ThreadData::Init()
 
 	if (!IsRealTime()) {
 		fSkipCount = currentThreadData->fSkipCount;
-		fAdditionalPenalty = currentThreadData->fAdditionalPenalty;
 
 		_ComputeEffectivePriority();
 	}
@@ -139,10 +138,6 @@ ThreadData::Dump() const
 	kprintf("\tskip_count:\t\t%" B_PRId32 "\n", fSkipCount);
 	kprintf("\tpriority_boost:\t\t%" B_PRId32 "\n", fPriorityBoost);
 
-	int32 priority = GetPriority() - _GetSkipCount();
-	priority = std::max(priority, int32(1));
-	kprintf("\tadditional_penalty:\t%" B_PRId32 " (%" B_PRId32 ")\n",
-		fAdditionalPenalty % priority, fAdditionalPenalty);
 	kprintf("\teffective_priority:\t%" B_PRId32 "\n", GetEffectivePriority());
 
 	kprintf("\ttime_used:\t\t%" B_PRId64 " us (quantum: %" B_PRId64 " us)\n",
@@ -156,6 +151,8 @@ ThreadData::Dump() const
 		fCore != NULL ? fCore->ID() : -1);
 	if (fCore != NULL && HasCacheExpired())
 		kprintf("\tcache affinity has expired\n");
+	if (fQuickStartCredit)
+		kprintf("\tquick start credit is set\n");
 }
 
 

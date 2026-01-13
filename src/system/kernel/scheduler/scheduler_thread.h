@@ -110,12 +110,12 @@ private:
 
 			bool		fEnqueued;
 			bool		fReady;
+			bool		fQuickStartCredit;
 
 			Thread*		fThread;
 
 			int32		fSkipCount;
 			int32		fPriorityBoost;
-			int32		fAdditionalPenalty;
 
 	mutable	int32		fEffectivePriority;
 	mutable	bigtime_t	fBaseQuantum;
@@ -305,8 +305,6 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	}
 
 	if (timeLeft == 0) {
-		fAdditionalPenalty++;
-		_IncreasePenalty();
 		fTimeUsed = 0;
 		return true;
 	}
@@ -333,10 +331,8 @@ ThreadData::GoesAway()
 
 	ASSERT(fReady);
 
-	if (!HasQuantumEnded(false, false)) {
-		fAdditionalPenalty++;
-		_ComputeEffectivePriority();
-	}
+	if (!HasQuantumEnded(false, false))
+		fQuickStartCredit = true;
 
 	fLastInterruptTime = 0;
 
@@ -421,7 +417,10 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty)
 		ThreadData* top = cpu->PeekThread();
 		wasRunQueueEmpty = (top == NULL || top->IsIdle());
 
-		cpu->PushBack(this, priority);
+		if (fQuickStartCredit)
+			cpu->PushFront(this, priority);
+		else
+			cpu->PushBack(this, priority);
 	} else {
 		CoreRunQueueLocker _(fCore);
 		ASSERT(!fEnqueued);
@@ -430,8 +429,12 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty)
 		ThreadData* top = fCore->PeekThread();
 		wasRunQueueEmpty = (top == NULL || top->IsIdle());
 
-		fCore->PushBack(this, priority);
+		if (fQuickStartCredit)
+			fCore->PushFront(this, priority);
+		else
+			fCore->PushBack(this, priority);
 	}
+	fQuickStartCredit = false;
 }
 
 
