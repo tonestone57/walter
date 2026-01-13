@@ -412,7 +412,7 @@ ConditionVariable::_NotifyLocked(bool all, status_t result)
 			if (lastWaitStatus == STATUS_WAITING && thread->state != B_THREAD_WAITING) {
 				// The thread is not in B_THREAD_WAITING state, so we must unblock it early,
 				// in case it tries to re-block itself immediately after we unset fVariable.
-				thread_unblock_locked(thread, result,
+				thread_unblock_waker(thread, result,
 					thread_get_current_thread());
 				lastWaitStatus = result;
 			}
@@ -427,7 +427,7 @@ ConditionVariable::_NotifyLocked(bool all, status_t result)
 			// fVariable, because otherwise it will wake up before thread_unblock returns
 			// and spin while waiting for us to do so.
 			if (lastWaitStatus == STATUS_WAITING) {
-				thread_unblock_locked(thread, result,
+				thread_unblock_waker(thread, result,
 					thread_get_current_thread());
 			}
 

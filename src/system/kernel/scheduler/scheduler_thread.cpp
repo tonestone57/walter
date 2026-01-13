@@ -11,9 +11,6 @@ using namespace Scheduler;
 
 static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1];
 
-const int32 kMaximumQuantumLengthsCount	= 20;
-static bigtime_t sMaximumQuantumLengths[kMaximumQuantumLengthsCount];
-
 
 void
 ThreadData::_InitBase()
@@ -206,14 +203,17 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	int32 threadCount = fCore->ThreadCount();
-	if (fCore->CPUCount() > 0)
-		threadCount /= fCore->CPUCount();
-
+	int32 load = fCore->GetLoad();
 	bigtime_t quantum = fBaseQuantum;
-	if (threadCount < kMaximumQuantumLengthsCount)
-		quantum = std::min(sMaximumQuantumLengths[threadCount], quantum);
-	return quantum;
+
+	if (load < kLowLoad)
+		quantum = 10000;
+	else if (load < kHighLoad) {
+		quantum = 10000 - 9000 * (load - kLowLoad) / (kHighLoad - kLowLoad);
+	} else
+		quantum = 1000;
+
+	return std::max(quantum, gCurrentMode->minimal_quantum);
 }
 
 
@@ -254,16 +254,6 @@ ThreadData::ComputeQuantumLengths()
 			= kQuantum0 * gCurrentMode->quantum_multipliers[1];
 		sQuantumLengths[priority] = _ScaleQuantum(kQuantum2, kQuantum1,
 			B_NORMAL_PRIORITY, B_IDLE_PRIORITY, priority);
-	}
-
-	for (int32 threadCount = 0; threadCount < kMaximumQuantumLengthsCount;
-		threadCount++) {
-
-		bigtime_t quantum = gCurrentMode->maximum_latency;
-		if (threadCount != 0)
-			quantum /= threadCount;
-		quantum = std::max(quantum, gCurrentMode->minimal_quantum);
-		sMaximumQuantumLengths[threadCount] = quantum;
 	}
 }
 

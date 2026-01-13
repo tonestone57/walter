@@ -3099,6 +3099,14 @@ thread_unblock(Thread* thread, status_t status)
 }
 
 
+void
+thread_unblock_waker(Thread* thread, status_t status, Thread* waker)
+{
+	InterruptsSpinLocker locker(thread->scheduler_lock);
+	thread_unblock_locked(thread, status, waker);
+}
+
+
 /*!	Unblocks a userland-blocked thread.
 	The caller must not hold any locks.
 */

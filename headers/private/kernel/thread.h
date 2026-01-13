@@ -136,6 +136,7 @@ status_t deselect_thread(int32 object, struct select_info *info, bool kernel);
 status_t thread_block();
 status_t thread_block_with_timeout(uint32 timeoutFlags, bigtime_t timeout);
 void thread_unblock(Thread* thread, status_t status);
+void thread_unblock_waker(Thread* thread, status_t status, Thread* waker);
 
 // used in syscalls.c
 status_t _user_set_thread_priority(thread_id thread, int32 newPriority);

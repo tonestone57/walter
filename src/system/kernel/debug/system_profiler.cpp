@@ -228,8 +228,7 @@ SystemProfiler::_MaybeNotifyProfilerThreadLocked()
 		Thread* profilerThread = fWaitingProfilerThread;
 		fWaitingProfilerThread = NULL;
 
-		SpinLocker _(profilerThread->scheduler_lock);
-		thread_unblock_locked(profilerThread, B_OK,
+		thread_unblock_waker(profilerThread, B_OK,
 			thread_get_current_thread());
 
 		fReentered[cpu] = false;
@@ -310,7 +309,7 @@ SystemProfiler::~SystemProfiler()
 	// inactive.
 	InterruptsSpinLocker locker(fLock);
 	if (fWaitingProfilerThread != NULL) {
-		thread_unblock_locked(fWaitingProfilerThread, B_OK, NULL);
+		thread_unblock_waker(fWaitingProfilerThread, B_OK, NULL);
 		fWaitingProfilerThread = NULL;
 	}
 	fProfilingActive = false;
