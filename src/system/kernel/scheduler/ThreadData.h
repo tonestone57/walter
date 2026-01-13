@@ -30,6 +30,15 @@ private:
     int _id;                    // Unique thread identifier
     int64_t _virtualDeadline;   // For EEVDF prioritization
     int64_t _runtime;           // Accumulated run time
+    int64_t _lag;               // For EEVDF lag
+    int _weight;                // For EEVDF weight
+
+public:
+    int64_t Lag() const { return _lag; }
+    void SetLag(int64_t lag) { _lag = lag; }
+
+    int Weight() const { return _weight; }
+    void SetWeight(int weight) { _weight = weight; }
 };
 
-#endif // THREAD_DATA_H
+#endif // EEVDF_THREAD_DATA_H

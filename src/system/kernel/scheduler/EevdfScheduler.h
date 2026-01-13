@@ -1,21 +1,20 @@
 #ifndef EEVDF_SCHEDULER_H
 #define EEVDF_SCHEDULER_H
 
-#include "ThreadPriorityQueue.h"
-#include "SimpleHashMap.h"
+#include "RBTree.h"
 #include "ThreadData.h"
+#include "SchedulerErrors.h"
 
 class EevdfScheduler {
 public:
-    EevdfScheduler() : _queue(_threadMap) {}
+    EevdfScheduler()
+        :
+        _vtime(0)
+    {}
 
-    void Init(int capacity) {
-        _threadMap.Init(capacity);
-    }
-
-    bool AddThread(ThreadData* thread);
-    bool RemoveThread(ThreadData* thread);
-    bool UpdateThread(ThreadData* thread);
+    SchedulerError AddThread(ThreadData* thread);
+    SchedulerError RemoveThread(ThreadData* thread);
+    SchedulerError UpdateThread(ThreadData* thread, int64_t runtime);
     ThreadData* PopMinThread();
     ThreadData* PeekMinThread() const;
     bool IsEmpty() const;
@@ -23,8 +22,12 @@ public:
     void Clear();
 
 private:
-    SimpleHashMap<ThreadData*, int> _threadMap;
-    ThreadPriorityQueue<ThreadData*> _queue;
+    RBTree _runQueue;
+    int64_t _vtime;
+    int _count;
+
+    int64_t CalculateVruntime(int64_t delta, int weight);
+    void UpdateVtime(ThreadData* minThread);
 };
 
 #endif // EEVDF_SCHEDULER_H
