@@ -71,12 +71,6 @@ private:
     CoreEntry* fCore;
     bool fReady;
 
-    // EEVDF parameters (atomic for safe concurrent access)
-    std::atomic<bigtime_t> fVirtualDeadline{0};
-    std::atomic<bigtime_t> fLag{0};
-    std::atomic<bigtime_t> fEligibleTime{0};
-    std::atomic<bigtime_t> fSliceDuration{SchedulerConstants::SCHEDULER_TARGET_LATENCY_SAFE};
-    std::atomic<bigtime_t> fVirtualRuntime{0};
 
     // I/O bound detection
     std::atomic<uint32> fVoluntarySleepTransitions{0};
@@ -109,9 +103,14 @@ private:
     int8 fAffinitizedIrqCount;
 
     // Deadline scheduling (less frequently accessed, protected by lock)
-    bigtime_t fDeadline;
-    bigtime_t fRuntime;
-    bigtime_t fPeriod;
+    bigtime_t deadline;
+    bigtime_t runtime;
+    bigtime_t period;
+
+    int64_t _virtualDeadline;   // For EEVDF prioritization
+    int64_t _runtime;           // Accumulated run time
+    int64_t _lag;               // For EEVDF lag
+    int _weight;                // For EEVDF weight
 
 public:
 	bigtime_t GetDeadline() const { return fDeadline; }
@@ -151,28 +150,6 @@ public:
 
     void UpdateEevdfParameters(CPUEntry* contextCpu, bool isNewOrRelocated, bool isRequeue)
     {
-        // Must be called with CPU's run queue lock held.
-        ASSERT(this->GetThread() != NULL);
-        // If the thread is new or has been migrated, its virtual runtime needs to be
-        // initialized or adjusted.
-        if (isNewOrRelocated || isRequeue) {
-                // Set a new slice duration based on the context CPU's properties
-                bigtime_t newSliceDuration = this->CalculateDynamicQuantum(contextCpu);
-                this->SetSliceDuration(newSliceDuration);
-
-                // When a thread is new or moved, its virtual runtime should be anchored
-                // to the maximum of its current vruntime and the CPU's min_vruntime.
-                // This prevents a thread from a lightly loaded CPU from unfairly dominating
-                // a new, more heavily loaded CPU.
-                // The CPU's min_vruntime is updated whenever a thread is enqueued or dequeued.
-                bigtime_t reference_min_vruntime = contextCpu->GetCachedMinVirtualRuntime();
-
-                // Get the thread's current virtual runtime.
-                bigtime_t currentVRuntime = this->VirtualRuntime();
-
-                // Update the thread's virtual runtime to be at least the CPU's minimum.
-                this->SetVirtualRuntime(std::max(currentVRuntime, reference_min_vruntime));
-        }
 
         // Calculate the thread's weight based on its priority and the capacity of the
         // CPU it's being enqueued on.
@@ -180,76 +157,6 @@ public:
 
         // Calculate the weighted slice entitlement for this thread.
         // This represents the "work" this thread is entitled to in its next slice,
-        // normalized by its weight.
-        bigtime_t weightedNormalizedSliceEntitlement = 0;
-        if (weight > 0) {
-                // Get core capacity, default to nominal if not available.
-                uint32 contextCoreCapacity = SCHEDULER_NOMINAL_CAPACITY;
-                if (contextCpu->Core() != NULL) {
-                        contextCoreCapacity = contextCpu->Core()->PerformanceCapacity();
-                }
-
-                // Calculate the normalized slice work entitlement.
-                // This is how much "work" the slice represents, adjusted for CPU performance.
-                uint64 normalizedSliceWork_num = (uint64)this->SliceDuration() * contextCoreCapacity;
-                uint32 normalizedSliceWork_den = SCHEDULER_NOMINAL_CAPACITY;
-                if (normalizedSliceWork_den > 0) {
-                        bigtime_t normalizedSliceWork = normalizedSliceWork_num / normalizedSliceWork_den;
-                        // The entitlement is this normalized work divided by the thread's weight.
-                        weightedNormalizedSliceEntitlement = normalizedSliceWork * 1024 / weight;
-                }
-        }
-
-        // Update lag based on whether this is a new placement or a requeue.
-        if (isNewOrRelocated) {
-                // For a new or migrated thread, its lag is reset. It starts fresh.
-                // The lag should be positive, representing its entitlement for the next slice.
-                this->AddLag(weightedNormalizedSliceEntitlement);
-        } else if (isRequeue) {
-                // For a requeued thread, its lag is adjusted.
-                // It should be its entitlement minus the "virtual time" it "missed"
-                // by not being at the front of the queue.
-                bigtime_t reference_min_vruntime = contextCpu->GetCachedMinVirtualRuntime();
-                this->SetLag(weightedNormalizedSliceEntitlement - (this->VirtualRuntime() - reference_min_vruntime));
-        }
-
-        // Determine the thread's eligibility time (when it can next run).
-        // Real-time threads are always eligible immediately.
-        if (this->IsRealTime()) {
-                this->SetEligibleTime(system_time());
-        } else if (this->Lag() >= 0) { // Lag is normalized weighted work
-                this->SetEligibleTime(system_time());
-        } else {
-                // If lag is negative, the thread has run more than its share.
-                // It must wait until its virtual runtime "catches up".
-                // This delay is calculated based on its negative lag and the total weight
-                // of all threads on the CPU, to approximate when its turn will come again.
-                // Note: This is a simplified model. A more precise calculation might
-                // involve iterating the run queue to find the sum of weights.
-                // For now, we estimate based on a heuristic.
-                int32 totalWeightOnCpu = 1024; // Placeholder for total weight on CPU
-                if (totalWeightOnCpu > 0 && contextCpu->Core() != NULL) {
-                        uint64 delayNumerator = (uint64)(-this->Lag()) * weight * SCHEDULER_NOMINAL_CAPACITY;
-                        uint32 delayDenominator = totalWeightOnCpu * contextCpu->Core()->PerformanceCapacity();
-                        if (delayDenominator > 0) {
-                                bigtime_t wallClockDelay = delayNumerator / delayDenominator;
-                                // Heuristic cap on delay to prevent extremely long waits if weights are skewed.
-                                const bigtime_t maxWallClockDelay = 2 * SCHEDULER_TARGET_LATENCY;
-                                if (wallClockDelay > maxWallClockDelay) {
-                                        wallClockDelay = maxWallClockDelay;
-                                }
-                                this->SetEligibleTime(system_time() + wallClockDelay);
-                        } else {
-                                this->SetEligibleTime(system_time());
-                        }
-                } else {
-                        this->SetEligibleTime(system_time());
-                }
-        }
-
-        // The virtual deadline is when the thread must *finish* its slice.
-        // It's its eligibility time plus its slice duration.
-        this->SetVirtualDeadline(this->EligibleTime() + this->SliceDuration());
     }
 
     int32 GetBasePriority() const { return fThread ? fThread->priority : B_IDLE_PRIORITY; }
@@ -351,24 +258,14 @@ public:
     }
 
     // EEVDF Specific (atomic getters/setters)
-    bigtime_t VirtualDeadline() const { return fVirtualDeadline.load(std::memory_order_relaxed); }
-    void SetVirtualDeadline(bigtime_t deadline) { fVirtualDeadline.store(deadline, std::memory_order_relaxed); }
-    bigtime_t Lag() const { return fLag.load(std::memory_order_relaxed); }
-    void SetLag(bigtime_t lag) { fLag.store(lag, std::memory_order_relaxed); }
-    void AddLag(bigtime_t lagAmount)
-    {
-        fLag.fetch_add(lagAmount, std::memory_order_relaxed);
-    }
-    bigtime_t EligibleTime() const { return fEligibleTime.load(std::memory_order_relaxed); }
-    void SetEligibleTime(bigtime_t time) { fEligibleTime.store(time, std::memory_order_relaxed); }
-    bigtime_t SliceDuration() const { return fSliceDuration.load(std::memory_order_relaxed); }
-    void SetSliceDuration(bigtime_t duration) { fSliceDuration.store(duration, std::memory_order_relaxed); }
-    bigtime_t VirtualRuntime() const { return fVirtualRuntime.load(std::memory_order_relaxed); }
-    void SetVirtualRuntime(bigtime_t runtime) { fVirtualRuntime.store(runtime, std::memory_order_relaxed); }
-    void AddVirtualRuntime(bigtime_t runtimeAmount)
-    {
-        fVirtualRuntime.fetch_add(runtimeAmount, std::memory_order_relaxed);
-    }
+    int64_t VirtualDeadline() const { return _virtualDeadline; }
+    void SetVirtualDeadline(int64_t deadline) { _virtualDeadline = deadline; }
+    int64_t Lag() const { return _lag; }
+    void SetLag(int64_t lag) { _lag = lag; }
+    int Weight() const { return _weight; }
+    void SetWeight(int weight) { _weight = weight; }
+    int64_t Runtime() const { return _runtime; }
+    void AddRuntime(int64_t delta) { _runtime += delta; }
 
     // State and Lifecycle
     void Continues()
@@ -496,9 +393,14 @@ private:
         fLatencyViolations = 0;
         fInteractivityClass = 1;
         fAffinitizedIrqCount = 0;
-        fDeadline = 0;
-        fRuntime = 0;
-        fPeriod = 0;
+        deadline = 0;
+        runtime = 0;
+        period = 0;
+
+        _virtualDeadline = 0;
+        _runtime = 0;
+        _lag = 0;
+        _weight = 0;
 
         fVirtualDeadline.store(0, std::memory_order_relaxed);
         fLag.store(0, std::memory_order_relaxed);

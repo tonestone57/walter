@@ -3,7 +3,7 @@
 
 #include <atomic>
 #include <utility>
-#include "ThreadData.h"
+#include "scheduler_thread.h"
 
 // Spinlock for thread safety
 class Spinlock {
@@ -25,12 +25,12 @@ private:
 enum Color { RED, BLACK };
 
 struct Node {
-    ThreadData* data;
+    Scheduler::ThreadData* data;
     Color color;
     Node *parent, *left, *right;
     Node* minNode; // Augmented data
 
-    Node(ThreadData* val) : data(val), color(RED), parent(nullptr), left(nullptr), right(nullptr), minNode(this) {}
+    Node(Scheduler::ThreadData* val) : data(val), color(RED), parent(nullptr), left(nullptr), right(nullptr), minNode(this) {}
 };
 
 class RBTree {
@@ -44,7 +44,7 @@ private:
     void fixDelete(Node* node);
     void transplant(Node* u, Node* v);
     Node* minValueNode(Node* node);
-    Node* searchTreeHelper(Node* node, ThreadData* key);
+    Node* searchTreeHelper(Node* node, Scheduler::ThreadData* key);
     void deleteTree(Node* node);
     void updateMin(Node* node);
 
@@ -52,10 +52,10 @@ public:
     RBTree() : root(nullptr) {}
     ~RBTree() { deleteTree(root); }
 
-    void insert(ThreadData* key);
-    void remove(ThreadData* data);
-    ThreadData* getMinimum() const;
-    Node* searchTree(ThreadData* k);
+    void insert(Scheduler::ThreadData* key);
+    void remove(Scheduler::ThreadData* data);
+    Scheduler::ThreadData* getMinimum() const;
+    Node* searchTree(Scheduler::ThreadData* k);
     void clear();
 };
 
@@ -152,14 +152,16 @@ void RBTree::fixInsert(Node* node) {
     root->color = BLACK;
 }
 
-void RBTree::insert(ThreadData* key) {
+void RBTree::insert(Scheduler::ThreadData* key) {
     _lock.lock();
     Node* node = new Node(key);
     Node* parent = nullptr;
     Node* current = root;
     while (current != nullptr) {
         parent = current;
-        if (node->data < current->data)
+        if (node->data->VirtualDeadline() < current->data->VirtualDeadline()
+            || (node->data->VirtualDeadline() == current->data->VirtualDeadline()
+                && node->data < current->data))
             current = current->left;
         else
             current = current->right;
@@ -167,7 +169,9 @@ void RBTree::insert(ThreadData* key) {
     node->parent = parent;
     if (parent == nullptr)
         root = node;
-    else if (node->data < parent->data)
+    else if (node->data->VirtualDeadline() < parent->data->VirtualDeadline()
+        || (node->data->VirtualDeadline() == parent->data->VirtualDeadline()
+            && node->data < parent->data))
         parent->left = node;
     else
         parent->right = node;
@@ -263,7 +267,7 @@ Node* RBTree::minValueNode(Node* node) {
     return current;
 }
 
-void RBTree::remove(ThreadData* data) {
+void RBTree::remove(Scheduler::ThreadData* data) {
     _lock.lock();
     Node* z = searchTree(data);
     if (z == nullptr) {
@@ -318,28 +322,30 @@ void RBTree::remove(ThreadData* data) {
 }
 
 
-Node* RBTree::searchTreeHelper(Node* node, ThreadData* key) {
+Node* RBTree::searchTreeHelper(Node* node, Scheduler::ThreadData* key) {
     if (node == nullptr || key == node->data) {
         return node;
     }
 
-    if (key < node->data) {
+    if (key->VirtualDeadline() < node->data->VirtualDeadline()
+        || (key->VirtualDeadline() == node->data->VirtualDeadline()
+            && key < node->data)) {
         return searchTreeHelper(node->left, key);
     }
     return searchTreeHelper(node->right, key);
 }
 
-Node* RBTree::searchTree(ThreadData* k) {
+Node* RBTree::searchTree(Scheduler::ThreadData* k) {
     return searchTreeHelper(root, k);
 }
 
-ThreadData* RBTree::getMinimum() const {
+Scheduler::ThreadData* RBTree::getMinimum() const {
     _lock.lock();
     if (root == nullptr) {
         _lock.unlock();
         return nullptr;
     }
-    ThreadData* minData = root->minNode->data;
+    Scheduler::ThreadData* minData = root->minNode->data;
     _lock.unlock();
     return minData;
 }
