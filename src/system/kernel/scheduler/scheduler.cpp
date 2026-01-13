@@ -75,6 +75,22 @@ static int32* sCPUToCore;
 static int32* sCPUToPackage;
 
 
+static void
+UpdatePriorityBoost(CoreEntry* core, ThreadData* running)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	CoreRunQueueLocker locker(core);
+	RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY>::ConstIterator it
+		= core->GetConstIterator();
+	while (it.HasNext()) {
+		ThreadData* thread = it.Next();
+		if (thread != running)
+			thread->_UpdatePriorityBoost();
+	}
+}
+
+
 static void enqueue(Thread* thread, bool newOne);
 
 
@@ -158,9 +174,7 @@ scheduler_enqueue_in_run_queue(Thread *thread)
 
 	ThreadData* threadData = thread->scheduler_data;
 
-	if (threadData->ShouldCancelPenalty())
-		threadData->CancelPenalty();
-
+	threadData->ResetPriorityBoost();
 	enqueue(thread, true);
 }
 
@@ -184,7 +198,7 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 		thread->id, priority, oldPriority, threadData->GetEffectivePriority());
 
 	thread->priority = priority;
-	threadData->CancelPenalty();
+	threadData->ResetPriorityBoost();
 
 	if (priority == oldPriority)
 		return oldPriority;
@@ -425,6 +439,8 @@ reschedule(int32 nextState)
 		CoreCPUHeapLocker cpuLocker(core);
 		cpu->UpdatePriority(nextThreadData->GetEffectivePriority());
 	}
+
+	UpdatePriorityBoost(core, nextThreadData);
 
 	Thread* nextThread = nextThreadData->GetThread();
 	ASSERT(!gCPU[thisCPU].disabled || nextThreadData->IsIdle());

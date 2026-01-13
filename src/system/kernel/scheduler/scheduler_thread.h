@@ -52,8 +52,7 @@ public:
 	inline	void		StartCPUTime();
 	inline	void		StopCPUTime();
 
-	inline	void		CancelPenalty();
-	inline	bool		ShouldCancelPenalty() const;
+	inline	void		ResetPriorityBoost();
 
 			bool		ChooseCoreAndCPU(CoreEntry*& targetCore,
 							CPUEntry*& targetCPU);
@@ -91,8 +90,8 @@ public:
 	static	void		ComputeQuantumLengths();
 
 private:
-	inline	void		_IncreasePenalty();
-	inline	int32		_GetPenalty() const;
+	inline	void		_UpdatePriorityBoost();
+	inline	int32		_GetSkipCount() const;
 
 			void		_ComputeNeededLoad();
 
@@ -114,7 +113,8 @@ private:
 
 			Thread*		fThread;
 
-			int32		fPriorityPenalty;
+			int32		fSkipCount;
+			int32		fPriorityBoost;
 			int32		fAdditionalPenalty;
 
 	mutable	int32		fEffectivePriority;
@@ -196,20 +196,16 @@ ThreadData::GetEffectivePriority() const
 
 
 inline void
-ThreadData::_IncreasePenalty()
+ThreadData::_UpdatePriorityBoost()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (IsIdle() || IsRealTime())
 		return;
 
-	TRACE("increasing thread %ld penalty\n", fThread->id);
+	TRACE("increasing thread %ld skip count\n", fThread->id);
 
-	int32 oldPenalty = fPriorityPenalty++;
-	const int kMinimalPriority = _GetMinimalPriority();
-	if (GetPriority() - oldPenalty <= kMinimalPriority)
-		fPriorityPenalty = oldPenalty;
-
+	fSkipCount++;
 	_ComputeEffectivePriority();
 }
 
@@ -244,28 +240,13 @@ ThreadData::StopCPUTime()
 
 
 inline void
-ThreadData::CancelPenalty()
+ThreadData::ResetPriorityBoost()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	int32 oldPenalty = fPriorityPenalty;
-	fPriorityPenalty = 0;
-
-	if (oldPenalty != 0) {
-		TRACE("cancelling thread %ld penalty\n", fThread->id);
-		_ComputeEffectivePriority();
-	}
-}
-
-
-inline bool
-ThreadData::ShouldCancelPenalty() const
-{
-	SCHEDULER_ENTER_FUNCTION();
-
-	if (fCore == NULL)
-		return false;
-	return system_time() - fWentSleep > gCurrentMode->base_quantum / 2;
+	fPriorityBoost = 0;
+	fSkipCount = 0;
+	_ComputeEffectivePriority();
 }
 
 

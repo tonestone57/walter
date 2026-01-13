@@ -28,7 +28,8 @@ ThreadData::_InitBase()
 	fEnqueued = false;
 	fReady = false;
 
-	fPriorityPenalty = 0;
+	fSkipCount = 0;
+	fPriorityBoost = 0;
 	fAdditionalPenalty = 0;
 
 	fEffectivePriority = GetPriority();
@@ -113,8 +114,7 @@ ThreadData::Init()
 	fNeededLoad = currentThreadData->fNeededLoad;
 
 	if (!IsRealTime()) {
-		fPriorityPenalty = std::min(currentThreadData->fPriorityPenalty,
-				std::max(GetPriority() - _GetMinimalPriority(), int32(0)));
+		fSkipCount = currentThreadData->fSkipCount;
 		fAdditionalPenalty = currentThreadData->fAdditionalPenalty;
 
 		_ComputeEffectivePriority();
@@ -136,9 +136,10 @@ ThreadData::Init(CoreEntry* core)
 void
 ThreadData::Dump() const
 {
-	kprintf("\tpriority_penalty:\t%" B_PRId32 "\n", fPriorityPenalty);
+	kprintf("\tskip_count:\t\t%" B_PRId32 "\n", fSkipCount);
+	kprintf("\tpriority_boost:\t\t%" B_PRId32 "\n", fPriorityBoost);
 
-	int32 priority = GetPriority() - _GetPenalty();
+	int32 priority = GetPriority() - _GetSkipCount();
 	priority = std::max(priority, int32(1));
 	kprintf("\tadditional_penalty:\t%" B_PRId32 " (%" B_PRId32 ")\n",
 		fAdditionalPenalty % priority, fAdditionalPenalty);
@@ -271,10 +272,10 @@ ThreadData::ComputeQuantumLengths()
 
 
 inline int32
-ThreadData::_GetPenalty() const
+ThreadData::_GetSkipCount() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fPriorityPenalty;
+	return fSkipCount;
 }
 
 
@@ -303,13 +304,13 @@ ThreadData::_ComputeEffectivePriority() const
 	else if (IsRealTime())
 		fEffectivePriority = GetPriority();
 	else {
-		fEffectivePriority = GetPriority();
-		fEffectivePriority -= _GetPenalty();
-		if (fEffectivePriority > 0)
-			fEffectivePriority -= fAdditionalPenalty % fEffectivePriority;
+		fPriorityBoost = fSkipCount / 2;
+		fEffectivePriority = GetPriority() + fPriorityBoost;
 
-		ASSERT(fEffectivePriority < B_FIRST_REAL_TIME_PRIORITY);
-		ASSERT(fEffectivePriority >= B_LOWEST_ACTIVE_PRIORITY);
+		fEffectivePriority = std::max(fEffectivePriority,
+			_GetMinimalPriority());
+		fEffectivePriority = std::min(fEffectivePriority,
+			int32(B_FIRST_REAL_TIME_PRIORITY - 1));
 	}
 
 	fBaseQuantum = sQuantumLengths[GetEffectivePriority()];
