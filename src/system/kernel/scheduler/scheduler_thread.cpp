@@ -216,8 +216,8 @@ ThreadData::ComputeQuantum() const
 	const bigtime_t kHighLoadQuantum = 1600;
 	const bigtime_t kMediumQuantum = 3200;
 	const bigtime_t kMaxQuantum = 24000;
-	const bigtime_t kDisplayQuantum = 1200;
-	const bigtime_t kReferenceQuantum = 10000;
+	const bigtime_t kDisplayQuantum = 2400;
+	const bigtime_t kReferenceQuantum = 1000;
 
 	// Define constants locally to ensure availability
 	const int32 kLocalMaxLoad = 1000;
