@@ -227,6 +227,7 @@ ThreadData::ComputeQuantum() const
 	int32 cpuCount = fCore->CPUCount();
 
 	bool contention = threadCount > cpuCount;
+	bool overload = threadCount > (cpuCount << 1);
 	bool displayReady = false;
 
 	ThreadData* next = fCore->PeekThread();
@@ -240,6 +241,9 @@ ThreadData::ComputeQuantum() const
 	if (displayReady) {
 		floorQuantum = kDisplayQuantum;
 		maxAllowed = kDisplayQuantum;
+	} else if (overload) {
+		floorQuantum = kHighLoadQuantum;
+		maxAllowed = kHighLoadQuantum;
 	} else if (contention) {
 		floorQuantum = kHighLoadQuantum;
 		maxAllowed = kMediumQuantum;
