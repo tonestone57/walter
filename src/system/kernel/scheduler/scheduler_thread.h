@@ -433,7 +433,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 
 		CPURunQueueLocker _(cpu);
 
-		if (!wasReady) {
+		if (!wasReady && !IsRealTime()) {
 			bigtime_t minVirtualRuntime = cpu->GetMinVirtualRuntime();
 			if (minVirtualRuntime > 0) {
 				bigtime_t target = minVirtualRuntime - 2000;
@@ -456,7 +456,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 	} else {
 		CoreRunQueueLocker _(fCore);
 
-		if (!wasReady) {
+		if (!wasReady && !IsRealTime()) {
 			bigtime_t minVirtualRuntime = fCore->GetMinVirtualRuntime();
 			if (minVirtualRuntime > 0) {
 				bigtime_t target = minVirtualRuntime - 2000;
@@ -513,8 +513,10 @@ ThreadData::UpdateActivity(bigtime_t active)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	int32 priority = std::max((int32)1, GetEffectivePriority());
-	fVirtualRuntime += (active * B_URGENT_DISPLAY_PRIORITY) / priority;
+	if (!IsRealTime()) {
+		int32 priority = std::max((int32)1, GetEffectivePriority());
+		fVirtualRuntime += (active * B_URGENT_DISPLAY_PRIORITY) / priority;
+	}
 
 	if (!gTrackCoreLoad)
 		return;

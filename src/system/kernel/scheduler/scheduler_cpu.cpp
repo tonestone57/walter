@@ -155,6 +155,8 @@ CPUEntry::Remove(ThreadData* thread)
 struct ThreadDataVRuntimeCompare {
 	bool operator()(const ThreadData* a, const ThreadData* b) const
 	{
+		if (a->IsRealTime())
+			return false;
 		return a->GetVirtualRuntime() < b->GetVirtualRuntime();
 	}
 };

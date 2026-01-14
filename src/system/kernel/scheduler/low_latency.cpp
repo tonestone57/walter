@@ -90,6 +90,10 @@ rebalance(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Real-time threads bypass rebalancing to ensure zero jitter
+	if (threadData->IsRealTime())
+		return threadData->Core();
+
 	CoreEntry* core = threadData->Core();
 	ASSERT(core != NULL);
 
