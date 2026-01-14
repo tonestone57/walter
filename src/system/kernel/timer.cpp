@@ -362,14 +362,16 @@ cancel_timer(timer* event)
 {
 	TRACE(("cancel_timer: event %p\n", event));
 
-	InterruptsLocker _;
+	cpu_status state = disable_interrupts();
 
 	// lock the right CPU spinlock
 	int cpu = event->cpu;
 	SpinLocker spinLocker;
 	while (true) {
-		if (cpu >= SMP_MAX_CPUS)
+		if (cpu >= SMP_MAX_CPUS) {
+			restore_interrupts(state);
 			return false;
+		}
 
 		spinLocker.SetTo(sPerCPU[cpu].lock, false);
 		if (cpu == event->cpu)
@@ -404,8 +406,11 @@ cancel_timer(timer* event)
 
 		// If not found, we assume this was a one-shot timer and has already
 		// fired.
-		if (current == NULL)
+		if (current == NULL) {
+			spinLocker.Unlock();
+			restore_interrupts(state);
 			return true;
+		}
 
 		// invalidate CPU field
 		event->cpu = 0xffff;
@@ -435,9 +440,24 @@ cancel_timer(timer* event)
 	if (cpu != smp_get_current_cpu()) {
 		spinLocker.Unlock();
 
+		// We are waiting for the hook to complete on another CPU.
+		// If interrupts were enabled, we enable them here to reduce interrupt
+		// latency.
+		restore_interrupts(state);
+
 		while (atomic_get(&cpuData.current_event_in_progress) == 1)
 			cpu_wait(&cpuData.current_event_in_progress, 0);
+
+		// We need to return with the interrupt state as it was when we disabled
+		// it (or as the caller expects it, which is the same).
+		// However, restore_interrupts(state) already did that.
+		// We just need to make sure we don't accidentally leave them enabled
+		// if we had to disable them again for some logic (which we didn't).
+		return true;
 	}
+
+	spinLocker.Unlock();
+	restore_interrupts(state);
 
 	return true;
 }
