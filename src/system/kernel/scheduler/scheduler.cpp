@@ -140,7 +140,8 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
 
 	bool wasRunQueueEmpty = false;
-	threadData->Enqueue(wasRunQueueEmpty);
+	bool requestPreemption = false;
+	threadData->Enqueue(wasRunQueueEmpty, requestPreemption);
 
 	// notify listeners
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
@@ -149,7 +150,8 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	int32 heapPriority = CPUPriorityHeap::GetKey(targetCPU);
 	if (threadPriority > heapPriority
 		|| (threadPriority == heapPriority && rescheduleNeeded)
-		|| wasRunQueueEmpty) {
+		|| wasRunQueueEmpty
+		|| requestPreemption) {
 
 		if (targetCPU->ID() == smp_get_current_cpu()) {
 			gCPU[targetCPU->ID()].invoke_scheduler = true;

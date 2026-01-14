@@ -208,25 +208,55 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
+	const bigtime_t kHighLoadQuantum = 1000;
+	const bigtime_t kMediumQuantum = 3000;
+	const bigtime_t kMaxQuantum = 20000;
+	const bigtime_t kReferenceQuantum = 10000;
+
+	// Define constants locally to ensure availability
+	const int32 kLocalMaxLoad = 1000;
+	const int32 kLocalLowLoad = kLocalMaxLoad * 20 / 100;
+
 	int32 load = fCore->GetLoad();
-	bigtime_t quantum = fBaseQuantum;
+	int32 threadCount = fCore->ThreadCount();
+	int32 cpuCount = fCore->CPUCount();
 
-	if (load < kLowLoad)
-		quantum = 10000;
-	else {
-		// Non-linear scaling: quantum drops faster as load increases
-		int32 range = kHighLoad - kLowLoad;
-		if (range <= 0)
-			range = 1;
+	bool contention = threadCount > cpuCount;
+	bool displayReady = false;
 
-		int64 ratio = (int64)(load - kLowLoad) * 1024 / range;
+	ThreadData* next = fCore->PeekThread();
+	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+		displayReady = true;
+
+	// Determine target quantum floor based on contention
+	bigtime_t floorQuantum = 3000;
+	if (contention || displayReady)
+		floorQuantum = kHighLoadQuantum;
+
+	// Determine max allowed quantum
+	bigtime_t maxAllowed = kMaxQuantum;
+	if (contention || displayReady) {
+		maxAllowed = kMediumQuantum;
+		if (displayReady)
+			maxAllowed = 1500;
+	}
+
+	bigtime_t targetQuantum = maxAllowed;
+
+	if (load > kLocalLowLoad) {
+		// Scale from maxAllowed down to floorQuantum
+		int32 range = kLocalMaxLoad - kLocalLowLoad;
+		int64 ratio = (int64)(load - kLocalLowLoad) * 1024 / range;
 		if (ratio > 1024)
 			ratio = 1024;
 
 		int64 invRatio = 1024 - ratio;
-		quantum = 1000 + (9000 * invRatio * invRatio) / (1024 * 1024);
+		int64 qRange = maxAllowed - floorQuantum;
+
+		targetQuantum = floorQuantum + (qRange * invRatio * invRatio) / (1024 * 1024);
 	}
 
+	bigtime_t quantum = (bigtime_t)fBaseQuantum * targetQuantum / kReferenceQuantum;
 	return std::max(quantum, gCurrentMode->minimal_quantum);
 }
 

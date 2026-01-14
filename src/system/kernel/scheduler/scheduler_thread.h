@@ -75,7 +75,7 @@ public:
 	inline	bigtime_t	WentSleepActive() const	{ return fWentSleepActive; }
 
 	inline	void		PutBack();
-	inline	void		Enqueue(bool& wasRunQueueEmpty);
+	inline	void		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption);
 	inline	bool		Dequeue();
 
 	inline	void		UpdateActivity(bigtime_t active);
@@ -404,7 +404,7 @@ ThreadData::PutBack()
 
 
 inline void
-ThreadData::Enqueue(bool& wasRunQueueEmpty)
+ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -448,9 +448,10 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty)
 		ThreadData* top = cpu->PeekThread();
 		wasRunQueueEmpty = (top == NULL || top->IsIdle());
 
-		if (fQuickStartCredit)
+		if (fQuickStartCredit) {
 			cpu->PushFront(this, priority);
-		else
+			requestPreemption = true;
+		} else
 			cpu->PushBack(this, priority);
 	} else {
 		CoreRunQueueLocker _(fCore);
@@ -470,9 +471,10 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty)
 		ThreadData* top = fCore->PeekThread();
 		wasRunQueueEmpty = (top == NULL || top->IsIdle());
 
-		if (fQuickStartCredit)
+		if (fQuickStartCredit) {
 			fCore->PushFront(this, priority);
-		else
+			requestPreemption = true;
+		} else
 			fCore->PushBack(this, priority);
 	}
 	fQuickStartCredit = false;
