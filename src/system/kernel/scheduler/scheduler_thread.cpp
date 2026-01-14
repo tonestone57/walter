@@ -113,6 +113,7 @@ ThreadData::Init()
 	Thread* currentThread = thread_get_current_thread();
 	ThreadData* currentThreadData = currentThread->scheduler_data;
 	fNeededLoad = currentThreadData->fNeededLoad;
+	fVirtualRuntime = currentThreadData->fVirtualRuntime;
 
 	if (!IsRealTime()) {
 		fSkipCount = currentThreadData->fSkipCount;
