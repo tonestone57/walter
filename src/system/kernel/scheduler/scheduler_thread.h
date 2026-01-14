@@ -206,8 +206,16 @@ ThreadData::_UpdatePriorityBoost()
 
 	TRACE("increasing thread %ld skip count\n", fThread->id);
 
+	int32 oldPriority = GetEffectivePriority();
 	fSkipCount++;
 	_ComputeEffectivePriority();
+	int32 newPriority = GetEffectivePriority();
+
+	if (oldPriority != newPriority) {
+		fCore->Remove(this);
+		fCore->PushBack(this, newPriority);
+		fEnqueued = true;
+	}
 }
 
 
