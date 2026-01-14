@@ -5,6 +5,8 @@
 
 #include "scheduler_thread.h"
 
+#include <algorithm>
+
 
 using namespace Scheduler;
 
