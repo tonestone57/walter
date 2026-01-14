@@ -213,9 +213,10 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	const bigtime_t kHighLoadQuantum = 1000;
-	const bigtime_t kMediumQuantum = 3000;
-	const bigtime_t kMaxQuantum = 20000;
+	const bigtime_t kHighLoadQuantum = 1600;
+	const bigtime_t kMediumQuantum = 3200;
+	const bigtime_t kMaxQuantum = 24000;
+	const bigtime_t kDisplayQuantum = 1200;
 	const bigtime_t kReferenceQuantum = 10000;
 
 	// Define constants locally to ensure availability
@@ -233,17 +234,16 @@ ThreadData::ComputeQuantum() const
 	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
 		displayReady = true;
 
-	// Determine target quantum floor based on contention
-	bigtime_t floorQuantum = 3000;
-	if (contention || displayReady)
-		floorQuantum = kHighLoadQuantum;
-
-	// Determine max allowed quantum
+	// Determine target quantum floor and max allowed based on contention and display
+	bigtime_t floorQuantum = kMediumQuantum;
 	bigtime_t maxAllowed = kMaxQuantum;
-	if (contention || displayReady) {
+
+	if (displayReady) {
+		floorQuantum = kDisplayQuantum;
+		maxAllowed = kDisplayQuantum;
+	} else if (contention) {
+		floorQuantum = kHighLoadQuantum;
 		maxAllowed = kMediumQuantum;
-		if (displayReady)
-			maxAllowed = kHighLoadQuantum;
 	}
 
 	bigtime_t targetQuantum = maxAllowed;
