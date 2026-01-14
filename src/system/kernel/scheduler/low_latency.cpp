@@ -48,6 +48,29 @@ choose_core(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Try to use the previous core if it is idle and we have cache affinity.
+	// We also try to use a core on the same package (L3 cache) or a sibling
+	// core (L2 cache) to minimize cache misses.
+	CoreEntry* previousCore = threadData->PreviousCore();
+	CPUSet mask = threadData->GetCPUMask();
+	const bool useMask = !mask.IsEmpty();
+
+	if (previousCore != NULL && !has_cache_expired(threadData)) {
+		// Check if previous core is idle
+		if (previousCore->GetLoad() == 0) {
+			if (!useMask || previousCore->CPUMask().Matches(mask))
+				return previousCore;
+		}
+
+		// Check sibling cores in the same package (likely sharing L3)
+		PackageEntry* package = previousCore->Package();
+		if (package != NULL) {
+			CoreEntry* sibling = package->GetIdleCore();
+			if (sibling != NULL && (!useMask || sibling->CPUMask().Matches(mask)))
+				return sibling;
+		}
+	}
+
 	// wake new package
 	PackageEntry* package = gIdlePackageList.Last();
 	if (package == NULL) {
@@ -56,8 +79,6 @@ choose_core(const ThreadData* threadData)
 	}
 
 	int32 index = 0;
-	CPUSet mask = threadData->GetCPUMask();
-	const bool useMask = !mask.IsEmpty();
 
 	CoreEntry* core = NULL;
 	if (package != NULL) {
