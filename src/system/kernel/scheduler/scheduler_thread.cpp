@@ -262,10 +262,6 @@ ThreadData::ComputeQuantum() const
 	}
 
 	bigtime_t quantum = (bigtime_t)fBaseQuantum * targetQuantum / kReferenceQuantum;
-
-	const bigtime_t kMinGranularity = 1000;
-	quantum = std::max(quantum, kMinGranularity);
-
 	return std::max(quantum, gCurrentMode->minimal_quantum);
 }
 
