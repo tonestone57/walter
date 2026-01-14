@@ -25,6 +25,7 @@ ThreadData::_InitBase()
 	fWentSleepActive = 0;
 
 	fEnqueued = false;
+	fEnqueuedInCPURunQueue = false;
 	fReady = false;
 	fQuickStartCredit = false;
 
@@ -155,6 +156,10 @@ ThreadData::Dump() const
 		kprintf("\tcache affinity has expired\n");
 	if (fQuickStartCredit)
 		kprintf("\tquick start credit is set\n");
+	if (fEnqueuedInCPURunQueue)
+		kprintf("\tenqueued in CPU run queue\n");
+	else if (fEnqueued)
+		kprintf("\tenqueued in Core run queue\n");
 }
 
 

@@ -83,7 +83,11 @@ public:
 	inline	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
 
 	inline	bool		IsEnqueued() const	{ return fEnqueued; }
-	inline	void		SetDequeued()	{ fEnqueued = false; }
+	inline	void		SetDequeued()
+	{
+		fEnqueued = false;
+		fEnqueuedInCPURunQueue = false;
+	}
 
 	inline	int32		GetLoad() const	{ return fNeededLoad; }
 
@@ -112,6 +116,7 @@ private:
 			bigtime_t	fWentSleepActive;
 
 			bool		fEnqueued;
+			bool		fEnqueuedInCPURunQueue;
 			bool		fReady;
 			bool		fQuickStartCredit;
 
@@ -388,15 +393,23 @@ ThreadData::PutBack()
 		ASSERT(fThread->cpu != NULL);
 		CPUEntry* cpu = CPUEntry::GetCPU(fThread->cpu->cpu_num);
 
+		// If the thread is pinned but we are running on a different CPU, it
+		// means the pinned CPU was disabled. We should float until it comes back.
+		if (fThread->cpu->cpu_num != fThread->pinned_to_cpu - 1)
+			goto enqueue_core;
+
 		CPURunQueueLocker _(cpu);
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
+		fEnqueuedInCPURunQueue = true;
 
 		cpu->PushFront(this, priority);
 	} else {
+	enqueue_core:
 		CoreRunQueueLocker _(fCore);
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
+		fEnqueuedInCPURunQueue = false;
 
 		fCore->PushFront(this, priority);
 	}
@@ -427,33 +440,43 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 	fThread->state = B_THREAD_READY;
 
 	const int32 priority = GetEffectivePriority();
-	if (fThread->pinned_to_cpu > 0) {
+	bool pinned = fThread->pinned_to_cpu > 0;
+	if (pinned) {
 		ASSERT(fThread->previous_cpu != NULL);
 		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
 
-		CPURunQueueLocker _(cpu);
+		// If the pinned CPU is disabled, we treat the thread as unpinned
+		// temporarily and let it float in the Core run queue.
+		if (gCPU[cpu->ID()].disabled) {
+			pinned = false;
+		} else {
+			CPURunQueueLocker _(cpu);
 
-		if (!wasReady && !IsRealTime()) {
-			bigtime_t minVirtualRuntime = cpu->GetMinVirtualRuntime();
-			if (minVirtualRuntime > 0) {
-				bigtime_t target = minVirtualRuntime - 2000;
-				if (fVirtualRuntime < target)
-					fVirtualRuntime = target;
+			if (!wasReady && !IsRealTime()) {
+				bigtime_t minVirtualRuntime = cpu->GetMinVirtualRuntime();
+				if (minVirtualRuntime > 0) {
+					bigtime_t target = minVirtualRuntime - 2000;
+					if (fVirtualRuntime < target)
+						fVirtualRuntime = target;
+				}
 			}
+
+			ASSERT(!fEnqueued);
+			fEnqueued = true;
+			fEnqueuedInCPURunQueue = true;
+
+			ThreadData* top = cpu->PeekThread();
+			wasRunQueueEmpty = (top == NULL || top->IsIdle());
+
+			if (fQuickStartCredit) {
+				cpu->PushFront(this, priority);
+				requestPreemption = true;
+			} else
+				cpu->PushBack(this, priority);
 		}
+	}
 
-		ASSERT(!fEnqueued);
-		fEnqueued = true;
-
-		ThreadData* top = cpu->PeekThread();
-		wasRunQueueEmpty = (top == NULL || top->IsIdle());
-
-		if (fQuickStartCredit) {
-			cpu->PushFront(this, priority);
-			requestPreemption = true;
-		} else
-			cpu->PushBack(this, priority);
-	} else {
+	if (!pinned) {
 		CoreRunQueueLocker _(fCore);
 
 		if (!wasReady && !IsRealTime()) {
@@ -467,6 +490,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
+		fEnqueuedInCPURunQueue = false;
 
 		ThreadData* top = fCore->PeekThread();
 		wasRunQueueEmpty = (top == NULL || top->IsIdle());
@@ -486,7 +510,7 @@ ThreadData::Dequeue()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (fThread->pinned_to_cpu > 0) {
+	if (fEnqueuedInCPURunQueue) {
 		ASSERT(fThread->previous_cpu != NULL);
 		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
 
