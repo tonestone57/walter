@@ -37,6 +37,8 @@ ThreadData::_InitBase()
 	fMeasureAvailableActiveTime = 0;
 	fLastMeasureAvailableTime = 0;
 	fMeasureAvailableTime = 0;
+
+	fVirtualRuntime = 0;
 }
 
 

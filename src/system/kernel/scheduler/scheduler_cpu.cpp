@@ -152,11 +152,19 @@ CPUEntry::Remove(ThreadData* thread)
 }
 
 
+struct ThreadDataVRuntimeCompare {
+	bool operator()(const ThreadData* a, const ThreadData* b) const
+	{
+		return a->GetVirtualRuntime() < b->GetVirtualRuntime();
+	}
+};
+
+
 ThreadData*
 CoreEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fRunQueue.PeekMaximum();
+	return fRunQueue.PeekBest(4, ThreadDataVRuntimeCompare());
 }
 
 
@@ -164,7 +172,7 @@ ThreadData*
 CPUEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fRunQueue.PeekMaximum();
+	return fRunQueue.PeekBest(4, ThreadDataVRuntimeCompare());
 }
 
 

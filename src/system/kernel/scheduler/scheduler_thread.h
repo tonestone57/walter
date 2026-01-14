@@ -80,6 +80,8 @@ public:
 
 	inline	void		UpdateActivity(bigtime_t active);
 
+	inline	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
+
 	inline	bool		IsEnqueued() const	{ return fEnqueued; }
 	inline	void		SetDequeued()	{ fEnqueued = false; }
 
@@ -129,6 +131,8 @@ private:
 
 			int32		fNeededLoad;
 			uint32		fLoadMeasurementEpoch;
+
+			bigtime_t	fVirtualRuntime;
 
 			CoreEntry*	fCore;
 };
@@ -477,6 +481,9 @@ inline void
 ThreadData::UpdateActivity(bigtime_t active)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	int32 priority = std::max((int32)1, GetEffectivePriority());
+	fVirtualRuntime += (active * B_URGENT_DISPLAY_PRIORITY) / priority;
 
 	if (!gTrackCoreLoad)
 		return;

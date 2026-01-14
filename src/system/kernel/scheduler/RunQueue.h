@@ -96,6 +96,9 @@ public:
 
 	inline	ConstIterator	GetConstIterator() const;
 
+	template<typename Compare>
+	Element*	PeekBest(int count, const Compare& compare) const;
+
 private:
 	struct PriorityEntry : public HeapLinkImpl<PriorityEntry, unsigned int>
 	{
@@ -383,6 +386,28 @@ typename RUN_QUEUE_CLASS_NAME::ConstIterator
 RUN_QUEUE_CLASS_NAME::GetConstIterator() const
 {
 	return ConstIterator(this);
+}
+
+
+RUN_QUEUE_TEMPLATE_LIST
+template<typename Compare>
+Element*
+RUN_QUEUE_CLASS_NAME::PeekBest(int count, const Compare& compare) const
+{
+	PriorityEntry* maxPriorityEntry = fPriorityHeap.PeekRoot();
+	if (maxPriorityEntry == NULL)
+		return NULL;
+
+	unsigned int priority = PriorityHeap::GetKey(maxPriorityEntry);
+	Element* current = fHeads[priority];
+	Element* best = current;
+
+	for (int i = 0; i < count && current != NULL; i++) {
+		if (compare(current, best))
+			best = current;
+		current = sGetLink(current)->fNext;
+	}
+	return best;
 }
 
 
