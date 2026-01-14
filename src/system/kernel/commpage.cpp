@@ -35,7 +35,13 @@ static image_id	sCommPageImage;
 void*
 allocate_commpage_entry(int entry, size_t size)
 {
+	if (entry < 0 || entry >= COMMPAGE_TABLE_ENTRIES)
+		panic("allocate_commpage_entry: invalid entry %d", entry);
+
 	void* space = sFreeCommPageSpace;
+	if ((addr_t)space + size > (addr_t)sCommPageAddress + COMMPAGE_SIZE)
+		panic("allocate_commpage_entry: out of space");
+
 	sFreeCommPageSpace = ALIGN_ENTRY((addr_t)sFreeCommPageSpace + size);
 	sCommPageAddress[entry] = (addr_t)space - (addr_t)sCommPageAddress;
 	dprintf("allocate_commpage_entry(%d, %lu) -> %p\n", entry, size,
