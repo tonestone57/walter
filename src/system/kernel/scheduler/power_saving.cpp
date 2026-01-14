@@ -133,6 +133,10 @@ rebalance(const ThreadData* threadData)
 
 	ASSERT(!gSingleCore);
 
+	// Real-time threads bypass rebalancing to ensure zero jitter
+	if (threadData->IsRealTime())
+		return threadData->Core();
+
 	CPUSet mask = threadData->GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
