@@ -230,7 +230,7 @@ ThreadData::ComputeQuantum() const
 
 	// Determine target quantum floor based on contention
 	bigtime_t floorQuantum = 3000;
-	if (contention || displayReady)
+	if (displayReady)
 		floorQuantum = kHighLoadQuantum;
 
 	// Determine max allowed quantum
