@@ -320,7 +320,7 @@ CPUEntry::StartQuantumTimer(ThreadData* thread, bool wasPreempted)
 			B_ONE_SHOT_RELATIVE_TIMER);
 	} else if (gTrackCoreLoad) {
 		add_timer(&cpu->quantum_timer, &CPUEntry::_UpdateLoadEvent,
-			kLoadMeasureInterval * 2, B_ONE_SHOT_RELATIVE_TIMER);
+			kLoadMeasureInterval << 1, B_ONE_SHOT_RELATIVE_TIMER);
 		fUpdateLoadEvent = true;
 	}
 }
@@ -575,7 +575,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 
 	bigtime_t now = system_time();
 	bool intervalEnded = now >= kLoadMeasureInterval + fLastLoadUpdate;
-	bool intervalSkipped = now >= kLoadMeasureInterval * 2 + fLastLoadUpdate;
+	bool intervalSkipped = now >= (kLoadMeasureInterval << 1) + fLastLoadUpdate;
 
 	if (!intervalEnded && !forceUpdate)
 		return;

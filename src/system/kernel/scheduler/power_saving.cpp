@@ -156,7 +156,7 @@ rebalance(const ThreadData* threadData)
 			return coreLoad > kVeryHighLoad ? smallTaskCore : core;
 		}
 
-		if (threadLoad >= coreLoad / 2)
+		if (threadLoad >= coreLoad >> 1)
 			return core;
 
 		ReadSpinLocker coreLocker(gCoreHeapsLock);
@@ -176,7 +176,7 @@ rebalance(const ThreadData* threadData)
 
 		int32 coreNewLoad = coreLoad - threadLoad;
 		int32 otherNewLoad = other->GetLoad() + threadLoad;
-		return coreNewLoad - otherNewLoad >= kLoadDifference / 2 ? other : core;
+		return coreNewLoad - otherNewLoad >= kLoadDifference >> 1 ? other : core;
 	}
 
 	if (coreLoad >= kMediumLoad)

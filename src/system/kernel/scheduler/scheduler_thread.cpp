@@ -261,7 +261,7 @@ ThreadData::ComputeQuantum() const
 		int64 invRatio = 1024 - ratio;
 		int64 qRange = maxAllowed - floorQuantum;
 
-		targetQuantum = floorQuantum + (qRange * invRatio * invRatio) / (1024 * 1024);
+		targetQuantum = floorQuantum + ((qRange * invRatio * invRatio) >> 20);
 	}
 
 	bigtime_t quantum = targetQuantum;
@@ -373,7 +373,7 @@ ThreadData::_ComputeEffectivePriority() const
 	else if (IsRealTime())
 		fEffectivePriority = GetPriority();
 	else {
-		fPriorityBoost = fSkipCount / 2;
+		fPriorityBoost = fSkipCount >> 1;
 		fEffectivePriority = GetPriority() + fPriorityBoost;
 
 		fEffectivePriority = std::max(fEffectivePriority,
