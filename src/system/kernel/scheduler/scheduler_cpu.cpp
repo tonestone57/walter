@@ -608,7 +608,7 @@ CoreEntry::_UnassignThread(Thread* thread, void* data)
 	CoreEntry* core = static_cast<CoreEntry*>(data);
 	ThreadData* threadData = thread->scheduler_data;
 
-	if (threadData->Core() == core && thread->pinned_to_cpu == 0)
+	if (threadData->Core() == core)
 		threadData->UnassignCore();
 }
 

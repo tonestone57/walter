@@ -122,8 +122,9 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	CoreEntry* targetCore = NULL;
 	if (thread->pinned_to_cpu > 0) {
 		ASSERT(thread->previous_cpu != NULL);
-		ASSERT(threadData->Core() != NULL);
 		targetCPU = &gCPUEntries[thread->previous_cpu->cpu_num];
+		if (gCPU[targetCPU->ID()].disabled)
+			targetCPU = NULL;
 	} else if (gSingleCore) {
 		targetCore = &gCoreEntries[0];
 	} else if (waker != NULL && waker->scheduler_data->Core() != NULL) {
@@ -406,12 +407,8 @@ reschedule(int32 nextState)
 	ThreadData* nextThreadData;
 	if (gCPU[thisCPU].disabled) {
 		if (!oldThreadData->IsIdle()) {
-			if (oldThread->pinned_to_cpu == 0) {
-				putOldThreadAtBack = true;
-				oldThreadData->UnassignCore(true);
-			} else {
-				putOldThreadAtBack = false;
-			}
+			putOldThreadAtBack = true;
+			oldThreadData->UnassignCore(true);
 
 			CPURunQueueLocker cpuLocker(cpu);
 			nextThreadData = cpu->PeekIdleThread();
