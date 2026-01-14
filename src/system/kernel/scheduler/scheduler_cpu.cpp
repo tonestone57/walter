@@ -539,6 +539,30 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 }
 
 
+bigtime_t
+CPUEntry::GetMinVirtualRuntime() const
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	ThreadData* thread = PeekThread();
+	if (thread == NULL)
+		return 0;
+	return thread->GetVirtualRuntime();
+}
+
+
+bigtime_t
+CoreEntry::GetMinVirtualRuntime() const
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	ThreadData* thread = PeekThread();
+	if (thread == NULL)
+		return 0;
+	return thread->GetVirtualRuntime();
+}
+
+
 void
 CoreEntry::_UpdateLoad(bool forceUpdate)
 {

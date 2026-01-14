@@ -216,8 +216,16 @@ ThreadData::_UpdatePriorityBoost()
 	int32 newPriority = GetEffectivePriority();
 
 	if (oldPriority != newPriority) {
-		fCore->Remove(this);
-		fCore->PushBack(this, newPriority);
+		if (fThread->pinned_to_cpu > 0) {
+			ASSERT(fThread->previous_cpu != NULL);
+			CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
+
+			cpu->Remove(this);
+			cpu->PushBack(this, newPriority);
+		} else {
+			fCore->Remove(this);
+			fCore->PushBack(this, newPriority);
+		}
 		fEnqueued = true;
 	}
 }
@@ -400,6 +408,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	bool wasReady = fReady;
 	if (!fReady) {
 		if (gTrackCoreLoad) {
 			bigtime_t timeSlept = system_time() - fWentSleep;
@@ -423,6 +432,16 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty)
 		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
 
 		CPURunQueueLocker _(cpu);
+
+		if (!wasReady) {
+			bigtime_t minVirtualRuntime = cpu->GetMinVirtualRuntime();
+			if (minVirtualRuntime > 0) {
+				bigtime_t target = minVirtualRuntime - 2000;
+				if (fVirtualRuntime < target)
+					fVirtualRuntime = target;
+			}
+		}
+
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
 
@@ -435,6 +454,16 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty)
 			cpu->PushBack(this, priority);
 	} else {
 		CoreRunQueueLocker _(fCore);
+
+		if (!wasReady) {
+			bigtime_t minVirtualRuntime = fCore->GetMinVirtualRuntime();
+			if (minVirtualRuntime > 0) {
+				bigtime_t target = minVirtualRuntime - 2000;
+				if (fVirtualRuntime < target)
+					fVirtualRuntime = target;
+			}
+		}
+
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
 

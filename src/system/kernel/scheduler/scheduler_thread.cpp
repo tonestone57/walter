@@ -213,10 +213,19 @@ ThreadData::ComputeQuantum() const
 
 	if (load < kLowLoad)
 		quantum = 10000;
-	else if (load < kHighLoad) {
-		quantum = 10000 - 9000 * (load - kLowLoad) / (kHighLoad - kLowLoad);
-	} else
-		quantum = 1000;
+	else {
+		// Non-linear scaling: quantum drops faster as load increases
+		int32 range = kHighLoad - kLowLoad;
+		if (range <= 0)
+			range = 1;
+
+		int64 ratio = (int64)(load - kLowLoad) * 1024 / range;
+		if (ratio > 1024)
+			ratio = 1024;
+
+		int64 invRatio = 1024 - ratio;
+		quantum = 1000 + (9000 * invRatio * invRatio) / (1024 * 1024);
+	}
 
 	return std::max(quantum, gCurrentMode->minimal_quantum);
 }

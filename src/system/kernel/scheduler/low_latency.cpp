@@ -119,12 +119,24 @@ rebalance(const ThreadData* threadData)
 	// the current one.
 	int32 coreLoad = core->GetLoad();
 	int32 otherLoad = other->GetLoad();
-	if (other == core || otherLoad + kLoadDifference >= coreLoad)
+
+	if (other == core)
+		return core;
+
+	bigtime_t coreVRuntime = core->GetMinVirtualRuntime();
+	bigtime_t otherVRuntime = other->GetMinVirtualRuntime();
+
+	// If the current core is significantly lagging behind the other core,
+	// we lower the threshold for migration to improve latency.
+	bool congested = coreVRuntime > 0 && otherVRuntime > coreVRuntime + 20000;
+	int32 threshold = congested ? 0 : kLoadDifference;
+
+	if (otherLoad + threshold >= coreLoad)
 		return core;
 
 	// Check whether migrating the current thread would result in both core
 	// loads become closer to the average.
-	int32 difference = coreLoad - otherLoad - kLoadDifference;
+	int32 difference = coreLoad - otherLoad - threshold;
 	ASSERT(difference > 0);
 
 	int32 threadLoad = threadData->GetLoad() / core->CPUCount();

@@ -75,6 +75,7 @@ public:
 						void			UpdatePriority(int32 priority);
 
 	inline				int32			GetLoad() const	{ return fLoad; }
+						bigtime_t		GetMinVirtualRuntime() const;
 						void			ComputeLoad();
 
 						ThreadData*		ChooseNextThread(ThreadData* oldThread,
@@ -157,6 +158,7 @@ public:
 											bigtime_t activeTime);
 
 	inline				int32			GetLoad() const;
+						bigtime_t		GetMinVirtualRuntime() const;
 	inline				uint32			LoadMeasurementEpoch() const
 											{ return fLoadMeasurementEpoch; }
 
