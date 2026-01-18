@@ -223,6 +223,9 @@ ThreadData::ComputeQuantum() const
 	const int32 kLocalLowLoad = kLocalMaxLoad * 20 / 100;
 	const int32 kLoadScale = 1024;
 	const int32 kLoadScaleShift = 10;
+	// kRangeReciprocal = kLoadScale / (kLocalMaxLoad - kLocalLowLoad) * kLoadScale
+	// 1024 / 800 * 1024 = 1310.72 ~= 1311
+	const int32 kRangeReciprocal = 1311;
 
 	int32 load = fCore->GetLoad();
 	int32 threadCount = fCore->ThreadCount();
@@ -255,8 +258,8 @@ ThreadData::ComputeQuantum() const
 
 	if (load > kLocalLowLoad) {
 		// Scale from maxAllowed down to floorQuantum
-		int32 range = kLocalMaxLoad - kLocalLowLoad;
-		int64 ratio = (int64)(load - kLocalLowLoad) * kLoadScale / range;
+		int64 ratio = (int64)(load - kLocalLowLoad) * kRangeReciprocal
+			>> kLoadScaleShift;
 		if (ratio > kLoadScale)
 			ratio = kLoadScale;
 
