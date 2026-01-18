@@ -221,6 +221,8 @@ ThreadData::ComputeQuantum() const
 	// Define constants locally to ensure availability
 	const int32 kLocalMaxLoad = 1000;
 	const int32 kLocalLowLoad = kLocalMaxLoad * 20 / 100;
+	const int32 kLoadScale = 1024;
+	const int32 kLoadScaleShift = 10;
 
 	int32 load = fCore->GetLoad();
 	int32 threadCount = fCore->ThreadCount();
@@ -254,14 +256,15 @@ ThreadData::ComputeQuantum() const
 	if (load > kLocalLowLoad) {
 		// Scale from maxAllowed down to floorQuantum
 		int32 range = kLocalMaxLoad - kLocalLowLoad;
-		int64 ratio = (int64)(load - kLocalLowLoad) * 1024 / range;
-		if (ratio > 1024)
-			ratio = 1024;
+		int64 ratio = (int64)(load - kLocalLowLoad) * kLoadScale / range;
+		if (ratio > kLoadScale)
+			ratio = kLoadScale;
 
-		int64 invRatio = 1024 - ratio;
+		int64 invRatio = kLoadScale - ratio;
 		int64 qRange = maxAllowed - floorQuantum;
 
-		targetQuantum = floorQuantum + ((qRange * invRatio * invRatio) >> 20);
+		targetQuantum = floorQuantum + ((qRange * invRatio * invRatio)
+			>> (2 * kLoadScaleShift));
 	}
 
 	bigtime_t quantum = targetQuantum;

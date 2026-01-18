@@ -12,7 +12,17 @@
 
 using namespace Scheduler;
 
-// load average algorithm from FreeBSD, see kern_sync.c
+/*
+ * Load average algorithm from FreeBSD, see kern_sync.c
+ *
+ * It uses a fixed-point arithmetic with the scaling factor kFScale (2^kFShift).
+ * The load average is an exponential moving average (EMA) of the number of
+ * runnable threads.
+ *
+ * The constants sCExp are the exponential decay factors for 1, 5, and 15
+ * minute intervals, pre-calculated with the scaling factor.
+ * kFShift = 11 roughly provides 3 decimal places of precision.
+ */
 const static int kFShift = 11;
 const static long kFScale = 1 << kFShift;
 static struct loadavg sAverageRunnable = {{0, 0, 0}, kFScale};

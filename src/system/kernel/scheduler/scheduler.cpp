@@ -85,6 +85,23 @@ UpdatePriorityBoost(CoreEntry* core, ThreadData* running)
 		= core->GetConstIterator();
 	while (it.HasNext()) {
 		ThreadData* thread = it.Next();
+
+		/*
+		 * Safety Note:
+		 * _UpdatePriorityBoost may remove the thread from the run queue and
+		 * re-insert it at a different (higher) priority.
+		 *
+		 * This is safe with the current RunQueue iterator implementation because:
+		 * 1. The iterator advances its internal state (caches the next element)
+		 *    before returning the current element. Removing the current element
+		 *    is therefore safe.
+		 * 2. Priority boost always increases priority (moves thread to a higher
+		 *    priority list). Since iteration proceeds from high to low priority,
+		 *    the thread will not be visited again.
+		 *
+		 * WARNING: Do not modify this logic to decrease priority during iteration
+		 * without verifying the iterator safety, as it could lead to infinite loops.
+		 */
 		if (thread != running)
 			thread->_UpdatePriorityBoost();
 	}
