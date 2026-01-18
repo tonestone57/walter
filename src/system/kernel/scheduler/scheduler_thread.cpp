@@ -266,7 +266,7 @@ ThreadData::ComputeQuantum() const
 
 	bigtime_t quantum = targetQuantum;
 
-	const bigtime_t kMinGranularity = 1000;
+	const bigtime_t kMinGranularity = 1200;
 	quantum = std::max(quantum, kMinGranularity);
 
 	return std::max(quantum, gCurrentMode->minimal_quantum);
