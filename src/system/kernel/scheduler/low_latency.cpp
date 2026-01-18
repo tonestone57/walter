@@ -56,9 +56,16 @@ choose_core(const ThreadData* threadData)
 	const bool useMask = !mask.IsEmpty();
 
 	if (previousCore != NULL && !has_cache_expired(threadData)) {
-		// Check if previous core is idle
-		if (previousCore->GetLoad() == 0) {
-			if (!useMask || previousCore->CPUMask().Matches(mask))
+		if (!useMask || previousCore->CPUMask().Matches(mask)) {
+			// Check if previous core is idle
+			if (previousCore->GetLoad() == 0)
+				return previousCore;
+
+			// Check if previous core is lightly loaded (Soft Affinity)
+			// If the load is within the threshold (implying no other core is
+			// significantly better, assuming the best alternative is 0 load),
+			// we stick to it.
+			if (previousCore->GetLoad() <= kLoadDifference)
 				return previousCore;
 		}
 
@@ -102,6 +109,18 @@ choose_core(const ThreadData* threadData)
 	}
 
 	ASSERT(core != NULL);
+
+	if (previousCore != NULL && !has_cache_expired(threadData)) {
+		if (!useMask || previousCore->CPUMask().Matches(mask)) {
+			if (core != previousCore) {
+				// If the selected core is not significantly less loaded than the
+				// previous core, we prefer the previous core to maintain cache locality.
+				if (core->GetLoad() + kLoadDifference >= previousCore->GetLoad())
+					return previousCore;
+			}
+		}
+	}
+
 	return core;
 }
 
