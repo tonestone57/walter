@@ -341,6 +341,9 @@ public:
 	inline void Swap(Element* a, Element* b);
 
 	inline void TakeFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList);
+	inline void PrependFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList);
+	inline void MoveFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList,
+		bool back = true);
 
 	inline void RemoveAll();
 	inline void MakeEmpty()				{ RemoveAll(); }
@@ -570,6 +573,40 @@ DOUBLY_LINKED_LIST_CLASS_NAME::TakeFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList)
 		fromList->fLast = NULL;
 	}
 }
+
+
+// PrependFrom
+DOUBLY_LINKED_LIST_TEMPLATE_LIST
+void
+DOUBLY_LINKED_LIST_CLASS_NAME::PrependFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList)
+{
+	if (fromList && fromList->fFirst) {
+		if (fFirst) {
+			sGetLink(fromList->fLast)->next = fFirst;
+			sGetLink(fFirst)->previous = fromList->fLast;
+			fFirst = fromList->fFirst;
+		} else {
+			fFirst = fromList->fFirst;
+			fLast = fromList->fLast;
+		}
+		fromList->fFirst = NULL;
+		fromList->fLast = NULL;
+	}
+}
+
+
+// MoveFrom
+DOUBLY_LINKED_LIST_TEMPLATE_LIST
+void
+DOUBLY_LINKED_LIST_CLASS_NAME::MoveFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList,
+	bool back)
+{
+	if (back)
+		TakeFrom(fromList);
+	else
+		PrependFrom(fromList);
+}
+
 
 // RemoveAll
 DOUBLY_LINKED_LIST_TEMPLATE_LIST

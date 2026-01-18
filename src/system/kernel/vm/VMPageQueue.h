@@ -40,8 +40,10 @@ public:
 	inline	void				AppendUnlocked(vm_page* page);
 	inline	void				AppendUnlocked(PageList& pages, uint32 count);
 	inline	void				PrependUnlocked(vm_page* page);
+	inline	void				PrependUnlocked(PageList& pages, uint32 count);
 	inline	void				RemoveUnlocked(vm_page* page);
 	inline	vm_page*			RemoveHeadUnlocked();
+	inline	void				RemoveHeadUnlocked(uint32 count, PageList& pages);
 	inline	void				RequeueUnlocked(vm_page* page, bool tail);
 
 	inline	vm_page*			Head() const;
@@ -218,6 +220,29 @@ VMPageQueue::PrependUnlocked(vm_page* page)
 
 
 void
+VMPageQueue::PrependUnlocked(PageList& pages, uint32 count)
+{
+#if DEBUG_PAGE_QUEUE
+	for (PageList::Iterator it = pages.GetIterator();
+			vm_page* page = it.Next();) {
+		if (page->queue != NULL) {
+			panic("%p->VMPageQueue::PrependUnlocked(): page %p thinks it is "
+				"already in queue %p", this, page, page->queue);
+		}
+
+		page->queue = this;
+	}
+
+#endif	// DEBUG_PAGE_QUEUE
+
+	InterruptsSpinLocker locker(fLock);
+
+	fPages.PrependFrom(&pages);
+	fCount += count;
+}
+
+
+void
 VMPageQueue::RemoveUnlocked(vm_page* page)
 {
 	InterruptsSpinLocker locker(fLock);
@@ -230,6 +255,32 @@ VMPageQueue::RemoveHeadUnlocked()
 {
 	InterruptsSpinLocker locker(fLock);
 	return RemoveHead();
+}
+
+
+void
+VMPageQueue::RemoveHeadUnlocked(uint32 count, PageList& pages)
+{
+	InterruptsSpinLocker locker(fLock);
+
+	for (uint32 i = 0; i < count; i++) {
+		vm_page* page = fPages.RemoveHead();
+		if (page == NULL)
+			break;
+
+		fCount--;
+
+#if DEBUG_PAGE_QUEUE
+		if (page->queue != this) {
+			panic("%p->VMPageQueue::RemoveHead(): page %p thinks it is in "
+				"queue %p", this, page, page->queue);
+		}
+
+		page->queue = NULL;
+#endif	// DEBUG_PAGE_QUEUE
+
+		pages.Add(page);
+	}
 }
 
 

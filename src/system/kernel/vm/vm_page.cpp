@@ -1853,18 +1853,15 @@ page_scrubber(void *unused)
 		// get some pages from the free queue, mostly sorted
 		ReadLocker locker(sFreePageQueuesLock);
 
-		vm_page *page[SCRUB_SIZE];
-		int32 scrubCount = 0;
-		for (int32 i = 0; i < reserved; i++) {
-			page[i] = sFreePageQueue.RemoveHeadUnlocked();
-			if (page[i] == NULL)
-				break;
+		VMPageQueue::PageList scrubList;
+		sFreePageQueue.RemoveHeadUnlocked(reserved, scrubList);
+		int32 scrubCount = scrubList.Count();
 
-			DEBUG_PAGE_ACCESS_START(page[i]);
-
-			page[i]->SetState(PAGE_STATE_ACTIVE);
-			page[i]->busy = true;
-			scrubCount++;
+		for (VMPageQueue::PageList::Iterator it = scrubList.GetIterator();
+				vm_page* page = it.Next();) {
+			DEBUG_PAGE_ACCESS_START(page);
+			page->SetState(PAGE_STATE_ACTIVE);
+			page->busy = true;
 		}
 
 		locker.Unlock();
@@ -1877,19 +1874,21 @@ page_scrubber(void *unused)
 		TA(ScrubbingPages(scrubCount));
 
 		// clear them
-		for (int32 i = 0; i < scrubCount; i++)
-			clear_page(page[i]);
+		for (VMPageQueue::PageList::Iterator it = scrubList.GetIterator();
+				vm_page* page = it.Next();) {
+			clear_page(page);
+		}
 
 		locker.Lock();
 
 		// and put them into the clear queue
-		// process the array reversed when prepending to preserve sequential order
-		for (int32 i = scrubCount - 1; i >= 0; i--) {
-			page[i]->SetState(PAGE_STATE_CLEAR);
-			page[i]->busy = false;
-			DEBUG_PAGE_ACCESS_END(page[i]);
-			sClearPageQueue.PrependUnlocked(page[i]);
+		for (VMPageQueue::PageList::Iterator it = scrubList.GetIterator();
+				vm_page* page = it.Next();) {
+			page->SetState(PAGE_STATE_CLEAR);
+			page->busy = false;
+			DEBUG_PAGE_ACCESS_END(page);
 		}
+		sClearPageQueue.PrependUnlocked(scrubList, scrubCount);
 
 		locker.Unlock();
 
@@ -2683,6 +2682,7 @@ free_cached_pages(uint32 pagesToFree, bool dontWait)
 	init_page_marker(marker);
 	forbid_page_faults();
 
+	VMPageQueue::PageList freePages;
 	uint32 pagesFreed = 0;
 
 	while (pagesFreed < pagesToFree) {
@@ -2691,11 +2691,9 @@ free_cached_pages(uint32 pagesToFree, bool dontWait)
 			break;
 
 		if (free_cached_page(page, dontWait)) {
-			ReadLocker locker(sFreePageQueuesLock);
 			page->SetState(PAGE_STATE_FREE);
 			DEBUG_PAGE_ACCESS_END(page);
-			sFreePageQueue.PrependUnlocked(page);
-			locker.Unlock();
+			freePages.Add(page);
 
 			TA(StolenPage());
 
@@ -2703,10 +2701,14 @@ free_cached_pages(uint32 pagesToFree, bool dontWait)
 		}
 	}
 
+	if (pagesFreed > 0) {
+		ReadLocker locker(sFreePageQueuesLock);
+		sFreePageQueue.PrependUnlocked(freePages, pagesFreed);
+		sFreePageCondition.NotifyAll();
+	}
+
 	remove_page_marker(marker);
 	permit_page_faults();
-
-	sFreePageCondition.NotifyAll();
 
 	return pagesFreed;
 }
