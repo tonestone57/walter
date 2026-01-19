@@ -221,21 +221,21 @@ ThreadData::_UpdatePriorityBoost()
 	int32 newPriority = GetEffectivePriority();
 
 	if (oldPriority != newPriority) {
-		bool inCPUQueue = fEnqueuedInCPURunQueue;
-		if (inCPUQueue) {
+		if (fEnqueuedInCPURunQueue) {
 			ASSERT(fThread->pinned_to_cpu > 0);
 			CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
 
 			cpu->Remove(this);
 			cpu->PushBack(this, newPriority);
+
+			fEnqueuedInCPURunQueue = true;
 		} else {
 			fCore->Remove(this);
 			fCore->PushBack(this, newPriority);
+
+			fEnqueuedInCPURunQueue = false;
 		}
 		fEnqueued = true;
-		// PushBack does not rebalance the thread, so it remains in the queue
-		// we put it in (inCPUQueue).
-		fEnqueuedInCPURunQueue = inCPUQueue;
 	}
 }
 
