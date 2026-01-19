@@ -85,6 +85,8 @@ public:
 
 	inline	status_t	Insert(Element* element, Key key);
 
+			status_t	Init(int initialSize);
+
 private:
 			status_t	_GrowHeap(int minimalSize = 0);
 
@@ -282,6 +284,16 @@ MIN_MAX_HEAP_CLASS_NAME::RemoveMaximum()
 #endif
 
 	_RemoveLast(false);
+}
+
+
+MIN_MAX_HEAP_TEMPLATE_LIST
+status_t
+MIN_MAX_HEAP_CLASS_NAME::Init(int initialSize)
+{
+	if (fSize > 0)
+		return B_OK;
+	return _GrowHeap(initialSize);
 }
 
 

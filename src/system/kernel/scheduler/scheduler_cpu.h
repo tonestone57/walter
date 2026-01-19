@@ -214,6 +214,8 @@ public:
 										CoreLoadHeap() { }
 										CoreLoadHeap(int32 coreCount);
 
+						status_t		Init(int32 coreCount);
+
 						void			Dump();
 };
 
@@ -230,7 +232,7 @@ class PackageEntry : public DoublyLinkedListLinkImpl<PackageEntry> {
 public:
 											PackageEntry();
 
-						void				Init(int32 id);
+						status_t			Init(int32 id, int32 coreCount);
 
 	inline				void				CoreGoesIdle(CoreEntry* core);
 	inline				void				CoreWakesUp(CoreEntry* core);
@@ -243,6 +245,18 @@ public:
 	static inline		PackageEntry*		GetMostIdlePackage();
 	static inline		PackageEntry*		GetLeastIdlePackage();
 
+	inline				CoreLoadHeap*		LoadHeap() { return &fLoadHeap; }
+	inline				CoreLoadHeap*		HighLoadHeap() { return &fHighLoadHeap; }
+
+	inline				void				ReadLockLoad()
+												{ acquire_read_spinlock(&fLoadLock); }
+	inline				void				ReadUnlockLoad()
+												{ release_read_spinlock(&fLoadLock); }
+	inline				void				WriteLockLoad()
+												{ acquire_write_spinlock(&fLoadLock); }
+	inline				void				WriteUnlockLoad()
+												{ release_write_spinlock(&fLoadLock); }
+
 private:
 						int32				fPackageID;
 
@@ -251,6 +265,10 @@ private:
 						int32				fCoreCount;
 	mutable				rw_spinlock			fCoreLock;
 
+						CoreLoadHeap		fLoadHeap;
+						CoreLoadHeap		fHighLoadHeap;
+						rw_spinlock			fLoadLock;
+
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
 typedef DoublyLinkedList<PackageEntry> IdlePackageList;
@@ -258,9 +276,6 @@ typedef DoublyLinkedList<PackageEntry> IdlePackageList;
 extern CPUEntry* gCPUEntries;
 
 extern CoreEntry* gCoreEntries;
-extern CoreLoadHeap gCoreLoadHeap;
-extern CoreLoadHeap gCoreHighLoadHeap;
-extern rw_spinlock gCoreHeapsLock;
 extern int32 gCoreCount;
 
 extern PackageEntry* gPackageEntries;

@@ -94,18 +94,41 @@ choose_core(const ThreadData* threadData)
 		} while (useMask && core != NULL && !core->CPUMask().Matches(mask));
 	}
 	if (core == NULL) {
-		ReadSpinLocker coreLocker(gCoreHeapsLock);
-		index = 0;
 		// no idle cores, use least occupied core
-		do {
-			core = gCoreLoadHeap.PeekMinimum(index++);
-		} while (useMask && core != NULL && !core->CPUMask().Matches(mask));
-		if (core == NULL) {
-			index = 0;
+		// iterate over all packages and find the best core
+		CoreEntry* bestCore = NULL;
+		int32 bestLoad = kMaxLoad + 1;
+
+		for (int32 i = 0; i < gPackageCount; i++) {
+			PackageEntry* currentPackage = &gPackageEntries[i];
+			currentPackage->ReadLockLoad();
+
+			CoreEntry* candidate = NULL;
+			int32 heapIndex = 0;
+			// Check LoadHeap
 			do {
-				core = gCoreHighLoadHeap.PeekMinimum(index++);
-			} while (useMask && core != NULL && !core->CPUMask().Matches(mask));
+				candidate = currentPackage->LoadHeap()->PeekMinimum(heapIndex++);
+			} while (candidate != NULL && useMask && !candidate->CPUMask().Matches(mask));
+
+			// If not found, check HighLoadHeap
+			if (candidate == NULL) {
+				heapIndex = 0;
+				do {
+					candidate = currentPackage->HighLoadHeap()->PeekMinimum(heapIndex++);
+				} while (candidate != NULL && useMask && !candidate->CPUMask().Matches(mask));
+			}
+
+			if (candidate != NULL) {
+				int32 load = candidate->GetLoad();
+				if (load < bestLoad) {
+					bestLoad = load;
+					bestCore = candidate;
+				}
+			}
+
+			currentPackage->ReadUnlockLoad();
 		}
+		core = bestCore;
 	}
 
 	ASSERT(core != NULL);
@@ -138,25 +161,42 @@ rebalance(const ThreadData* threadData)
 	ASSERT(core != NULL);
 
 	// Get the least loaded core.
-	ReadSpinLocker coreLocker(gCoreHeapsLock);
 	CPUSet mask = threadData->GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
-	int32 index = 0;
-	CoreEntry* other;
-	do {
-		other = gCoreLoadHeap.PeekMinimum(index++);
-		if (other != NULL && (useMask && other->CPUMask().IsEmpty()))
-			panic("other->CPUMask().IsEmpty()\n");
-	} while (useMask && other != NULL && !other->CPUMask().Matches(mask));
+	CoreEntry* other = NULL;
+	int32 bestLoad = kMaxLoad + 1;
 
-	if (other == NULL) {
-		index = 0;
+	for (int32 i = 0; i < gPackageCount; i++) {
+		PackageEntry* currentPackage = &gPackageEntries[i];
+		currentPackage->ReadLockLoad();
+
+		CoreEntry* candidate = NULL;
+		int32 heapIndex = 0;
+		// Check LoadHeap
 		do {
-			other = gCoreHighLoadHeap.PeekMinimum(index++);
-		} while (useMask && other != NULL && !other->CPUMask().Matches(mask));
+			candidate = currentPackage->LoadHeap()->PeekMinimum(heapIndex++);
+		} while (candidate != NULL && useMask && !candidate->CPUMask().Matches(mask));
+
+		// If not found, check HighLoadHeap
+		if (candidate == NULL) {
+			heapIndex = 0;
+			do {
+				candidate = currentPackage->HighLoadHeap()->PeekMinimum(heapIndex++);
+			} while (candidate != NULL && useMask && !candidate->CPUMask().Matches(mask));
+		}
+
+		if (candidate != NULL) {
+			int32 load = candidate->GetLoad();
+			if (load < bestLoad) {
+				bestLoad = load;
+				other = candidate;
+			}
+		}
+
+		currentPackage->ReadUnlockLoad();
 	}
-	coreLocker.Unlock();
+
 	ASSERT(other != NULL);
 
 	// Check if the least loaded core is significantly less loaded than
@@ -215,11 +255,27 @@ rebalance_irqs(bool idle)
 	if (chosen == NULL || totalLoad < kLowLoad)
 		return;
 
-	ReadSpinLocker coreLocker(gCoreHeapsLock);
-	CoreEntry* other = gCoreLoadHeap.PeekMinimum();
-	if (other == NULL)
-		other = gCoreHighLoadHeap.PeekMinimum();
-	coreLocker.Unlock();
+	CoreEntry* other = NULL;
+	int32 bestLoad = kMaxLoad + 1;
+
+	for (int32 i = 0; i < gPackageCount; i++) {
+		PackageEntry* currentPackage = &gPackageEntries[i];
+		currentPackage->ReadLockLoad();
+
+		CoreEntry* candidate = currentPackage->LoadHeap()->PeekMinimum();
+		if (candidate == NULL)
+			candidate = currentPackage->HighLoadHeap()->PeekMinimum();
+
+		if (candidate != NULL) {
+			int32 load = candidate->GetLoad();
+			if (load < bestLoad) {
+				bestLoad = load;
+				other = candidate;
+			}
+		}
+
+		currentPackage->ReadUnlockLoad();
+	}
 
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
 

@@ -756,16 +756,18 @@ init()
 		return B_NO_MEMORY;
 	ArrayDeleter<PackageEntry> packageEntriesDeleter(gPackageEntries);
 
-	new(&gCoreLoadHeap) CoreLoadHeap(coreCount);
-	new(&gCoreHighLoadHeap) CoreLoadHeap(coreCount);
-
 	new(&gIdlePackageList) IdlePackageList;
+
+	for (int32 i = 0; i < packageCount; i++) {
+		status_t status = gPackageEntries[i].Init(i, cpuCount);
+		if (status != B_OK)
+			return status;
+	}
 
 	for (int32 i = 0; i < cpuCount; i++) {
 		CoreEntry* core = &gCoreEntries[sCPUToCore[i]];
 		PackageEntry* package = &gPackageEntries[sCPUToPackage[i]];
 
-		package->Init(sCPUToPackage[i]);
 		core->Init(sCPUToCore[i], package);
 		gCPUEntries[i].Init(i, core);
 
