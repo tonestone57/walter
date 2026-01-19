@@ -686,6 +686,15 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID)
 }
 
 
+static int32
+get_topology_id(int32 cpuID)
+{
+	if (gCPUCacheLevelCount > 0)
+		return gCPU[cpuID].cache_id[gCPUCacheLevelCount - 1];
+	return sCPUToPackage[cpuID];
+}
+
+
 static status_t
 build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 {
@@ -701,22 +710,71 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 		return B_NO_MEMORY;
 	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
 
+	// First pass: logical topology from ACPI/Device Tree
+	const cpu_topology_node* root = get_cpu_topology();
+	traverse_topology_tree(root, 0, 0);
+
 	coreCount = 0;
 	for (int32 i = 0; i < cpuCount; i++) {
 		if (gCPU[i].topology_id[CPU_TOPOLOGY_SMT] == 0)
 			coreCount++;
 	}
 
-	packageCount = 0;
-	for (int32 i = 0; i < cpuCount; i++) {
-		if (gCPU[i].topology_id[CPU_TOPOLOGY_SMT] == 0
-			&& gCPU[i].topology_id[CPU_TOPOLOGY_CORE] == 0) {
-			packageCount++;
+	// Second pass: Topology-Aware Clustering (L3 Cache / LLC)
+	// We want to group CPUs by their LLC (Last Level Cache) to optimize
+	// lock granularity and cache locality.
+	// We also split groups larger than 8 to reduce contention.
+
+	int32* cpuList = new(std::nothrow) int32[cpuCount];
+	if (cpuList == NULL)
+		return B_NO_MEMORY;
+	ArrayDeleter<int32> cpuListDeleter(cpuList);
+
+	for (int32 i = 0; i < cpuCount; i++)
+		cpuList[i] = i;
+
+	// Insertion Sort (stable, simple for small N)
+	for (int32 i = 1; i < cpuCount; i++) {
+		int32 key = cpuList[i];
+		int32 topoKey = get_topology_id(key);
+		int32 j = i - 1;
+
+		while (j >= 0) {
+			int32 compare = cpuList[j];
+			int32 compareTopo = get_topology_id(compare);
+
+			if (compareTopo > topoKey
+				|| (compareTopo == topoKey && compare > key)) {
+				cpuList[j + 1] = cpuList[j];
+				j--;
+			} else {
+				break;
+			}
 		}
+		cpuList[j + 1] = key;
 	}
 
-	const cpu_topology_node* root = get_cpu_topology();
-	traverse_topology_tree(root, 0, 0);
+	// Assign new Package (Cluster) IDs
+	packageCount = 0;
+	int32 currentPackageSize = 0;
+	int32 lastTopologyID = -1;
+
+	for (int32 i = 0; i < cpuCount; i++) {
+		int32 cpuID = cpuList[i];
+		int32 topologyID = get_topology_id(cpuID);
+
+		if (i == 0) {
+			lastTopologyID = topologyID;
+		} else if (topologyID != lastTopologyID || currentPackageSize >= 8) {
+			packageCount++;
+			currentPackageSize = 0;
+			lastTopologyID = topologyID;
+		}
+
+		sCPUToPackage[cpuID] = packageCount;
+		currentPackageSize++;
+	}
+	packageCount++; // Count is index + 1
 
 	cpuToCoreDeleter.Detach();
 	cpuToPackageDeleter.Detach();
