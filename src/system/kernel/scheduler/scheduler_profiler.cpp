@@ -242,7 +242,7 @@ Profiler::_FindFunction(const char* function)
 			return fFunctionData + i;
 	}
 
-	SpinLocker _(fFunctionLock);
+	InterruptsSpinLocker _(fFunctionLock);
 	for (uint32 i = 0; i < kMaxFunctionEntries; i++) {
 		if (fFunctionData[i].fFunction == NULL) {
 			fFunctionData[i].fFunction = function;

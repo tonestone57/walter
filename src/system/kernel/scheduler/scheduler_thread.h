@@ -221,8 +221,9 @@ ThreadData::_UpdatePriorityBoost()
 	int32 newPriority = GetEffectivePriority();
 
 	if (oldPriority != newPriority) {
-		if (fThread->pinned_to_cpu > 0) {
-			ASSERT(fThread->previous_cpu != NULL);
+		bool inCPUQueue = fEnqueuedInCPURunQueue;
+		if (inCPUQueue) {
+			ASSERT(fThread->pinned_to_cpu > 0);
 			CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
 
 			cpu->Remove(this);
@@ -232,6 +233,7 @@ ThreadData::_UpdatePriorityBoost()
 			fCore->PushBack(this, newPriority);
 		}
 		fEnqueued = true;
+		fEnqueuedInCPURunQueue = inCPUQueue;
 	}
 }
 
