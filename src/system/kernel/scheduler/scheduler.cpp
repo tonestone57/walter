@@ -621,22 +621,34 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	CoreEntry* core = cpu->Core();
 
 	ASSERT(core->CPUCount() >= 0);
-	if (enabled)
+
+	if (enabled) {
 		cpu->Start();
-	else {
-		cpu->UpdatePriority(B_IDLE_PRIORITY);
-
-		ThreadEnqueuer enqueuer;
-		core->RemoveCPU(cpu, enqueuer);
-	}
-
-	gCPU[cpuID].disabled = !enabled;
-	if (enabled)
+		gCPU[cpuID].disabled = false;
 		gCPUEnabled.SetBitAtomic(cpuID);
-	else
+	} else {
+		gCPU[cpuID].disabled = true;
 		gCPUEnabled.ClearBitAtomic(cpuID);
 
-	if (!enabled) {
+		ThreadEnqueuer enqueuer;
+
+		// flush CPU run queue
+		while (true) {
+			ThreadData* threadData;
+			{
+				CPURunQueueLocker locker(cpu);
+				threadData = cpu->PeekThread();
+				if (threadData == NULL || threadData->IsIdle())
+					break;
+				cpu->Remove(threadData);
+			}
+
+			enqueuer(threadData);
+		}
+
+		cpu->UpdatePriority(B_IDLE_PRIORITY);
+		core->RemoveCPU(cpu, enqueuer);
+
 		cpu->Stop();
 
 		// don't wait until the thread quantum ends
