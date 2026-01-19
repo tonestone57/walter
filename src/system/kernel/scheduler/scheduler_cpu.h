@@ -10,6 +10,7 @@
 
 #include <smp.h>
 #include <thread.h>
+#include <util/atomic.h>
 #include <util/AutoLock.h>
 #include <util/Heap.h>
 #include <util/MinMaxHeap.h>
@@ -353,7 +354,8 @@ inline int32
 CoreEntry::ThreadCount() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fThreadCount + fCPUCount - fIdleCPUCount;
+	return atomic_get(const_cast<int32*>(&fThreadCount)) + fCPUCount
+		- atomic_get(const_cast<int32*>(&fIdleCPUCount));
 }
 
 
@@ -517,8 +519,8 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	ASSERT(fIdleCPUCount < fCPUCount);
-	if (++fIdleCPUCount == fCPUCount)
+	ASSERT(atomic_get(&fIdleCPUCount) < fCPUCount);
+	if (atomic_add(&fIdleCPUCount, 1) == fCPUCount - 1)
 		fPackage->CoreGoesIdle(this);
 }
 
@@ -529,8 +531,8 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	ASSERT(fIdleCPUCount > 0);
-	if (fIdleCPUCount-- == fCPUCount)
+	ASSERT(atomic_get(&fIdleCPUCount) > 0);
+	if (atomic_add(&fIdleCPUCount, -1) == fCPUCount)
 		fPackage->CoreWakesUp(this);
 }
 

@@ -506,9 +506,9 @@ void
 CoreEntry::AddCPU(CPUEntry* cpu)
 {
 	ASSERT(fCPUCount >= 0);
-	ASSERT(fIdleCPUCount >= 0);
+	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
-	fIdleCPUCount++;
+	atomic_add(&fIdleCPUCount, 1);
 	if (fCPUCount++ == 0) {
 		// core has been reenabled
 		fLoad = 0;
@@ -528,9 +528,9 @@ void
 CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 {
 	ASSERT(fCPUCount > 0);
-	ASSERT(fIdleCPUCount > 0);
+	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	fIdleCPUCount--;
+	atomic_add(&fIdleCPUCount, -1);
 	fCPUSet.ClearBit(cpu->ID());
 	if (--fCPUCount == 0) {
 		// unassign threads
