@@ -162,11 +162,34 @@ struct ThreadDataVRuntimeCompare {
 };
 
 
+struct ThreadDataOptimal {
+	ThreadDataOptimal(bigtime_t minVRuntime)
+		:
+		fMinVRuntime(minVRuntime)
+	{
+	}
+
+	bool operator()(const ThreadData* thread) const
+	{
+		if (thread->IsRealTime())
+			return true;
+		// 2000us (2ms) is the standard "acceptable lag" used in the scheduler
+		// (e.g. Enqueue() and Rebalance()). If a thread is within this window
+		// of the minimum virtual runtime, it is considered "fair enough" to run
+		// immediately without further scanning.
+		return thread->GetVirtualRuntime() <= fMinVRuntime + 2000;
+	}
+
+	bigtime_t fMinVRuntime;
+};
+
+
 ThreadData*
 CoreEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare());
+	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare(),
+		ThreadDataOptimal(GetMinVirtualRuntime()));
 }
 
 
@@ -174,7 +197,8 @@ ThreadData*
 CPUEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare());
+	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare(),
+		ThreadDataOptimal(GetMinVirtualRuntime()));
 }
 
 

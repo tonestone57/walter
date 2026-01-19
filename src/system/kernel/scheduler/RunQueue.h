@@ -100,8 +100,8 @@ public:
 
 	inline	ConstIterator	GetConstIterator() const;
 
-	template<typename Compare>
-	Element*	PeekBest(const Compare& compare) const;
+	template<typename Compare, typename IsOptimal>
+	Element*	PeekBest(const Compare& compare, const IsOptimal& isOptimal) const;
 
 private:
 			status_t	fInitStatus;
@@ -418,9 +418,9 @@ RUN_QUEUE_CLASS_NAME::GetConstIterator() const
 
 
 RUN_QUEUE_TEMPLATE_LIST
-template<typename Compare>
+template<typename Compare, typename IsOptimal>
 Element*
-RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare) const
+RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare, const IsOptimal& isOptimal) const
 {
 	// Strict priority: only look at the highest priority queue that has threads.
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
@@ -429,6 +429,12 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare) const
 			int bit = fls(val) - 1;
 			unsigned int priority = i * 32 + bit;
 			Element* current = fHeads[priority];
+
+			// Early Exit Optimization:
+			// If the head of the queue is "good enough" (optimal), return immediately.
+			// This avoids scanning the list in the common case (healthy system).
+			if (isOptimal(current))
+				return current;
 
 			// We found the highest priority. Now find the best candidate
 			// strictly within this priority level.
@@ -443,6 +449,12 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare) const
 			for (int j = 0; j < kSearchDepth && current != NULL; j++) {
 				if (compare(current, best))
 					best = current;
+
+				// Optional: Check optimization during scan?
+				// Unlikely to be needed if head wasn't optimal, but could be added.
+				if (isOptimal(current))
+					return current;
+
 				current = sGetLink(current)->fNext;
 			}
 			return best;
