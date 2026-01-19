@@ -718,6 +718,83 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 	const cpu_topology_node* root = get_cpu_topology();
 	traverse_topology_tree(root, 0, 0);
 
+	// Implement L3 Cache Clustering
+	// If the CPU has L3 cache (or LLC), we group cores by that cache ID.
+	// If the group is larger than 8 (e.g. monolithic 16/24 cores), we split it.
+	// This re-writes sCPUToPackage to point to "Scheduler Clusters" instead of physical packages.
+
+	if (gCPUCacheLevelCount > 0) {
+		int32 llcIndex = gCPUCacheLevelCount - 1;
+		int32 nextClusterID = 0;
+		int32* cpuToCluster = new(std::nothrow) int32[cpuCount];
+		if (cpuToCluster == NULL)
+			return B_NO_MEMORY;
+		ArrayDeleter<int32> clusterDeleter(cpuToCluster);
+
+		for (int32 i = 0; i < cpuCount; i++)
+			cpuToCluster[i] = -1;
+
+		// Iterate physical packages to respect physical boundaries first
+		int32 originalPackageCount = packageCount;
+		for (int32 pkg = 0; pkg < originalPackageCount; pkg++) {
+			// Find all CPUs in this physical package
+			int32 packageCPUs[256]; // Assumption: No more than 256 CPUs per socket
+			int32 packageCPUCount = 0;
+
+			for (int32 cpu = 0; cpu < cpuCount; cpu++) {
+				if (sCPUToPackage[cpu] == pkg) {
+					if (packageCPUCount < 256)
+						packageCPUs[packageCPUCount++] = cpu;
+				}
+			}
+
+			// Inside this package, group by LLC
+			bool processed[256];
+			memset(processed, 0, sizeof(processed));
+
+			for (int32 i = 0; i < packageCPUCount; i++) {
+				if (processed[i]) continue;
+
+				int32 cpuA = packageCPUs[i];
+				int32 cacheID = gCPU[cpuA].cache_id[llcIndex];
+
+				// Start a new cluster
+				int32 currentClusterSize = 0;
+				int32 currentClusterID = nextClusterID++;
+
+				// Add CPU A
+				cpuToCluster[cpuA] = currentClusterID;
+				currentClusterSize++;
+				processed[i] = true;
+
+				// Find others sharing this cache
+				for (int32 j = i + 1; j < packageCPUCount; j++) {
+					if (processed[j]) continue;
+
+					int32 cpuB = packageCPUs[j];
+					if (gCPU[cpuB].cache_id[llcIndex] == cacheID) {
+						// Found a peer. Check size limit.
+						if (currentClusterSize >= 8) {
+							// Cluster full, start a new one for this same cache group
+							currentClusterID = nextClusterID++;
+							currentClusterSize = 0;
+						}
+						cpuToCluster[cpuB] = currentClusterID;
+						currentClusterSize++;
+						processed[j] = true;
+					}
+				}
+			}
+		}
+
+		// Apply the new mapping
+		packageCount = nextClusterID;
+		for (int32 i = 0; i < cpuCount; i++) {
+			if (cpuToCluster[i] != -1)
+				sCPUToPackage[i] = cpuToCluster[i];
+		}
+	}
+
 	cpuToCoreDeleter.Detach();
 	cpuToPackageDeleter.Detach();
 	return B_OK;
