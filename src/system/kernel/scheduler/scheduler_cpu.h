@@ -249,7 +249,7 @@ private:
 						DoublyLinkedList<CoreEntry>	fIdleCores;
 						int32				fIdleCoreCount;
 						int32				fCoreCount;
-						rw_spinlock			fCoreLock;
+	mutable				rw_spinlock			fCoreLock;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
@@ -547,6 +547,7 @@ inline CoreEntry*
 PackageEntry::GetIdleCore(int32 index) const
 {
 	SCHEDULER_ENTER_FUNCTION();
+	ReadSpinLocker _(fCoreLock);
 	CoreEntry* element = fIdleCores.Last();
 	for (int32 i = 0; element != NULL && i < index; i++)
 		element = fIdleCores.GetPrevious(element);

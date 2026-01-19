@@ -233,6 +233,8 @@ ThreadData::_UpdatePriorityBoost()
 			fCore->PushBack(this, newPriority);
 		}
 		fEnqueued = true;
+		// PushBack does not rebalance the thread, so it remains in the queue
+		// we put it in (inCPUQueue).
 		fEnqueuedInCPURunQueue = inCPUQueue;
 	}
 }

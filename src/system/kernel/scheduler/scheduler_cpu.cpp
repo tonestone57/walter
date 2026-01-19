@@ -709,24 +709,42 @@ PackageEntry::Init(int32 id)
 void
 PackageEntry::AddIdleCore(CoreEntry* core)
 {
-	fCoreCount++;
-	fIdleCoreCount++;
-	fIdleCores.Add(core);
+	bool addToGlobal = false;
+	{
+		WriteSpinLocker coreLocker(fCoreLock);
+		fCoreCount++;
+		fIdleCoreCount++;
+		fIdleCores.Add(core);
 
-	if (fCoreCount == 1)
+		if (fCoreCount == 1)
+			addToGlobal = true;
+	}
+
+	if (addToGlobal) {
+		WriteSpinLocker packageLocker(gIdlePackageLock);
 		gIdlePackageList.Add(this);
+	}
 }
 
 
 void
 PackageEntry::RemoveIdleCore(CoreEntry* core)
 {
-	fIdleCores.Remove(core);
-	fIdleCoreCount--;
-	fCoreCount--;
+	bool removeFromGlobal = false;
+	{
+		WriteSpinLocker coreLocker(fCoreLock);
+		fIdleCores.Remove(core);
+		fIdleCoreCount--;
+		fCoreCount--;
 
-	if (fCoreCount == 0)
+		if (fCoreCount == 0)
+			removeFromGlobal = true;
+	}
+
+	if (removeFromGlobal) {
+		WriteSpinLocker packageLocker(gIdlePackageLock);
 		gIdlePackageList.Remove(this);
+	}
 }
 
 
