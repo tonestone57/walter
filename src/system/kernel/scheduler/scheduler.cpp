@@ -74,11 +74,18 @@ static scheduler_mode_operations* sSchedulerModes[] = {
 static int32* sCPUToCore;
 static int32* sCPUToPackage;
 
+static int32 sRescheduleCounter;
+
 
 static void
 UpdatePriorityBoost(CoreEntry* core, CPUEntry* cpu, ThreadData* running)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	// Throttle priority boosting to improve scalability.
+	// We only run this O(N) operation every 50th reschedule.
+	if (atomic_add(&sRescheduleCounter, 1) % 50 != 0)
+		return;
 
 	/*
 	 * Safety Note:

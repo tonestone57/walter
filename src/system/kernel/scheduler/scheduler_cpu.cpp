@@ -557,7 +557,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 			threadPostProcessing(threadData);
 		}
 
-		fThreadCount = 0;
+		atomic_set(&fThreadCount, 0);
 	}
 
 	fCPUHeap.ModifyKey(cpu, -1);
