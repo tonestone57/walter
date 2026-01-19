@@ -163,12 +163,6 @@ struct ThreadDataVRuntimeCompare {
 
 
 struct ThreadDataOptimal {
-	ThreadDataOptimal(bigtime_t minVRuntime)
-		:
-		fMinVRuntime(minVRuntime)
-	{
-	}
-
 	bool operator()(const ThreadData* thread) const
 	{
 		if (thread->IsRealTime())
@@ -185,8 +179,6 @@ struct ThreadDataOptimal {
 		// to find the thread with the strictly lowest virtual runtime, we must return false here.
 		return false;
 	}
-
-	bigtime_t fMinVRuntime;
 };
 
 
@@ -195,7 +187,7 @@ CoreEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare(),
-		ThreadDataOptimal(GetMinVirtualRuntime()));
+		ThreadDataOptimal());
 }
 
 
@@ -204,7 +196,7 @@ CPUEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare(),
-		ThreadDataOptimal(GetMinVirtualRuntime()));
+		ThreadDataOptimal());
 }
 
 

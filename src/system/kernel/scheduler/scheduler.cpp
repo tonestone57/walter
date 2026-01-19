@@ -76,34 +76,47 @@ static int32* sCPUToPackage;
 
 
 static void
-UpdatePriorityBoost(CoreEntry* core, ThreadData* running)
+UpdatePriorityBoost(CoreEntry* core, CPUEntry* cpu, ThreadData* running)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	CoreRunQueueLocker locker(core);
-	RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY>::ConstIterator it
-		= core->GetConstIterator();
-	while (it.HasNext()) {
-		ThreadData* thread = it.Next();
+	/*
+	 * Safety Note:
+	 * _UpdatePriorityBoost may remove the thread from the run queue and
+	 * re-insert it at a different (higher) priority.
+	 *
+	 * This is safe with the current RunQueue iterator implementation because:
+	 * 1. The iterator advances its internal state (caches the next element)
+	 *    before returning the current element. Removing the current element
+	 *    is therefore safe.
+	 * 2. Priority boost always increases priority (moves thread to a higher
+	 *    priority list). Since iteration proceeds from high to low priority,
+	 *    the thread will not be visited again.
+	 *
+	 * WARNING: Do not modify this logic to decrease priority during iteration
+	 * without verifying the iterator safety, as it could lead to infinite loops.
+	 */
 
-		/*
-		 * Safety Note:
-		 * _UpdatePriorityBoost may remove the thread from the run queue and
-		 * re-insert it at a different (higher) priority.
-		 *
-		 * This is safe with the current RunQueue iterator implementation because:
-		 * 1. The iterator advances its internal state (caches the next element)
-		 *    before returning the current element. Removing the current element
-		 *    is therefore safe.
-		 * 2. Priority boost always increases priority (moves thread to a higher
-		 *    priority list). Since iteration proceeds from high to low priority,
-		 *    the thread will not be visited again.
-		 *
-		 * WARNING: Do not modify this logic to decrease priority during iteration
-		 * without verifying the iterator safety, as it could lead to infinite loops.
-		 */
-		if (thread != running)
-			thread->_UpdatePriorityBoost();
+	{
+		CPURunQueueLocker locker(cpu);
+		ThreadRunQueue::ConstIterator it = cpu->GetConstIterator();
+		while (it.HasNext()) {
+			ThreadData* thread = it.Next();
+
+			if (thread != running)
+				thread->_UpdatePriorityBoost();
+		}
+	}
+
+	{
+		CoreRunQueueLocker locker(core);
+		ThreadRunQueue::ConstIterator it = core->GetConstIterator();
+		while (it.HasNext()) {
+			ThreadData* thread = it.Next();
+
+			if (thread != running)
+				thread->_UpdatePriorityBoost();
+		}
 	}
 }
 
@@ -460,7 +473,7 @@ reschedule(int32 nextState)
 		cpu->UpdatePriority(nextThreadData->GetEffectivePriority());
 	}
 
-	UpdatePriorityBoost(core, nextThreadData);
+	UpdatePriorityBoost(core, cpu, nextThreadData);
 
 	Thread* nextThread = nextThreadData->GetThread();
 	ASSERT(!gCPU[thisCPU].disabled || nextThreadData->IsIdle());

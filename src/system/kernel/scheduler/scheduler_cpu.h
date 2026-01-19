@@ -73,6 +73,10 @@ public:
 						ThreadData*		PeekThread() const;
 						ThreadData*		PeekIdleThread() const;
 
+	inline				ThreadRunQueue::ConstIterator
+										GetConstIterator() const
+											{ return fRunQueue.GetConstIterator(); }
+
 						void			UpdatePriority(int32 priority);
 
 	inline				int32			GetLoad() const	{ return fLoad; }
@@ -153,6 +157,10 @@ public:
 											int32 priority);
 						void			Remove(ThreadData* thread);
 						ThreadData*		PeekThread() const;
+
+	inline				ThreadRunQueue::ConstIterator
+										GetConstIterator() const
+											{ return fRunQueue.GetConstIterator(); }
 
 	inline				bigtime_t		GetActiveTime() const;
 	inline				void			IncreaseActiveTime(
