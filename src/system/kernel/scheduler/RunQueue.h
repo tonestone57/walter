@@ -101,7 +101,7 @@ public:
 	inline	ConstIterator	GetConstIterator() const;
 
 	template<typename Compare>
-	Element*	PeekBest(int count, const Compare& compare) const;
+	Element*	PeekBest(const Compare& compare) const;
 
 private:
 			status_t	fInitStatus;
@@ -420,7 +420,7 @@ RUN_QUEUE_CLASS_NAME::GetConstIterator() const
 RUN_QUEUE_TEMPLATE_LIST
 template<typename Compare>
 Element*
-RUN_QUEUE_CLASS_NAME::PeekBest(int count, const Compare& compare) const
+RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare) const
 {
 	// Strict priority: only look at the highest priority queue that has threads.
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
@@ -432,8 +432,15 @@ RUN_QUEUE_CLASS_NAME::PeekBest(int count, const Compare& compare) const
 
 			// We found the highest priority. Now find the best candidate
 			// strictly within this priority level.
+			//
+			// Adaptive/Dynamic Search Depth:
+			// Scan up to 32 items to find the best candidate (lowest virtual runtime).
+			// This mimics "queue" behavior for short lists and "tree-like"
+			// fairness for deep lists without the overhead of an actual tree.
+			const int kSearchDepth = 32;
+
 			Element* best = current;
-			for (int j = 0; j < count && current != NULL; j++) {
+			for (int j = 0; j < kSearchDepth && current != NULL; j++) {
 				if (compare(current, best))
 					best = current;
 				current = sGetLink(current)->fNext;

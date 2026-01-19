@@ -35,9 +35,6 @@ int32 gPackageCount;
 using namespace Scheduler;
 
 
-const int kRunQueueSearchDepth = 4;
-
-
 class Scheduler::DebugDumper {
 public:
 	static	void		DumpCPURunQueue(CPUEntry* cpu);
@@ -169,8 +166,7 @@ ThreadData*
 CoreEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fRunQueue.PeekBest(kRunQueueSearchDepth,
-		ThreadDataVRuntimeCompare());
+	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare());
 }
 
 
@@ -178,8 +174,7 @@ ThreadData*
 CPUEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fRunQueue.PeekBest(kRunQueueSearchDepth,
-		ThreadDataVRuntimeCompare());
+	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare());
 }
 
 
