@@ -525,10 +525,16 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		fPackage->RemoveIdleCore(this);
 
 		// get rid of threads
-		while (fRunQueue.PeekMaximum() != NULL) {
-			ThreadData* threadData = fRunQueue.PeekMaximum();
+		while (true) {
+			ThreadData* threadData;
+			{
+				CoreRunQueueLocker locker(this);
+				threadData = fRunQueue.PeekMaximum();
+				if (threadData == NULL)
+					break;
 
-			Remove(threadData);
+				Remove(threadData);
+			}
 
 			ASSERT(threadData->Core() == NULL);
 			threadPostProcessing(threadData);

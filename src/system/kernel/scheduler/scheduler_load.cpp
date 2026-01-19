@@ -37,9 +37,6 @@ _LoadavgUpdate(void *data, int iteration)
 	for (int i = 0; i < gCoreCount; i++)
 		threadCount += gCoreEntries[i].ThreadCount();
 
-	if (threadCount > 0)
-		threadCount--;
-
 	for (int i = 0; i < 3; i++) {
 		sAverageRunnable.ldavg[i]
 			= (sCExp[i] * sAverageRunnable.ldavg[i] + threadCount * kFScale * (kFScale - sCExp[i]))
