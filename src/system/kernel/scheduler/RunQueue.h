@@ -9,7 +9,7 @@
 #define RUN_QUEUE_H
 
 
-#include <util/Heap.h>
+#include <util/BitUtils.h>
 
 #include "scheduler_profiler.h"
 
@@ -58,6 +58,8 @@ template<typename Element, unsigned int MaxPriority,
 	typename GetLink = RunQueueStandardGetLink<Element> >
 class RunQueue {
 public:
+	static const int kBitmapSize = (MaxPriority / 32) + 1;
+
 	class ConstIterator {
 	public:
 								ConstIterator();
@@ -94,23 +96,17 @@ public:
 
 	inline	Element*	GetHead(unsigned int priority) const;
 
+	inline	const uint32*	GetBitmap() const;
+
 	inline	ConstIterator	GetConstIterator() const;
 
 	template<typename Compare>
 	Element*	PeekBest(int count, const Compare& compare) const;
 
 private:
-	struct PriorityEntry : public HeapLinkImpl<PriorityEntry, unsigned int>
-	{
-	};
-
-	typedef Heap<PriorityEntry, unsigned int, HeapGreaterCompare<unsigned int> >
-		PriorityHeap;
-
 			status_t	fInitStatus;
 
-			PriorityEntry	fPriorityEntries[MaxPriority + 1];
-			PriorityHeap	fPriorityHeap;
+			uint32		fBitmap[kBitmapSize];
 
 			Element*	fHeads[MaxPriority + 1];
 			Element*	fTails[MaxPriority + 1];
@@ -226,20 +222,48 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 {
 	ASSERT(fList != NULL);
 
-	while (fPriority-- > 0) {
-		fNext = fList->GetHead(fPriority);
-		if (fNext != NULL)
-			break;
+	const uint32* bitmap = fList->GetBitmap();
+
+	int i = fPriority / 32;
+	uint32 val = bitmap[i];
+
+	// Mask out higher priorities (bits >= current bit index) in current word
+	// because we are looking for the *next* priority lower than fPriority.
+	// fPriority is the one we just finished.
+	// We want to check fPriority - 1 down to 0.
+
+	int currentBit = fPriority % 32;
+	if (currentBit > 0) {
+		// Mask bits at currentBit and above, keep bits 0..currentBit-1
+		val &= (1UL << currentBit) - 1;
+	} else {
+		// If we finished bit 0, this word is done.
+		val = 0;
 	}
+
+	while (true) {
+		if (val != 0) {
+			int bit = fls(val) - 1;
+			fPriority = i * 32 + bit;
+			fNext = fList->GetHead(fPriority);
+			return;
+		}
+
+		if (i == 0) break;
+		i--;
+		val = bitmap[i];
+	}
+
+	fNext = NULL;
 }
 
 
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
 	:
-	fInitStatus(B_OK),
-	fPriorityHeap(MaxPriority + 1)
+	fInitStatus(B_OK)
 {
+	memset(fBitmap, 0, sizeof(fBitmap));
 	memset(fHeads, 0, sizeof(fHeads));
 	memset(fTails, 0, sizeof(fTails));
 }
@@ -259,21 +283,19 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	PriorityEntry* maxPriority = fPriorityHeap.PeekRoot();
-	if (maxPriority == NULL)
-		return NULL;
-	unsigned int priority = PriorityHeap::GetKey(maxPriority);
+	for (int i = kBitmapSize - 1; i >= 0; i--) {
+		uint32 val = fBitmap[i];
+		if (val != 0) {
+			int bit = fls(val) - 1;
+			unsigned int priority = i * 32 + bit;
 
-	ASSERT(priority <= MaxPriority);
-	ASSERT(fHeads[priority] != NULL);
+			ASSERT(priority <= MaxPriority);
+			ASSERT(fHeads[priority] != NULL);
+			return fHeads[priority];
+		}
+	}
 
-	Element* element = fHeads[priority];
-
-	ASSERT(sGetLink(element)->fPriority == priority);
-	ASSERT(fTails[priority] != NULL);
-	ASSERT(sGetLink(element)->fPrevious == NULL);
-
-	return element;
+	return NULL;
 }
 
 
@@ -300,7 +322,7 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		sGetLink(fHeads[priority])->fPrevious = element;
 	else {
 		fTails[priority] = element;
-		fPriorityHeap.Insert(&fPriorityEntries[priority], priority);
+		fBitmap[priority / 32] |= (1UL << (priority % 32));
 	}
 	fHeads[priority] = element;
 }
@@ -329,7 +351,7 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		sGetLink(fTails[priority])->fNext = element;
 	else {
 		fHeads[priority] = element;
-		fPriorityHeap.Insert(&fPriorityEntries[priority], priority);
+		fBitmap[priority / 32] |= (1UL << (priority % 32));
 	}
 	fTails[priority] = element;
 }
@@ -360,9 +382,7 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
 
 	if (fHeads[priority] == NULL) {
-		fPriorityHeap.ModifyKey(&fPriorityEntries[priority], MaxPriority + 1);
-		ASSERT(fPriorityHeap.PeekRoot() == &fPriorityEntries[priority]);
-		fPriorityHeap.RemoveRoot();
+		fBitmap[priority / 32] &= ~(1UL << (priority % 32));
 	}
 
 	elementLink->fPrevious = NULL;
@@ -382,6 +402,14 @@ RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const
 
 
 RUN_QUEUE_TEMPLATE_LIST
+const uint32*
+RUN_QUEUE_CLASS_NAME::GetBitmap() const
+{
+	return fBitmap;
+}
+
+
+RUN_QUEUE_TEMPLATE_LIST
 typename RUN_QUEUE_CLASS_NAME::ConstIterator
 RUN_QUEUE_CLASS_NAME::GetConstIterator() const
 {
@@ -394,20 +422,26 @@ template<typename Compare>
 Element*
 RUN_QUEUE_CLASS_NAME::PeekBest(int count, const Compare& compare) const
 {
-	PriorityEntry* maxPriorityEntry = fPriorityHeap.PeekRoot();
-	if (maxPriorityEntry == NULL)
-		return NULL;
+	// Strict priority: only look at the highest priority queue that has threads.
+	for (int i = kBitmapSize - 1; i >= 0; i--) {
+		uint32 val = fBitmap[i];
+		if (val != 0) {
+			int bit = fls(val) - 1;
+			unsigned int priority = i * 32 + bit;
+			Element* current = fHeads[priority];
 
-	unsigned int priority = PriorityHeap::GetKey(maxPriorityEntry);
-	Element* current = fHeads[priority];
-	Element* best = current;
-
-	for (int i = 0; i < count && current != NULL; i++) {
-		if (compare(current, best))
-			best = current;
-		current = sGetLink(current)->fNext;
+			// We found the highest priority. Now find the best candidate
+			// strictly within this priority level.
+			Element* best = current;
+			for (int j = 0; j < count && current != NULL; j++) {
+				if (compare(current, best))
+					best = current;
+				current = sGetLink(current)->fNext;
+			}
+			return best;
+		}
 	}
-	return best;
+	return NULL;
 }
 
 
@@ -419,4 +453,3 @@ GetLink RUN_QUEUE_CLASS_NAME::ConstIterator::sGetLink;
 
 
 #endif	// RUN_QUEUE_H
-
