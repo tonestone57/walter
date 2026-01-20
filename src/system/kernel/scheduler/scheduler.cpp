@@ -84,7 +84,7 @@ UpdatePriorityBoost(CoreEntry* core, CPUEntry* cpu, ThreadData* running)
 
 	// Throttle priority boosting to improve scalability.
 	// We only run this O(N) operation every 50th reschedule.
-	if (atomic_add(&sRescheduleCounter, 1) % 50 != 0)
+	if ((uint32)atomic_add(&sRescheduleCounter, 1) % 50 != 0)
 		return;
 
 	/*
