@@ -106,11 +106,9 @@ choose_core(const ThreadData* threadData)
 
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* entry = &gPackageEntries[i];
-			entry->ReadLockLoad();
+			entry->ReadLockCore();
 
-			CoreEntry* candidate = entry->LoadHeap()->PeekMinimum();
-			if (candidate == NULL)
-				candidate = entry->HighLoadHeap()->PeekMinimum();
+			CoreEntry* candidate = entry->PeekMinimumLoadCore();
 
 			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
 				int32 load = candidate->GetLoad();
@@ -119,7 +117,7 @@ choose_core(const ThreadData* threadData)
 					bestLoad = load;
 				}
 			}
-			entry->ReadUnlockLoad();
+			entry->ReadUnlockCore();
 		}
 		core = bestCore;
 	}
@@ -162,11 +160,9 @@ rebalance(const ThreadData* threadData)
 
 	for (int32 i = 0; i < gPackageCount; i++) {
 		PackageEntry* entry = &gPackageEntries[i];
-		entry->ReadLockLoad();
+		entry->ReadLockCore();
 
-		CoreEntry* candidate = entry->LoadHeap()->PeekMinimum();
-		if (candidate == NULL)
-			candidate = entry->HighLoadHeap()->PeekMinimum();
+		CoreEntry* candidate = entry->PeekMinimumLoadCore();
 
 		if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
 			int32 load = candidate->GetLoad();
@@ -175,7 +171,7 @@ rebalance(const ThreadData* threadData)
 				bestLoad = load;
 			}
 		}
-		entry->ReadUnlockLoad();
+		entry->ReadUnlockCore();
 	}
 	ASSERT(other != NULL);
 
@@ -240,11 +236,9 @@ rebalance_irqs(bool idle)
 
 	for (int32 i = 0; i < gPackageCount; i++) {
 		PackageEntry* entry = &gPackageEntries[i];
-		entry->ReadLockLoad();
+		entry->ReadLockCore();
 
-		CoreEntry* candidate = entry->LoadHeap()->PeekMinimum();
-		if (candidate == NULL)
-			candidate = entry->HighLoadHeap()->PeekMinimum();
+		CoreEntry* candidate = entry->PeekMinimumLoadCore();
 
 		if (candidate != NULL) {
 			int32 load = candidate->GetLoad();
@@ -253,7 +247,7 @@ rebalance_irqs(bool idle)
 				bestLoad = load;
 			}
 		}
-		entry->ReadUnlockLoad();
+		entry->ReadUnlockCore();
 	}
 
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
@@ -286,4 +280,3 @@ scheduler_mode_operations gSchedulerLowLatencyMode = {
 	rebalance,
 	rebalance_irqs,
 };
-

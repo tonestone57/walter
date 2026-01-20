@@ -189,9 +189,6 @@ public:
 
 	static inline		CoreEntry*		GetCore(int32 cpu);
 
-						void			SetHeapKey(int32 key) { fHeapKey = key; }
-						int32			GetHeapKey() const { return fHeapKey; }
-
 private:
 						void			_UpdateLoad(bool forceUpdate = false);
 
@@ -218,48 +215,10 @@ private:
 						int32			fLoad;
 						int32			fCurrentLoad;
 						uint32			fLoadMeasurementEpoch;
-						bool			fHighLoad;
 						bigtime_t		fLastLoadUpdate;
-						rw_spinlock		fLoadLock;
-
-						int32			fHeapKey;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
-
-class CoreLoadHeap {
-public:
-										CoreLoadHeap()
-											:
-											fEntries(NULL),
-											fCount(0),
-											fCapacity(0)
-										{
-										}
-
-										CoreLoadHeap(int32 coreCount);
-										~CoreLoadHeap();
-
-						void			Init(int32 capacity);
-
-						void			Dump();
-
-						CoreEntry*		PeekMinimum() const;
-						CoreEntry*		PeekMaximum() const;
-
-	static				int32			GetKey(CoreEntry* entry);
-						void			ModifyKey(CoreEntry* entry, int32 key);
-
-						void			RemoveMinimum();
-						void			RemoveMaximum();
-
-						status_t		Insert(CoreEntry* entry, int32 key);
-
-private:
-						CoreEntry**		fEntries;
-						int32			fCount;
-						int32			fCapacity;
-};
 
 // gPackageEntries are used to decide which core should be woken up from the
 // idle state. When aiming for performance we should use as many packages as
@@ -291,13 +250,11 @@ public:
 	static inline		PackageEntry*		GetMostIdlePackage();
 	static inline		PackageEntry*		GetLeastIdlePackage();
 
-	inline				void				WriteLockLoad();
-	inline				void				ReadLockLoad();
-	inline				void				WriteUnlockLoad();
-	inline				void				ReadUnlockLoad();
+	inline				void				ReadLockCore();
+	inline				void				ReadUnlockCore();
 
-	inline				CoreLoadHeap*		LoadHeap();
-	inline				CoreLoadHeap*		HighLoadHeap();
+						CoreEntry*			PeekMinimumLoadCore() const;
+						CoreEntry*			PeekMaximumLoadCore() const;
 
 private:
 						int32				fPackageID;
@@ -307,10 +264,6 @@ private:
 						int32				fIdleCoreCount;
 						int32				fCoreCount;
 	mutable				rw_spinlock			fCoreLock;
-
-						CoreLoadHeap		fLoadHeap;
-						CoreLoadHeap		fHighLoadHeap;
-						rw_spinlock			fLoadLock;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
@@ -474,11 +427,9 @@ CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad)
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	ReadSpinLocker locker(fLoadLock);
 	atomic_add(&fCurrentLoad, load);
 	if (fLoadMeasurementEpoch != epoch)
 		atomic_add(&fLoad, load);
-	locker.Unlock();
 
 	if (updateLoad)
 		_UpdateLoad(true);
@@ -493,12 +444,9 @@ CoreEntry::RemoveLoad(int32 load, bool force)
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	ReadSpinLocker locker(fLoadLock);
 	atomic_add(&fCurrentLoad, -load);
 	if (force) {
 		atomic_add(&fLoad, -load);
-		locker.Unlock();
-
 		_UpdateLoad(true);
 	}
 	return fLoadMeasurementEpoch;
@@ -514,7 +462,6 @@ CoreEntry::ChangeLoad(int32 delta)
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 
 	if (delta != 0) {
-		ReadSpinLocker locker(fLoadLock);
 		atomic_add(&fCurrentLoad, delta);
 		atomic_add(&fLoad, delta);
 	}
@@ -658,44 +605,16 @@ PackageEntry::GetLeastIdlePackage()
 
 
 inline void
-PackageEntry::WriteLockLoad()
+PackageEntry::ReadLockCore()
 {
-	acquire_write_spinlock(&fLoadLock);
+	acquire_read_spinlock(&fCoreLock);
 }
 
 
 inline void
-PackageEntry::ReadLockLoad()
+PackageEntry::ReadUnlockCore()
 {
-	acquire_read_spinlock(&fLoadLock);
-}
-
-
-inline void
-PackageEntry::WriteUnlockLoad()
-{
-	release_write_spinlock(&fLoadLock);
-}
-
-
-inline void
-PackageEntry::ReadUnlockLoad()
-{
-	release_read_spinlock(&fLoadLock);
-}
-
-
-inline CoreLoadHeap*
-PackageEntry::LoadHeap()
-{
-	return &fLoadHeap;
-}
-
-
-inline CoreLoadHeap*
-PackageEntry::HighLoadHeap()
-{
-	return &fHighLoadHeap;
+	release_read_spinlock(&fCoreLock);
 }
 
 
