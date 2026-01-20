@@ -85,13 +85,19 @@ choose_core(const ThreadData* threadData)
 		package = PackageEntry::GetMostIdlePackage();
 	}
 
-	int32 index = 0;
-
 	CoreEntry* core = NULL;
 	if (package != NULL) {
-		do {
-			core = package->GetIdleCore(index++);
-		} while (useMask && core != NULL && !core->CPUMask().Matches(mask));
+		uint32 idleMask = package->IdleCoreMask();
+		while (idleMask != 0) {
+			int32 bitIdx = __builtin_ctz(idleMask);
+			idleMask &= ~(1U << bitIdx);
+
+			CoreEntry* candidate = package->GetCore(bitIdx);
+			if (!useMask || candidate->CPUMask().Matches(mask)) {
+				core = candidate;
+				break;
+			}
+		}
 	}
 	if (core == NULL) {
 		// no idle cores, search global packages for least occupied core

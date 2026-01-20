@@ -728,13 +728,12 @@ void
 PackageEntry::Init(int32 id)
 {
 	fPackageID = id;
-	// Initialize heaps with max possible cores per package (e.g. 32 or less)
-	// Or pass core count later?
-	// The heap needs a max size. kMaxCoresPerPackage was not defined here?
-	// It is defined in scheduler_cpu.h if I added it?
-	// Assuming 8 or 32. Let's use 32 to be safe.
-	fLoadHeap.Init(32);
-	fHighLoadHeap.Init(32);
+	fIdleCoreMask = 0;
+	memset(fCores, 0, sizeof(fCores));
+
+	// Initialize heaps with max possible cores per package.
+	fLoadHeap.Init(kMaxCoresPerPackage);
+	fHighLoadHeap.Init(kMaxCoresPerPackage);
 }
 
 
@@ -746,7 +745,7 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 		WriteSpinLocker coreLocker(fCoreLock);
 		fCoreCount++;
 		fIdleCoreCount++;
-		fIdleCores.Add(core);
+		atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
 
 		if (fCoreCount == 1)
 			addToGlobal = true;
@@ -765,7 +764,7 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 	bool removeFromGlobal = false;
 	{
 		WriteSpinLocker coreLocker(fCoreLock);
-		fIdleCores.Remove(core);
+		atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 		fIdleCoreCount--;
 		fCoreCount--;
 
@@ -777,6 +776,36 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 		WriteSpinLocker packageLocker(gIdlePackageLock);
 		gIdlePackageList.Remove(this);
 	}
+}
+
+
+CoreEntry*
+PackageEntry::GetIdleCore(int32 index) const
+{
+	uint32 mask = atomic_get((int32*)&fIdleCoreMask);
+	int32 firstBit = -1;
+
+	// Find the N-th set bit (index-th)
+	for (int32 i = 0; i <= index; i++) {
+		if (mask == 0)
+			return NULL;
+
+		firstBit = __builtin_ctz(mask);
+		mask &= ~(1U << firstBit);
+	}
+
+	if (firstBit != -1)
+		return fCores[firstBit];
+
+	return NULL;
+}
+
+
+void
+PackageEntry::RegisterCore(int32 index, CoreEntry* core)
+{
+	ASSERT(index >= 0 && index < kMaxCoresPerPackage);
+	fCores[index] = core;
 }
 
 
@@ -820,13 +849,16 @@ DebugDumper::DumpIdleCoresInPackage(PackageEntry* package)
 {
 	kprintf("%-7" B_PRId32 " ", package->fPackageID);
 
-	DoublyLinkedList<CoreEntry>::ReverseIterator iterator
-		= package->fIdleCores.GetReverseIterator();
-	if (iterator.HasNext()) {
-		while (iterator.HasNext()) {
-			CoreEntry* coreEntry = iterator.Next();
-			kprintf("%" B_PRId32 "%s", coreEntry->ID(),
-				iterator.HasNext() ? ", " : "");
+	uint32 mask = package->IdleCoreMask();
+	if (mask != 0) {
+		bool first = true;
+		while (mask != 0) {
+			int32 bit = __builtin_ctz(mask);
+			mask &= ~(1U << bit);
+
+			CoreEntry* core = package->GetCore(bit);
+			kprintf("%s%" B_PRId32, first ? "" : ", ", core->ID());
+			first = false;
 		}
 	} else
 		kprintf("-");

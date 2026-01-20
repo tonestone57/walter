@@ -852,12 +852,45 @@ init()
 
 	new(&gIdlePackageList) IdlePackageList;
 
+	for (int32 i = 0; i < packageCount; i++)
+		gPackageEntries[i].Init(i);
+
+	// Map Core to Package and assign index within package
+	int32* packageCoreCounters = new(std::nothrow) int32[packageCount];
+	if (packageCoreCounters == NULL)
+		return B_NO_MEMORY;
+	ArrayDeleter<int32> packageCoreCountersDeleter(packageCoreCounters);
+	memset(packageCoreCounters, 0, sizeof(int32) * packageCount);
+
+	// Determine package index for each core
+	// We need to iterate cores, but we only have map CPU->Core and CPU->Package
+	int32* coreToPackage = new(std::nothrow) int32[coreCount];
+	if (coreToPackage == NULL)
+		return B_NO_MEMORY;
+	ArrayDeleter<int32> coreToPackageDeleter(coreToPackage);
+
+	for (int32 i = 0; i < cpuCount; i++)
+		coreToPackage[sCPUToCore[i]] = sCPUToPackage[i];
+
+	for (int32 i = 0; i < coreCount; i++) {
+		int32 packageID = coreToPackage[i];
+		CoreEntry* core = &gCoreEntries[i];
+		PackageEntry* package = &gPackageEntries[packageID];
+		int32 packageIndex = packageCoreCounters[packageID]++;
+
+		if (packageIndex >= kMaxCoresPerPackage) {
+			panic("Scheduler: Package %" B_PRId32 " has too many cores (%" B_PRId32
+				" > %" B_PRId32 "). Recompile with increased kMaxCoresPerPackage.",
+				packageID, packageIndex + 1, kMaxCoresPerPackage);
+		}
+
+		core->Init(i, package);
+		core->fPackageIndex = packageIndex;
+		package->RegisterCore(packageIndex, core);
+	}
+
 	for (int32 i = 0; i < cpuCount; i++) {
 		CoreEntry* core = &gCoreEntries[sCPUToCore[i]];
-		PackageEntry* package = &gPackageEntries[sCPUToPackage[i]];
-
-		package->Init(sCPUToPackage[i]);
-		core->Init(sCPUToCore[i], package);
 		gCPUEntries[i].Init(i, core);
 
 		core->AddCPU(&gCPUEntries[i]);

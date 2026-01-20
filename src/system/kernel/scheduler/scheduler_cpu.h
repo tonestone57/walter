@@ -12,6 +12,7 @@
 #include <thread.h>
 #include <util/atomic.h>
 #include <util/AutoLock.h>
+#include <util/BitUtils.h>
 #include <util/Heap.h>
 #include <util/MinMaxHeap.h>
 
@@ -34,6 +35,8 @@ class ThreadProcessing;
 class CPUEntry;
 class CoreEntry;
 class PackageEntry;
+
+const int32 kMaxCoresPerPackage = 32;
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
@@ -127,8 +130,7 @@ public:
 						void			Dump();
 };
 
-class CoreEntry : public MinMaxHeapLinkImpl<CoreEntry, int32>,
-	public DoublyLinkedListLinkImpl<CoreEntry> {
+class CoreEntry : public MinMaxHeapLinkImpl<CoreEntry, int32> {
 public:
 										CoreEntry();
 
@@ -136,6 +138,8 @@ public:
 
 	inline				int32			ID() const	{ return fCoreID; }
 	inline				PackageEntry*	Package() const	{ return fPackage; }
+	inline				int32			PackageIndex() const
+											{ return fPackageIndex; }
 	inline				int32			CPUCount() const
 											{ return fCPUCount; }
 	inline				const CPUSet&	CPUMask() const
@@ -194,6 +198,7 @@ private:
 
 						int32			fCoreID;
 						PackageEntry*	fPackage;
+						int32			fPackageIndex;
 
 						int32			fCPUCount;
 						CPUSet			fCPUSet;
@@ -244,10 +249,14 @@ public:
 	inline				void				CoreGoesIdle(CoreEntry* core);
 	inline				void				CoreWakesUp(CoreEntry* core);
 
-	inline				CoreEntry*			GetIdleCore(int32 index = 0) const;
+						CoreEntry*			GetIdleCore(int32 index = 0) const;
+	inline				uint32				IdleCoreMask() const;
+	inline				CoreEntry*			GetCore(int32 index) const;
 
 						void				AddIdleCore(CoreEntry* core);
 						void				RemoveIdleCore(CoreEntry* core);
+						void				RegisterCore(int32 index,
+												CoreEntry* core);
 
 	static inline		PackageEntry*		GetMostIdlePackage();
 	static inline		PackageEntry*		GetLeastIdlePackage();
@@ -263,7 +272,8 @@ public:
 private:
 						int32				fPackageID;
 
-						DoublyLinkedList<CoreEntry>	fIdleCores;
+						CoreEntry*			fCores[kMaxCoresPerPackage];
+						uint32				fIdleCoreMask;
 						int32				fIdleCoreCount;
 						int32				fCoreCount;
 	mutable				rw_spinlock			fCoreLock;
@@ -499,7 +509,7 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	ASSERT(fIdleCoreCount < fCoreCount);
 
 	fIdleCoreCount++;
-	fIdleCores.Add(core);
+	atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
 
 	if (fIdleCoreCount == fCoreCount) {
 		// package goes idle
@@ -520,7 +530,7 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	ASSERT(fIdleCoreCount <= fCoreCount);
 
 	fIdleCoreCount--;
-	fIdleCores.Remove(core);
+	atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 
 	if (fIdleCoreCount + 1 == fCoreCount) {
 		// package wakes up
@@ -562,16 +572,19 @@ CoreEntry::GetCore(int32 cpu)
 }
 
 
-inline CoreEntry*
-PackageEntry::GetIdleCore(int32 index) const
+inline uint32
+PackageEntry::IdleCoreMask() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	ReadSpinLocker _(fCoreLock);
-	CoreEntry* element = fIdleCores.Last();
-	for (int32 i = 0; element != NULL && i < index; i++)
-		element = fIdleCores.GetPrevious(element);
+	return atomic_get((int32*)&fIdleCoreMask);
+}
 
-	return element;
+
+inline CoreEntry*
+PackageEntry::GetCore(int32 index) const
+{
+	SCHEDULER_ENTER_FUNCTION();
+	return fCores[index];
 }
 
 
