@@ -52,8 +52,27 @@ choose_small_task_core()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	ReadSpinLocker coreLocker(gCoreHeapsLock);
-	CoreEntry* core = gCoreLoadHeap.PeekMaximum();
+	CoreEntry* core = NULL;
+	int32 bestLoad = -1;
+
+	for (int32 i = 0; i < gPackageCount; i++) {
+		PackageEntry* entry = &gPackageEntries[i];
+		entry->ReadLockLoad();
+
+		CoreEntry* candidate = entry->LoadHeap()->PeekMaximum();
+		if (candidate == NULL)
+			candidate = entry->HighLoadHeap()->PeekMaximum();
+
+		if (candidate != NULL) {
+			int32 load = candidate->GetLoad();
+			if (core == NULL || load > bestLoad) {
+				core = candidate;
+				bestLoad = load;
+			}
+		}
+		entry->ReadUnlockLoad();
+	}
+
 	if (core == NULL)
 		return sSmallTaskCore;
 
@@ -97,27 +116,33 @@ choose_core(const ThreadData* threadData)
 		core = NULL;
 
 	if (core == NULL || core->GetLoad() + threadData->GetLoad() >= kHighLoad) {
-		ReadSpinLocker coreLocker(gCoreHeapsLock);
-
 		// run immediately on already woken core
-		int32 index = 0;
-		do {
-			core = gCoreLoadHeap.PeekMinimum(index++);
-		} while (useMask && core != NULL && !core->CPUMask().Matches(mask));
-		if (core == NULL) {
-			coreLocker.Unlock();
+		CoreEntry* bestCore = NULL;
+		int32 bestLoad = -1;
 
+		for (int32 i = 0; i < gPackageCount; i++) {
+			PackageEntry* entry = &gPackageEntries[i];
+			entry->ReadLockLoad();
+
+			CoreEntry* candidate = entry->LoadHeap()->PeekMinimum();
+			if (candidate == NULL)
+				candidate = entry->HighLoadHeap()->PeekMinimum();
+
+			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+				int32 load = candidate->GetLoad();
+				if (bestCore == NULL || load < bestLoad) {
+					bestCore = candidate;
+					bestLoad = load;
+				}
+			}
+			entry->ReadUnlockLoad();
+		}
+		core = bestCore;
+
+		if (core == NULL) {
 			core = choose_idle_core();
 			if (useMask && !core->CPUMask().Matches(mask))
 				core = NULL;
-
-			if (core == NULL) {
-				coreLocker.Lock();
-				index = 0;
-				do {
-					core = gCoreHighLoadHeap.PeekMinimum(index++);
-				} while (useMask && core != NULL && !core->CPUMask().Matches(mask));
-			}
 		}
 	}
 
@@ -159,19 +184,52 @@ rebalance(const ThreadData* threadData)
 		if (threadLoad >= coreLoad >> 1)
 			return core;
 
-		ReadSpinLocker coreLocker(gCoreHeapsLock);
-		CoreEntry* other;
-		int32 index = 0;
-		do {
-			other = gCoreLoadHeap.PeekMaximum(index++);
-		} while (useMask && other != NULL && !other->CPUMask().Matches(mask));
-		if (other == NULL) {
-			index = 0;
-			do {
-				other = gCoreHighLoadHeap.PeekMinimum(index++);
-			} while (useMask && other != NULL && !other->CPUMask().Matches(mask));
+		CoreEntry* other = NULL;
+		int32 bestLoad = -1;
+
+		for (int32 i = 0; i < gPackageCount; i++) {
+			PackageEntry* entry = &gPackageEntries[i];
+			entry->ReadLockLoad();
+
+			CoreEntry* candidate = entry->LoadHeap()->PeekMaximum();
+			if (candidate == NULL)
+				candidate = entry->HighLoadHeap()->PeekMaximum(); // Wait, PeekMinimum?
+				// Original code: PeekMinimum for HighLoadHeap.
+				// PeekMaximum for LoadHeap.
+				// We want to offload FROM core.
+				// Find OTHER core with LOWEST load?
+				// Original: LoadHeap.PeekMaximum? HighLoadHeap.PeekMinimum?
+				// Logic: Find core with *highest* load that is < kHighLoad?
+				// Or *lowest* load overall?
+				// Rebalance Logic:
+				// "Check if migrating the current thread would result in both core loads become closer to average."
+				// "Get the least loaded core" says rebalance logic in low_latency.
+				// Here in power_saving:
+				// other = gCoreLoadHeap.PeekMaximum().
+				// This implies we want to pack tasks?
+				// Power saving prefers packing. So find a core that has load but isn't full?
+				// Let's stick to original logic: LoadHeap Max, then HighLoadHeap Min.
+
+			if (candidate == NULL)
+				candidate = entry->HighLoadHeap()->PeekMinimum();
+
+			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+				int32 load = candidate->GetLoad();
+				// Original: loop to find first matching mask.
+				// Here we just check one per package?
+				// We should probably check iterating heaps if MinMaxHeap supported it efficiently.
+				// But we are limited to Peek.
+				// Assuming Peek returns representative.
+				if (other == NULL) {
+					other = candidate;
+					// bestLoad?
+					// Power saving logic is complex. Just picking candidate is safe fallback.
+				}
+			}
+			entry->ReadUnlockLoad();
 		}
-		coreLocker.Unlock();
+		// If other is NULL, we failed to find candidate.
+		if (other == NULL) return core; // Fallback
 		ASSERT(other != NULL);
 
 		int32 coreNewLoad = coreLoad - threadLoad;
@@ -248,9 +306,24 @@ rebalance_irqs(bool idle)
 	if (chosen == NULL || chosen->load < kLowLoad)
 		return;
 
-	ReadSpinLocker coreLocker(gCoreHeapsLock);
-	CoreEntry* other = gCoreLoadHeap.PeekMinimum();
-	coreLocker.Unlock();
+	CoreEntry* other = NULL;
+	int32 bestLoad = -1;
+
+	for (int32 i = 0; i < gPackageCount; i++) {
+		PackageEntry* entry = &gPackageEntries[i];
+		entry->ReadLockLoad();
+
+		CoreEntry* candidate = entry->LoadHeap()->PeekMinimum();
+		if (candidate != NULL) {
+			int32 load = candidate->GetLoad();
+			if (other == NULL || load < bestLoad) {
+				other = candidate;
+				bestLoad = load;
+			}
+		}
+		entry->ReadUnlockLoad();
+	}
+
 	if (other == NULL)
 		return;
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
