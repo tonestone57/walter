@@ -14,7 +14,6 @@
 #include <util/AutoLock.h>
 #include <util/BitUtils.h>
 #include <util/Heap.h>
-#include <util/MinMaxHeap.h>
 
 #include <cpufreq.h>
 
@@ -130,7 +129,7 @@ public:
 						void			Dump();
 };
 
-class CoreEntry : public MinMaxHeapLinkImpl<CoreEntry, int32> {
+class CoreEntry {
 public:
 										CoreEntry();
 
@@ -190,6 +189,9 @@ public:
 
 	static inline		CoreEntry*		GetCore(int32 cpu);
 
+						void			SetHeapKey(int32 key) { fHeapKey = key; }
+						int32			GetHeapKey() const { return fHeapKey; }
+
 private:
 						void			_UpdateLoad(bool forceUpdate = false);
 
@@ -220,15 +222,43 @@ private:
 						bigtime_t		fLastLoadUpdate;
 						rw_spinlock		fLoadLock;
 
+						int32			fHeapKey;
+
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
 
-class CoreLoadHeap : public MinMaxHeap<CoreEntry, int32> {
+class CoreLoadHeap {
 public:
-										CoreLoadHeap() { }
+										CoreLoadHeap()
+											:
+											fEntries(NULL),
+											fCount(0),
+											fCapacity(0)
+										{
+										}
+
 										CoreLoadHeap(int32 coreCount);
+										~CoreLoadHeap();
+
+						void			Init(int32 capacity);
 
 						void			Dump();
+
+						CoreEntry*		PeekMinimum() const;
+						CoreEntry*		PeekMaximum() const;
+
+	static				int32			GetKey(CoreEntry* entry);
+						void			ModifyKey(CoreEntry* entry, int32 key);
+
+						void			RemoveMinimum();
+						void			RemoveMaximum();
+
+						status_t		Insert(CoreEntry* entry, int32 key);
+
+private:
+						CoreEntry**		fEntries;
+						int32			fCount;
+						int32			fCapacity;
 };
 
 // gPackageEntries are used to decide which core should be woken up from the
@@ -673,4 +703,3 @@ PackageEntry::HighLoadHeap()
 
 
 #endif	// KERNEL_SCHEDULER_CPU_H
-

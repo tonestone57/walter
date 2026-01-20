@@ -15,7 +15,6 @@
 #include <smp.h>
 #include <thread.h>
 #include <user_debugger.h>
-#include <util/MinMaxHeap.h>
 
 #include "RunQueue.h"
 
@@ -54,4 +53,3 @@ void init_debug_commands();
 
 
 #endif	// KERNEL_SCHEDULER_COMMON_H
-

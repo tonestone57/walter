@@ -51,7 +51,6 @@ private:
 
 
 static CPUPriorityHeap sDebugCPUHeap;
-static CoreLoadHeap sDebugCoreHeap;
 
 
 void
@@ -440,7 +439,8 @@ CoreEntry::CoreEntry()
 	fCurrentLoad(0),
 	fLoadMeasurementEpoch(0),
 	fHighLoad(false),
-	fLastLoadUpdate(0)
+	fLastLoadUpdate(0),
+	fHeapKey(0)
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -684,33 +684,154 @@ CoreEntry::_UnassignThread(Thread* thread, void* data)
 
 CoreLoadHeap::CoreLoadHeap(int32 coreCount)
 	:
-	MinMaxHeap<CoreEntry, int32>(coreCount)
+	fEntries(NULL),
+	fCount(0),
+	fCapacity(0)
 {
+	Init(coreCount);
+}
+
+
+CoreLoadHeap::~CoreLoadHeap()
+{
+	free(fEntries);
+}
+
+
+void
+CoreLoadHeap::Init(int32 capacity)
+{
+	if (capacity <= 0)
+		return;
+
+	if (fEntries != NULL)
+		free(fEntries);
+
+	fCapacity = capacity;
+	fEntries = (CoreEntry**)malloc(sizeof(CoreEntry*) * capacity);
+	fCount = 0;
 }
 
 
 void
 CoreLoadHeap::Dump()
 {
-	CoreEntry* entry = PeekMinimum();
-	while (entry) {
-		int32 key = GetKey(entry);
-
+	for (int32 i = 0; i < fCount; i++) {
+		CoreEntry* entry = fEntries[i];
 		DebugDumper::DumpCoreLoadHeapEntry(entry);
+	}
+}
 
-		RemoveMinimum();
-		sDebugCoreHeap.Insert(entry, key);
 
-		entry = PeekMinimum();
+CoreEntry*
+CoreLoadHeap::PeekMinimum() const
+{
+	if (fCount == 0)
+		return NULL;
+
+	CoreEntry* minEntry = fEntries[0];
+	int32 minKey = minEntry->GetHeapKey();
+
+	for (int32 i = 1; i < fCount; i++) {
+		int32 key = fEntries[i]->GetHeapKey();
+		if (key < minKey) {
+			minKey = key;
+			minEntry = fEntries[i];
+		}
+	}
+	return minEntry;
+}
+
+
+CoreEntry*
+CoreLoadHeap::PeekMaximum() const
+{
+	if (fCount == 0)
+		return NULL;
+
+	CoreEntry* maxEntry = fEntries[0];
+	int32 maxKey = maxEntry->GetHeapKey();
+
+	for (int32 i = 1; i < fCount; i++) {
+		int32 key = fEntries[i]->GetHeapKey();
+		if (key > maxKey) {
+			maxKey = key;
+			maxEntry = fEntries[i];
+		}
+	}
+	return maxEntry;
+}
+
+
+/* static */ int32
+CoreLoadHeap::GetKey(CoreEntry* entry)
+{
+	return entry->GetHeapKey();
+}
+
+
+void
+CoreLoadHeap::ModifyKey(CoreEntry* entry, int32 key)
+{
+	entry->SetHeapKey(key);
+}
+
+
+void
+CoreLoadHeap::RemoveMinimum()
+{
+	if (fCount == 0)
+		return;
+
+	int32 minIndex = 0;
+	int32 minKey = fEntries[0]->GetHeapKey();
+
+	for (int32 i = 1; i < fCount; i++) {
+		int32 key = fEntries[i]->GetHeapKey();
+		if (key < minKey) {
+			minKey = key;
+			minIndex = i;
+		}
 	}
 
-	entry = sDebugCoreHeap.PeekMinimum();
-	while (entry) {
-		int32 key = GetKey(entry);
-		sDebugCoreHeap.RemoveMinimum();
-		Insert(entry, key);
-		entry = sDebugCoreHeap.PeekMinimum();
+	// Remove by swapping with last element
+	fEntries[minIndex] = fEntries[fCount - 1];
+	fCount--;
+}
+
+
+void
+CoreLoadHeap::RemoveMaximum()
+{
+	if (fCount == 0)
+		return;
+
+	int32 maxIndex = 0;
+	int32 maxKey = fEntries[0]->GetHeapKey();
+
+	for (int32 i = 1; i < fCount; i++) {
+		int32 key = fEntries[i]->GetHeapKey();
+		if (key > maxKey) {
+			maxKey = key;
+			maxIndex = i;
+		}
 	}
+
+	// Remove by swapping with last element
+	fEntries[maxIndex] = fEntries[fCount - 1];
+	fCount--;
+}
+
+
+status_t
+CoreLoadHeap::Insert(CoreEntry* entry, int32 key)
+{
+	if (fCount == fCapacity)
+		return B_NO_MEMORY;
+
+	entry->SetHeapKey(key);
+	fEntries[fCount++] = entry;
+	return B_OK;
 }
 
 
@@ -870,11 +991,9 @@ DebugDumper::DumpPackageLoadHeap(PackageEntry* package)
 {
 	kprintf("Package %" B_PRId32 " Heaps:\n", package->fPackageID);
 	kprintf("  Load Heap:\n");
-	// We can't easily dump local heaps without iterating them destructively or adding iterator.
-	// But we can peek min?
-	// Just print count?
-	// MinMaxHeap doesn't expose Count().
-	// Skip for now or implement if needed.
+	package->LoadHeap()->Dump();
+	kprintf("  High Load Heap:\n");
+	package->HighLoadHeap()->Dump();
 }
 
 
@@ -952,7 +1071,6 @@ dump_idle_cores(int /* argc */, char** /* argv */)
 void Scheduler::init_debug_commands()
 {
 	new(&sDebugCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
-	new(&sDebugCoreHeap) CoreLoadHeap(smp_get_num_cpus());
 
 	add_debugger_command_etc("run_queue", &dump_run_queue,
 		"List threads in run queue", "\nLists threads in run queue", 0);
@@ -964,4 +1082,3 @@ void Scheduler::init_debug_commands()
 			"List idle cores", "\nList idle cores", 0);
 	}
 }
-
