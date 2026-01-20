@@ -481,15 +481,10 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	WriteSpinLocker _(fCoreLock);
+	atomic_add(&fIdleCoreCount, 1);
+	int32 oldMask = atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
 
-	ASSERT(fIdleCoreCount >= 0);
-	ASSERT(fIdleCoreCount < fCoreCount);
-
-	fIdleCoreCount++;
-	atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
-
-	if (fIdleCoreCount == 1) {
+	if (oldMask == 0) {
 		// package goes idle (first core)
 		atomic_or64((int64*)&gIdlePackageMask, 1ULL << fPackageID);
 	}
@@ -501,15 +496,10 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	WriteSpinLocker _(fCoreLock);
+	atomic_add(&fIdleCoreCount, -1);
+	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 
-	ASSERT(fIdleCoreCount > 0);
-	ASSERT(fIdleCoreCount <= fCoreCount);
-
-	fIdleCoreCount--;
-	atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
-
-	if (fIdleCoreCount == 0) {
+	if ((oldMask & ~(1U << core->PackageIndex())) == 0) {
 		// package wakes up (last core)
 		atomic_and64((int64*)&gIdlePackageMask, ~(1ULL << fPackageID));
 	}
