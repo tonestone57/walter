@@ -185,6 +185,7 @@ rebalance(const ThreadData* threadData)
 
 		CoreEntry* other = NULL;
 		int32 bestLoad = -1;
+		bool foundNonOverloaded = false;
 
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* entry = &gPackageEntries[i];
@@ -192,49 +193,50 @@ rebalance(const ThreadData* threadData)
 
 			// We want to pack: find the busiest core that is NOT overloaded (load < kHighLoad).
 			// If all active cores are overloaded, pick the least loaded one (to minimize overload).
-			CoreEntry* candidate = NULL;
+			CoreEntry* candidate = entry->PeekMaximumLoadCore();
 
-			// Custom scan for "Best Packing Candidate"
-			// Since we removed heaps, we must scan the package's cores manually here
-			// or use available helpers.
-			// We can use PeekMaximumLoadCore() as a starting point.
-			CoreEntry* maxEntry = entry->PeekMaximumLoadCore();
-
-			if (maxEntry != NULL) {
-				if (maxEntry->GetLoad() < kHighLoad) {
-					// The busiest core is not overloaded. This is the ideal packing candidate.
-					candidate = maxEntry;
-				} else {
-					// The busiest core is overloaded. Check if *any* core is not overloaded?
-					// If maxEntry is overloaded, others might not be.
-					// We need to find the max loaded core among those with load < kHighLoad.
-					// If all are >= kHighLoad, we should pick PeekMinimumLoadCore() to spread load.
-
-					CoreEntry* minEntry = entry->PeekMinimumLoadCore();
-					if (minEntry != NULL && minEntry->GetLoad() < kHighLoad) {
-						// There exists at least one non-overloaded core.
-						// Ideally we want the *busiest* non-overloaded one.
-						// But PeekMinimum gives the *least* busy.
-						// Falling back to minEntry is safe (valid candidate), though maybe not optimally packed.
-						// Without a custom scan loop or iterator exposed from PackageEntry,
-						// we accept this slight sub-optimality in favor of code simplicity and API encapsulation.
-						candidate = minEntry;
-					} else {
-						// All cores are overloaded (or minEntry is NULL).
-						// Pick the least loaded one to mitigate overload.
-						candidate = minEntry;
-					}
+			if (candidate != NULL) {
+				if (candidate->GetLoad() >= kHighLoad) {
+					// The busiest is overloaded. Check if there is a less loaded one.
+					candidate = entry->PeekMinimumLoadCore();
 				}
 			}
 
 			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
 				int32 load = candidate->GetLoad();
+				bool isOverloaded = load >= kHighLoad;
+
 				if (other == NULL) {
 					other = candidate;
+					bestLoad = load;
+					foundNonOverloaded = !isOverloaded;
+				} else if (foundNonOverloaded) {
+					if (!isOverloaded) {
+						// Both are non-overloaded. Pick the BUSIEST (packing).
+						if (load > bestLoad) {
+							other = candidate;
+							bestLoad = load;
+						}
+					}
+					// If candidate is overloaded, ignore it (we prefer the existing non-overloaded 'other')
+				} else {
+					if (!isOverloaded) {
+						// Found a non-overloaded core! It beats the current overloaded 'other'.
+						other = candidate;
+						bestLoad = load;
+						foundNonOverloaded = true;
+					} else {
+						// Both are overloaded. Pick the LEAST loaded (spread overload).
+						if (load < bestLoad) {
+							other = candidate;
+							bestLoad = load;
+						}
+					}
 				}
 			}
 			entry->ReadUnlockCore();
 		}
+
 		// If other is NULL, we failed to find candidate.
 		if (other == NULL) return core; // Fallback
 		ASSERT(other != NULL);
@@ -361,4 +363,3 @@ scheduler_mode_operations gSchedulerPowerSavingMode = {
 	rebalance,
 	rebalance_irqs,
 };
-
