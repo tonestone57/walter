@@ -22,8 +22,7 @@ CoreEntry* gCoreEntries;
 int32 gCoreCount;
 
 PackageEntry* gPackageEntries;
-IdlePackageList gIdlePackageList;
-rw_spinlock gIdlePackageLock = B_RW_SPINLOCK_INITIALIZER;
+uint64 gIdlePackageMask = 0;
 int32 gPackageCount;
 
 
@@ -747,14 +746,12 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 		fIdleCoreCount++;
 		atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
 
-		if (fCoreCount == 1)
+		if (fIdleCoreCount == 1)
 			addToGlobal = true;
 	}
 
-	if (addToGlobal) {
-		WriteSpinLocker packageLocker(gIdlePackageLock);
-		gIdlePackageList.Add(this);
-	}
+	if (addToGlobal)
+		atomic_or64((int64*)&gIdlePackageMask, 1ULL << fPackageID);
 }
 
 
@@ -768,14 +765,12 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 		fIdleCoreCount--;
 		fCoreCount--;
 
-		if (fCoreCount == 0)
+		if (fIdleCoreCount == 0)
 			removeFromGlobal = true;
 	}
 
-	if (removeFromGlobal) {
-		WriteSpinLocker packageLocker(gIdlePackageLock);
-		gIdlePackageList.Remove(this);
-	}
+	if (removeFromGlobal)
+		atomic_and64((int64*)&gIdlePackageMask, ~(1ULL << fPackageID));
 }
 
 
@@ -934,14 +929,16 @@ static int
 dump_idle_cores(int /* argc */, char** /* argv */)
 {
 	kprintf("Idle packages:\n");
-	IdlePackageList::ReverseIterator idleIterator
-		= gIdlePackageList.GetReverseIterator();
+	uint64 mask = gIdlePackageMask;
 
-	if (idleIterator.HasNext()) {
+	if (mask != 0) {
 		kprintf("package cores\n");
 
-		while (idleIterator.HasNext())
-			DebugDumper::DumpIdleCoresInPackage(idleIterator.Next());
+		while (mask != 0) {
+			int32 bit = __builtin_ctzll(mask);
+			mask &= ~(1ULL << bit);
+			DebugDumper::DumpIdleCoresInPackage(&gPackageEntries[bit]);
+		}
 	} else
 		kprintf("No idle packages.\n");
 

@@ -240,7 +240,7 @@ public:
 // packages can go to the deep state of sleep). The heap stores only packages
 // with at least one core active and one core idle. The packages with all cores
 // idle are stored in gPackageIdleList (in LIFO manner).
-class PackageEntry : public DoublyLinkedListLinkImpl<PackageEntry> {
+class PackageEntry {
 public:
 											PackageEntry();
 
@@ -292,8 +292,7 @@ extern CoreEntry* gCoreEntries;
 extern int32 gCoreCount;
 
 extern PackageEntry* gPackageEntries;
-extern IdlePackageList gIdlePackageList;
-extern rw_spinlock gIdlePackageLock;
+extern uint64 gIdlePackageMask;
 extern int32 gPackageCount;
 
 
@@ -511,10 +510,9 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	fIdleCoreCount++;
 	atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
 
-	if (fIdleCoreCount == fCoreCount) {
-		// package goes idle
-		WriteSpinLocker _(gIdlePackageLock);
-		gIdlePackageList.Add(this);
+	if (fIdleCoreCount == 1) {
+		// package goes idle (first core)
+		atomic_or64((int64*)&gIdlePackageMask, 1ULL << fPackageID);
 	}
 }
 
@@ -532,10 +530,9 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	fIdleCoreCount--;
 	atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 
-	if (fIdleCoreCount + 1 == fCoreCount) {
-		// package wakes up
-		WriteSpinLocker _(gIdlePackageLock);
-		gIdlePackageList.Remove(this);
+	if (fIdleCoreCount == 0) {
+		// package wakes up (last core)
+		atomic_and64((int64*)&gIdlePackageMask, ~(1ULL << fPackageID));
 	}
 }
 

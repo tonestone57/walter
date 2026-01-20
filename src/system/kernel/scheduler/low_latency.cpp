@@ -78,15 +78,15 @@ choose_core(const ThreadData* threadData)
 		}
 	}
 
-	// wake new package
-	PackageEntry* package = gIdlePackageList.Last();
-	if (package == NULL) {
-		// wake new core
-		package = PackageEntry::GetMostIdlePackage();
-	}
-
 	CoreEntry* core = NULL;
-	if (package != NULL) {
+
+	// wake new package/core
+	uint64 idlePackageMask = atomic_get64((int64*)&gIdlePackageMask);
+	while (idlePackageMask != 0) {
+		int32 packageIndex = __builtin_ctzll(idlePackageMask);
+		idlePackageMask &= ~(1ULL << packageIndex);
+
+		PackageEntry* package = &gPackageEntries[packageIndex];
 		uint32 idleMask = package->IdleCoreMask();
 		while (idleMask != 0) {
 			int32 bitIdx = __builtin_ctz(idleMask);
@@ -98,7 +98,11 @@ choose_core(const ThreadData* threadData)
 				break;
 			}
 		}
+
+		if (core != NULL)
+			break;
 	}
+
 	if (core == NULL) {
 		// no idle cores, search global packages for least occupied core
 		CoreEntry* bestCore = NULL;

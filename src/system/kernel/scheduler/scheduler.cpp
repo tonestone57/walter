@@ -850,8 +850,6 @@ init()
 	new(&gCoreLoadHeap) CoreLoadHeap(coreCount);
 	new(&gCoreHighLoadHeap) CoreLoadHeap(coreCount);
 
-	new(&gIdlePackageList) IdlePackageList;
-
 	for (int32 i = 0; i < packageCount; i++)
 		gPackageEntries[i].Init(i);
 
