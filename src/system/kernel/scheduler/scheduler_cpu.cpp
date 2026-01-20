@@ -631,18 +631,12 @@ PackageEntry::Init(int32 id)
 void
 PackageEntry::AddIdleCore(CoreEntry* core)
 {
-	bool addToGlobal = false;
-	{
-		WriteSpinLocker coreLocker(fCoreLock);
-		fCoreCount++;
-		fIdleCoreCount++;
-		atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
+	WriteSpinLocker coreLocker(fCoreLock);
+	fCoreCount++;
+	atomic_add(&fIdleCoreCount, 1);
+	int32 oldMask = atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
 
-		if (fIdleCoreCount == 1)
-			addToGlobal = true;
-	}
-
-	if (addToGlobal)
+	if (oldMask == 0)
 		atomic_or64((int64*)&gIdlePackageMask, 1ULL << fPackageID);
 }
 
@@ -650,18 +644,12 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 void
 PackageEntry::RemoveIdleCore(CoreEntry* core)
 {
-	bool removeFromGlobal = false;
-	{
-		WriteSpinLocker coreLocker(fCoreLock);
-		atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
-		fIdleCoreCount--;
-		fCoreCount--;
+	WriteSpinLocker coreLocker(fCoreLock);
+	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
+	atomic_add(&fIdleCoreCount, -1);
+	fCoreCount--;
 
-		if (fIdleCoreCount == 0)
-			removeFromGlobal = true;
-	}
-
-	if (removeFromGlobal)
+	if ((oldMask & ~(1U << core->PackageIndex())) == 0)
 		atomic_and64((int64*)&gIdlePackageMask, ~(1ULL << fPackageID));
 }
 
