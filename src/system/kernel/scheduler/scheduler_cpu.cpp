@@ -35,9 +35,9 @@ class Scheduler::DebugDumper {
 public:
 	static	void		DumpCPURunQueue(CPUEntry* cpu);
 	static	void		DumpCoreRunQueue(CoreEntry* core);
-	static	void		DumpCoreLoadHeapEntry(CoreEntry* core);
+	static	void		DumpCoreEntryLoad(CoreEntry* core);
 	static	void		DumpIdleCoresInPackage(PackageEntry* package);
-	static	void		DumpPackageLoadHeap(PackageEntry* package);
+	static	void		DumpPackageCores(PackageEntry* package);
 
 private:
 	struct CoreThreadsData {
@@ -50,7 +50,6 @@ private:
 
 
 static CPUPriorityHeap sDebugCPUHeap;
-static CoreLoadHeap sDebugCoreHeap;
 
 
 void
@@ -438,13 +437,11 @@ CoreEntry::CoreEntry()
 	fLoad(0),
 	fCurrentLoad(0),
 	fLoadMeasurementEpoch(0),
-	fHighLoad(false),
 	fLastLoadUpdate(0)
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
 	B_INITIALIZE_SEQLOCK(&fActiveTimeLock);
-	B_INITIALIZE_RW_SPINLOCK(&fLoadLock);
 }
 
 
@@ -502,11 +499,6 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 		// core has been reenabled
 		fLoad = 0;
 		fCurrentLoad = 0;
-		fHighLoad = false;
-
-		fPackage->WriteLockLoad();
-		fPackage->LoadHeap()->Insert(this, 0);
-		fPackage->WriteUnlockLoad();
 
 		fPackage->AddIdleCore(this);
 	}
@@ -529,18 +521,6 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		thread_map(CoreEntry::_UnassignThread, this);
 
 		// core has been disabled
-		fPackage->WriteLockLoad();
-		if (fHighLoad) {
-			fPackage->HighLoadHeap()->ModifyKey(this, -1);
-			ASSERT(fPackage->HighLoadHeap()->PeekMinimum() == this);
-			fPackage->HighLoadHeap()->RemoveMinimum();
-		} else {
-			fPackage->LoadHeap()->ModifyKey(this, -1);
-			ASSERT(fPackage->LoadHeap()->PeekMinimum() == this);
-			fPackage->LoadHeap()->RemoveMinimum();
-		}
-		fPackage->WriteUnlockLoad();
-
 		fPackage->RemoveIdleCore(this);
 
 		// get rid of threads
@@ -605,68 +585,17 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 
 	bigtime_t now = system_time();
 	bool intervalEnded = now >= kLoadMeasureInterval + fLastLoadUpdate;
-	bool intervalSkipped = now >= (kLoadMeasureInterval << 1) + fLastLoadUpdate;
 
 	if (!intervalEnded && !forceUpdate)
 		return;
 
-	fPackage->WriteLockLoad();
-
-	int32 newKey;
 	if (intervalEnded) {
-		WriteSpinLocker locker(fLoadLock);
-
-		newKey = intervalSkipped ? fCurrentLoad : GetLoad();
-
-		ASSERT(fCurrentLoad >= 0);
-		ASSERT(fLoad >= fCurrentLoad);
-
+		// No locking needed for atomic updates of fLoad.
+		// fCurrentLoad is updated atomically.
 		fLoad = fCurrentLoad;
 		fLoadMeasurementEpoch++;
 		fLastLoadUpdate = now;
-	} else
-		newKey = GetLoad();
-
-	int32 oldKey = CoreLoadHeap::GetKey(this);
-
-	ASSERT(oldKey >= 0);
-	ASSERT(newKey >= 0);
-
-	if (oldKey == newKey) {
-		fPackage->WriteUnlockLoad();
-		return;
 	}
-
-	if (newKey > kHighLoad) {
-		if (!fHighLoad) {
-			fPackage->LoadHeap()->ModifyKey(this, -1);
-			ASSERT(fPackage->LoadHeap()->PeekMinimum() == this);
-			fPackage->LoadHeap()->RemoveMinimum();
-
-			fPackage->HighLoadHeap()->Insert(this, newKey);
-
-			fHighLoad = true;
-		} else
-			fPackage->HighLoadHeap()->ModifyKey(this, newKey);
-	} else if (newKey < kMediumLoad) {
-		if (fHighLoad) {
-			fPackage->HighLoadHeap()->ModifyKey(this, -1);
-			ASSERT(fPackage->HighLoadHeap()->PeekMinimum() == this);
-			fPackage->HighLoadHeap()->RemoveMinimum();
-
-			fPackage->LoadHeap()->Insert(this, newKey);
-
-			fHighLoad = false;
-		} else
-			fPackage->LoadHeap()->ModifyKey(this, newKey);
-	} else {
-		if (fHighLoad)
-			fPackage->HighLoadHeap()->ModifyKey(this, newKey);
-		else
-			fPackage->LoadHeap()->ModifyKey(this, newKey);
-	}
-
-	fPackage->WriteUnlockLoad();
 }
 
 
@@ -681,45 +610,12 @@ CoreEntry::_UnassignThread(Thread* thread, void* data)
 }
 
 
-CoreLoadHeap::CoreLoadHeap(int32 coreCount)
-	:
-	MinMaxHeap<CoreEntry, int32>(coreCount)
-{
-}
-
-
-void
-CoreLoadHeap::Dump()
-{
-	CoreEntry* entry = PeekMinimum();
-	while (entry) {
-		int32 key = GetKey(entry);
-
-		DebugDumper::DumpCoreLoadHeapEntry(entry);
-
-		RemoveMinimum();
-		sDebugCoreHeap.Insert(entry, key);
-
-		entry = PeekMinimum();
-	}
-
-	entry = sDebugCoreHeap.PeekMinimum();
-	while (entry) {
-		int32 key = GetKey(entry);
-		sDebugCoreHeap.RemoveMinimum();
-		Insert(entry, key);
-		entry = sDebugCoreHeap.PeekMinimum();
-	}
-}
-
-
 PackageEntry::PackageEntry()
 	:
 	fIdleCoreCount(0),
 	fCoreCount(0)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fCoreLock);
-	B_INITIALIZE_RW_SPINLOCK(&fLoadLock);
 }
 
 
@@ -729,10 +625,6 @@ PackageEntry::Init(int32 id)
 	fPackageID = id;
 	fIdleCoreMask = 0;
 	memset(fCores, 0, sizeof(fCores));
-
-	// Initialize heaps with max possible cores per package.
-	fLoadHeap.Init(kMaxCoresPerPackage);
-	fHighLoadHeap.Init(kMaxCoresPerPackage);
 }
 
 
@@ -804,6 +696,61 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 }
 
 
+CoreEntry*
+PackageEntry::PeekMinimumLoadCore() const
+{
+	CoreEntry* minEntry = NULL;
+	int32 minLoad = -1;
+
+	// Linear scan over fCores.
+	// fCores might have NULLs if not all slots are used.
+	// We iterate up to fCoreCount? No, fCoreCount counts *active* cores.
+	// But fCores[index] is fixed at init.
+	// We need to iterate 0..kMaxCoresPerPackage, check if !NULL.
+	// Optimization: we could track max index. But kMaxCoresPerPackage is 32.
+
+	for (int32 i = 0; i < kMaxCoresPerPackage; i++) {
+		CoreEntry* core = fCores[i];
+		if (core == NULL)
+			continue;
+
+		if (core->CPUCount() == 0) // Disabled?
+			continue;
+
+		int32 load = core->GetLoad();
+		if (minEntry == NULL || load < minLoad) {
+			minLoad = load;
+			minEntry = core;
+		}
+	}
+	return minEntry;
+}
+
+
+CoreEntry*
+PackageEntry::PeekMaximumLoadCore() const
+{
+	CoreEntry* maxEntry = NULL;
+	int32 maxLoad = -1;
+
+	for (int32 i = 0; i < kMaxCoresPerPackage; i++) {
+		CoreEntry* core = fCores[i];
+		if (core == NULL)
+			continue;
+
+		if (core->CPUCount() == 0)
+			continue;
+
+		int32 load = core->GetLoad();
+		if (maxEntry == NULL || load > maxLoad) {
+			maxLoad = load;
+			maxEntry = core;
+		}
+	}
+	return maxEntry;
+}
+
+
 /* static */ void
 DebugDumper::DumpCPURunQueue(CPUEntry* cpu)
 {
@@ -825,7 +772,7 @@ DebugDumper::DumpCoreRunQueue(CoreEntry* core)
 
 
 /* static */ void
-DebugDumper::DumpCoreLoadHeapEntry(CoreEntry* entry)
+DebugDumper::DumpCoreEntryLoad(CoreEntry* entry)
 {
 	CoreThreadsData threadsData;
 	threadsData.fCore = entry;
@@ -861,15 +808,15 @@ DebugDumper::DumpIdleCoresInPackage(PackageEntry* package)
 }
 
 /* static */ void
-DebugDumper::DumpPackageLoadHeap(PackageEntry* package)
+DebugDumper::DumpPackageCores(PackageEntry* package)
 {
-	kprintf("Package %" B_PRId32 " Heaps:\n", package->fPackageID);
-	kprintf("  Load Heap:\n");
-	// We can't easily dump local heaps without iterating them destructively or adding iterator.
-	// But we can peek min?
-	// Just print count?
-	// MinMaxHeap doesn't expose Count().
-	// Skip for now or implement if needed.
+	kprintf("Package %" B_PRId32 " Cores:\n", package->fPackageID);
+	for (int32 i = 0; i < kMaxCoresPerPackage; i++) {
+		CoreEntry* core = package->GetCore(i);
+		if (core != NULL) {
+			DumpCoreEntryLoad(core);
+		}
+	}
 }
 
 
@@ -907,9 +854,7 @@ dump_cpu_heap(int /* argc */, char** /* argv */)
 
 	for (int32 i = 0; i < gPackageCount; i++) {
 		kprintf("Package %" B_PRId32 ":\n", gPackageEntries[i].fPackageID);
-		gPackageEntries[i].LoadHeap()->Dump();
-		kprintf("\n");
-		gPackageEntries[i].HighLoadHeap()->Dump();
+		DebugDumper::DumpPackageCores(&gPackageEntries[i]);
 		kprintf("\n");
 	}
 
@@ -949,7 +894,6 @@ dump_idle_cores(int /* argc */, char** /* argv */)
 void Scheduler::init_debug_commands()
 {
 	new(&sDebugCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
-	new(&sDebugCoreHeap) CoreLoadHeap(smp_get_num_cpus());
 
 	add_debugger_command_etc("run_queue", &dump_run_queue,
 		"List threads in run queue", "\nLists threads in run queue", 0);

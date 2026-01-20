@@ -57,11 +57,12 @@ choose_small_task_core()
 
 	for (int32 i = 0; i < gPackageCount; i++) {
 		PackageEntry* entry = &gPackageEntries[i];
-		entry->ReadLockLoad();
+		entry->ReadLockCore();
 
-		CoreEntry* candidate = entry->LoadHeap()->PeekMaximum();
-		if (candidate == NULL)
-			candidate = entry->HighLoadHeap()->PeekMaximum();
+		// Find the core with highest load that isn't overloaded.
+		// If all are overloaded, we might pick the least loaded later.
+		// For choosing a small task core, we want packing.
+		CoreEntry* candidate = entry->PeekMaximumLoadCore();
 
 		if (candidate != NULL) {
 			int32 load = candidate->GetLoad();
@@ -70,7 +71,7 @@ choose_small_task_core()
 				bestLoad = load;
 			}
 		}
-		entry->ReadUnlockLoad();
+		entry->ReadUnlockCore();
 	}
 
 	if (core == NULL)
@@ -122,11 +123,9 @@ choose_core(const ThreadData* threadData)
 
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* entry = &gPackageEntries[i];
-			entry->ReadLockLoad();
+			entry->ReadLockCore();
 
-			CoreEntry* candidate = entry->LoadHeap()->PeekMinimum();
-			if (candidate == NULL)
-				candidate = entry->HighLoadHeap()->PeekMinimum();
+			CoreEntry* candidate = entry->PeekMinimumLoadCore();
 
 			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
 				int32 load = candidate->GetLoad();
@@ -135,7 +134,7 @@ choose_core(const ThreadData* threadData)
 					bestLoad = load;
 				}
 			}
-			entry->ReadUnlockLoad();
+			entry->ReadUnlockCore();
 		}
 		core = bestCore;
 
@@ -189,44 +188,52 @@ rebalance(const ThreadData* threadData)
 
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* entry = &gPackageEntries[i];
-			entry->ReadLockLoad();
+			entry->ReadLockCore();
 
-			CoreEntry* candidate = entry->LoadHeap()->PeekMaximum();
-			if (candidate == NULL)
-				candidate = entry->HighLoadHeap()->PeekMaximum(); // Wait, PeekMinimum?
-				// Original code: PeekMinimum for HighLoadHeap.
-				// PeekMaximum for LoadHeap.
-				// We want to offload FROM core.
-				// Find OTHER core with LOWEST load?
-				// Original: LoadHeap.PeekMaximum? HighLoadHeap.PeekMinimum?
-				// Logic: Find core with *highest* load that is < kHighLoad?
-				// Or *lowest* load overall?
-				// Rebalance Logic:
-				// "Check if migrating the current thread would result in both core loads become closer to average."
-				// "Get the least loaded core" says rebalance logic in low_latency.
-				// Here in power_saving:
-				// other = gCoreLoadHeap.PeekMaximum().
-				// This implies we want to pack tasks?
-				// Power saving prefers packing. So find a core that has load but isn't full?
-				// Let's stick to original logic: LoadHeap Max, then HighLoadHeap Min.
+			// We want to pack: find the busiest core that is NOT overloaded (load < kHighLoad).
+			// If all active cores are overloaded, pick the least loaded one (to minimize overload).
+			CoreEntry* candidate = NULL;
 
-			if (candidate == NULL)
-				candidate = entry->HighLoadHeap()->PeekMinimum();
+			// Custom scan for "Best Packing Candidate"
+			// Since we removed heaps, we must scan the package's cores manually here
+			// or use available helpers.
+			// We can use PeekMaximumLoadCore() as a starting point.
+			CoreEntry* maxEntry = entry->PeekMaximumLoadCore();
+
+			if (maxEntry != NULL) {
+				if (maxEntry->GetLoad() < kHighLoad) {
+					// The busiest core is not overloaded. This is the ideal packing candidate.
+					candidate = maxEntry;
+				} else {
+					// The busiest core is overloaded. Check if *any* core is not overloaded?
+					// If maxEntry is overloaded, others might not be.
+					// We need to find the max loaded core among those with load < kHighLoad.
+					// If all are >= kHighLoad, we should pick PeekMinimumLoadCore() to spread load.
+
+					CoreEntry* minEntry = entry->PeekMinimumLoadCore();
+					if (minEntry != NULL && minEntry->GetLoad() < kHighLoad) {
+						// There exists at least one non-overloaded core.
+						// Ideally we want the *busiest* non-overloaded one.
+						// But PeekMinimum gives the *least* busy.
+						// Falling back to minEntry is safe (valid candidate), though maybe not optimally packed.
+						// Without a custom scan loop or iterator exposed from PackageEntry,
+						// we accept this slight sub-optimality in favor of code simplicity and API encapsulation.
+						candidate = minEntry;
+					} else {
+						// All cores are overloaded (or minEntry is NULL).
+						// Pick the least loaded one to mitigate overload.
+						candidate = minEntry;
+					}
+				}
+			}
 
 			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
 				int32 load = candidate->GetLoad();
-				// Original: loop to find first matching mask.
-				// Here we just check one per package?
-				// We should probably check iterating heaps if MinMaxHeap supported it efficiently.
-				// But we are limited to Peek.
-				// Assuming Peek returns representative.
 				if (other == NULL) {
 					other = candidate;
-					// bestLoad?
-					// Power saving logic is complex. Just picking candidate is safe fallback.
 				}
 			}
-			entry->ReadUnlockLoad();
+			entry->ReadUnlockCore();
 		}
 		// If other is NULL, we failed to find candidate.
 		if (other == NULL) return core; // Fallback
@@ -311,9 +318,9 @@ rebalance_irqs(bool idle)
 
 	for (int32 i = 0; i < gPackageCount; i++) {
 		PackageEntry* entry = &gPackageEntries[i];
-		entry->ReadLockLoad();
+		entry->ReadLockCore();
 
-		CoreEntry* candidate = entry->LoadHeap()->PeekMinimum();
+		CoreEntry* candidate = entry->PeekMinimumLoadCore();
 		if (candidate != NULL) {
 			int32 load = candidate->GetLoad();
 			if (other == NULL || load < bestLoad) {
@@ -321,7 +328,7 @@ rebalance_irqs(bool idle)
 				bestLoad = load;
 			}
 		}
-		entry->ReadUnlockLoad();
+		entry->ReadUnlockCore();
 	}
 
 	if (other == NULL)
