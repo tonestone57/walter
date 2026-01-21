@@ -5,6 +5,7 @@
 
 
 #include <util/AutoLock.h>
+#include <util/Random.h>
 
 #include "scheduler_common.h"
 #include "scheduler_cpu.h"
@@ -108,20 +109,49 @@ choose_core(const ThreadData* threadData)
 		CoreEntry* bestCore = NULL;
 		int32 bestLoad = -1;
 
-		for (int32 i = 0; i < gPackageCount; i++) {
-			PackageEntry* entry = &gPackageEntries[i];
-			entry->ReadLockCore();
+		// If we have many packages, use random sampling (Power of Two Choices)
+		// to avoid the O(N) overhead of locking every package.
+		const int32 kRandomSearchThreshold = 4;
+		const int32 kRandomSamples = 4;
+		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-			CoreEntry* candidate = entry->PeekMinimumLoadCore();
+		if (tryRandom) {
+			for (int32 k = 0; k < kRandomSamples; k++) {
+				int32 i = fast_get_random<uint32>() % gPackageCount;
+				PackageEntry* entry = &gPackageEntries[i];
+				entry->ReadLockCore();
 
-			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-				int32 load = candidate->GetLoad();
-				if (bestCore == NULL || load < bestLoad) {
-					bestCore = candidate;
-					bestLoad = load;
+				CoreEntry* candidate = entry->PeekMinimumLoadCore();
+
+				if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+					int32 load = candidate->GetLoad();
+					if (bestCore == NULL || load < bestLoad) {
+						bestCore = candidate;
+						bestLoad = load;
+					}
 				}
+				entry->ReadUnlockCore();
 			}
-			entry->ReadUnlockCore();
+		}
+
+		// Fallback to full scan if random sampling failed to find a candidate
+		// or if we have few packages.
+		if (bestCore == NULL) {
+			for (int32 i = 0; i < gPackageCount; i++) {
+				PackageEntry* entry = &gPackageEntries[i];
+				entry->ReadLockCore();
+
+				CoreEntry* candidate = entry->PeekMinimumLoadCore();
+
+				if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+					int32 load = candidate->GetLoad();
+					if (bestCore == NULL || load < bestLoad) {
+						bestCore = candidate;
+						bestLoad = load;
+					}
+				}
+				entry->ReadUnlockCore();
+			}
 		}
 		core = bestCore;
 	}
@@ -162,20 +192,46 @@ rebalance(const ThreadData* threadData)
 	CoreEntry* other = NULL;
 	int32 bestLoad = -1;
 
-	for (int32 i = 0; i < gPackageCount; i++) {
-		PackageEntry* entry = &gPackageEntries[i];
-		entry->ReadLockCore();
+	// Use random sampling if possible
+	const int32 kRandomSearchThreshold = 4;
+	const int32 kRandomSamples = 4;
+	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-		CoreEntry* candidate = entry->PeekMinimumLoadCore();
+	if (tryRandom) {
+		for (int32 k = 0; k < kRandomSamples; k++) {
+			int32 i = fast_get_random<uint32>() % gPackageCount;
+			PackageEntry* entry = &gPackageEntries[i];
+			entry->ReadLockCore();
 
-		if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-			int32 load = candidate->GetLoad();
-			if (other == NULL || load < bestLoad) {
-				other = candidate;
-				bestLoad = load;
+			CoreEntry* candidate = entry->PeekMinimumLoadCore();
+
+			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+				int32 load = candidate->GetLoad();
+				if (other == NULL || load < bestLoad) {
+					other = candidate;
+					bestLoad = load;
+				}
 			}
+			entry->ReadUnlockCore();
 		}
-		entry->ReadUnlockCore();
+	}
+
+	if (other == NULL) {
+		for (int32 i = 0; i < gPackageCount; i++) {
+			PackageEntry* entry = &gPackageEntries[i];
+			entry->ReadLockCore();
+
+			CoreEntry* candidate = entry->PeekMinimumLoadCore();
+
+			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+				int32 load = candidate->GetLoad();
+				if (other == NULL || load < bestLoad) {
+					other = candidate;
+					bestLoad = load;
+				}
+			}
+			entry->ReadUnlockCore();
+		}
 	}
 	ASSERT(other != NULL);
 

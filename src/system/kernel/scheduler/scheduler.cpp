@@ -825,6 +825,12 @@ init()
 	if (result != B_OK)
 		return result;
 
+	if (packageCount > 64) {
+		panic("scheduler: system has too many packages (%" B_PRId32 " > 64). "
+			"This kernel build supports a maximum of 64 scheduling packages "
+			"(approx. 2048 cores).", packageCount);
+	}
+
 	// disable parts of the scheduler logic that are not needed
 	gSingleCore = coreCount == 1;
 	scheduler_update_policy();
