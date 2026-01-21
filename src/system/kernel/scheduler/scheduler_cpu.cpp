@@ -7,6 +7,7 @@
 #include "scheduler_cpu.h"
 
 #include <util/AutoLock.h>
+#include <util/Random.h>
 
 #include <algorithm>
 
@@ -700,6 +701,48 @@ PackageEntry::PeekMinimumLoadCore() const
 	CoreEntry* minEntry = NULL;
 	int32 minLoad = -1;
 
+	// Use "Power of Two Choices" random sampling if the core count is large.
+	// This avoids cache pollution and interconnect saturation from scanning all cores.
+	if (fCoreCount > 8) {
+		uint32 mask = atomic_get((int32*)&fEnabledCoreMask);
+		if (mask == 0)
+			return NULL;
+
+		int32 firstIndex = -1;
+		int32 attempts = 0;
+
+		// Try to pick two distinct random valid cores.
+		// We limit attempts to avoid infinite loops if the mask is sparse.
+		while (attempts++ < 4) {
+			// Select a random bit index (0-31)
+			int32 i = fast_get_random<uint32>() % kMaxCoresPerPackage;
+
+			// Check if this core is enabled
+			if (!((1U << i) & mask))
+				continue;
+
+			CoreEntry* candidate = fCores[i];
+			int32 load = atomic_get(&fCoreLoads[i]);
+
+			if (firstIndex == -1) {
+				// First choice
+				firstIndex = i;
+				minEntry = candidate;
+				minLoad = load;
+			} else if (i != firstIndex) {
+				// Second choice: compare and return the better one
+				if (load < minLoad)
+					return candidate;
+				return minEntry;
+			}
+		}
+
+		// Fallback to linear scan if sampling failed to find 2 valid cores quickly
+		if (minEntry != NULL)
+			return minEntry;
+	}
+
+	// Linear Scan (Robust Path for small clusters or fallback)
 	uint32 mask = atomic_get((int32*)&fEnabledCoreMask);
 	while (mask != 0) {
 		int32 i = __builtin_ctz(mask);
