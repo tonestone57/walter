@@ -137,12 +137,16 @@ choose_core(const ThreadData* threadData)
 
 		if (tryRandom) {
 			int32 visited[kRandomSamples];
-			for (int32 k = 0; k < kRandomSamples; k++) {
+			int32 samplesTaken = 0;
+			int32 attempts = 0;
+			const int32 kMaxAttempts = kRandomSamples * 2;
+
+			while (samplesTaken < kRandomSamples && attempts++ < kMaxAttempts) {
 				int32 i = fast_get_random<uint32>() % gPackageCount;
 
 				// Avoid checking the same package twice
 				bool collision = false;
-				for (int32 j = 0; j < k; j++) {
+				for (int32 j = 0; j < samplesTaken; j++) {
 					if (visited[j] == i) {
 						collision = true;
 						break;
@@ -150,7 +154,7 @@ choose_core(const ThreadData* threadData)
 				}
 				if (collision)
 					continue;
-				visited[k] = i;
+				visited[samplesTaken++] = i;
 
 				check_package(&gPackageEntries[i], useMask ? &mask : NULL,
 					bestCore, bestLoad);
@@ -209,12 +213,16 @@ rebalance(const ThreadData* threadData)
 
 	if (tryRandom) {
 		int32 visited[kRandomSamples];
-		for (int32 k = 0; k < kRandomSamples; k++) {
+		int32 samplesTaken = 0;
+		int32 attempts = 0;
+		const int32 kMaxAttempts = kRandomSamples * 2;
+
+		while (samplesTaken < kRandomSamples && attempts++ < kMaxAttempts) {
 			int32 i = fast_get_random<uint32>() % gPackageCount;
 
 			// Avoid checking the same package twice
 			bool collision = false;
-			for (int32 j = 0; j < k; j++) {
+			for (int32 j = 0; j < samplesTaken; j++) {
 				if (visited[j] == i) {
 					collision = true;
 					break;
@@ -222,7 +230,7 @@ rebalance(const ThreadData* threadData)
 			}
 			if (collision)
 				continue;
-			visited[k] = i;
+			visited[samplesTaken++] = i;
 
 			check_package(&gPackageEntries[i], useMask ? &mask : NULL,
 				other, bestLoad);
