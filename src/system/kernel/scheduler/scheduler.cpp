@@ -847,8 +847,6 @@ init()
 		return B_NO_MEMORY;
 	ArrayDeleter<PackageEntry> packageEntriesDeleter(gPackageEntries);
 
-	new(&gIdlePackageList) IdlePackageList;
-
 	for (int32 i = 0; i < packageCount; i++)
 		gPackageEntries[i].Init(i);
 

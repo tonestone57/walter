@@ -271,7 +271,6 @@ private:
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
-typedef DoublyLinkedList<PackageEntry> IdlePackageList;
 
 extern CPUEntry* gCPUEntries;
 

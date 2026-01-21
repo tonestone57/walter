@@ -597,7 +597,10 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		// No locking needed for atomic updates of fLoad.
 		// fCurrentLoad is updated atomically.
 		fLoad = fCurrentLoad;
-		atomic_set(&fPackage->fCoreLoads[fPackageIndex], fLoad);
+		if (fCPUCount > 0) {
+			atomic_set(&fPackage->fCoreLoads[fPackageIndex],
+				std::min(fLoad / fCPUCount, kMaxLoad));
+		}
 		fLoadMeasurementEpoch++;
 		fLastLoadUpdate = now;
 	}

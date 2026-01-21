@@ -92,8 +92,14 @@ choose_idle_core()
 
 	PackageEntry* package = PackageEntry::GetLeastIdlePackage();
 
-	if (package == NULL)
-		package = gIdlePackageList.Last();
+	if (package == NULL) {
+		// No partially idle packages. Check for any idle package using the mask.
+		uint64 idlePackageMask = atomic_get64((int64*)&gIdlePackageMask);
+		if (idlePackageMask != 0) {
+			int32 packageIndex = __builtin_ctzll(idlePackageMask);
+			package = &gPackageEntries[packageIndex];
+		}
+	}
 
 	if (package != NULL)
 		return package->GetIdleCore();
