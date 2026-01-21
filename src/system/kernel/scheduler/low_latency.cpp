@@ -44,6 +44,25 @@ has_cache_expired(const ThreadData* threadData)
 }
 
 
+static void
+check_package(PackageEntry* entry, const CPUSet& mask, bool useMask,
+	CoreEntry*& bestCore, int32& bestLoad)
+{
+	entry->ReadLockCore();
+
+	CoreEntry* candidate = entry->PeekMinimumLoadCore();
+
+	if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+		int32 load = candidate->GetLoad();
+		if (bestCore == NULL || load < bestLoad) {
+			bestCore = candidate;
+			bestLoad = load;
+		}
+	}
+	entry->ReadUnlockCore();
+}
+
+
 static CoreEntry*
 choose_core(const ThreadData* threadData)
 {
@@ -118,19 +137,8 @@ choose_core(const ThreadData* threadData)
 		if (tryRandom) {
 			for (int32 k = 0; k < kRandomSamples; k++) {
 				int32 i = fast_get_random<uint32>() % gPackageCount;
-				PackageEntry* entry = &gPackageEntries[i];
-				entry->ReadLockCore();
-
-				CoreEntry* candidate = entry->PeekMinimumLoadCore();
-
-				if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-					int32 load = candidate->GetLoad();
-					if (bestCore == NULL || load < bestLoad) {
-						bestCore = candidate;
-						bestLoad = load;
-					}
-				}
-				entry->ReadUnlockCore();
+				check_package(&gPackageEntries[i], mask, useMask, bestCore,
+					bestLoad);
 			}
 		}
 
@@ -138,19 +146,8 @@ choose_core(const ThreadData* threadData)
 		// or if we have few packages.
 		if (bestCore == NULL) {
 			for (int32 i = 0; i < gPackageCount; i++) {
-				PackageEntry* entry = &gPackageEntries[i];
-				entry->ReadLockCore();
-
-				CoreEntry* candidate = entry->PeekMinimumLoadCore();
-
-				if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-					int32 load = candidate->GetLoad();
-					if (bestCore == NULL || load < bestLoad) {
-						bestCore = candidate;
-						bestLoad = load;
-					}
-				}
-				entry->ReadUnlockCore();
+				check_package(&gPackageEntries[i], mask, useMask, bestCore,
+					bestLoad);
 			}
 		}
 		core = bestCore;
@@ -200,37 +197,13 @@ rebalance(const ThreadData* threadData)
 	if (tryRandom) {
 		for (int32 k = 0; k < kRandomSamples; k++) {
 			int32 i = fast_get_random<uint32>() % gPackageCount;
-			PackageEntry* entry = &gPackageEntries[i];
-			entry->ReadLockCore();
-
-			CoreEntry* candidate = entry->PeekMinimumLoadCore();
-
-			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-				int32 load = candidate->GetLoad();
-				if (other == NULL || load < bestLoad) {
-					other = candidate;
-					bestLoad = load;
-				}
-			}
-			entry->ReadUnlockCore();
+			check_package(&gPackageEntries[i], mask, useMask, other, bestLoad);
 		}
 	}
 
 	if (other == NULL) {
 		for (int32 i = 0; i < gPackageCount; i++) {
-			PackageEntry* entry = &gPackageEntries[i];
-			entry->ReadLockCore();
-
-			CoreEntry* candidate = entry->PeekMinimumLoadCore();
-
-			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-				int32 load = candidate->GetLoad();
-				if (other == NULL || load < bestLoad) {
-					other = candidate;
-					bestLoad = load;
-				}
-			}
-			entry->ReadUnlockCore();
+			check_package(&gPackageEntries[i], mask, useMask, other, bestLoad);
 		}
 	}
 	ASSERT(other != NULL);
@@ -294,20 +267,10 @@ rebalance_irqs(bool idle)
 	CoreEntry* other = NULL;
 	int32 bestLoad = -1;
 
+	// Use empty mask, as we don't care about affinity here
+	CPUSet mask;
 	for (int32 i = 0; i < gPackageCount; i++) {
-		PackageEntry* entry = &gPackageEntries[i];
-		entry->ReadLockCore();
-
-		CoreEntry* candidate = entry->PeekMinimumLoadCore();
-
-		if (candidate != NULL) {
-			int32 load = candidate->GetLoad();
-			if (other == NULL || load < bestLoad) {
-				other = candidate;
-				bestLoad = load;
-			}
-		}
-		entry->ReadUnlockCore();
+		check_package(&gPackageEntries[i], mask, false, other, bestLoad);
 	}
 
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
