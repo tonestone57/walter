@@ -47,6 +47,27 @@ has_cache_expired(const ThreadData* threadData)
 }
 
 
+static void
+check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
+{
+	entry->ReadLockCore();
+
+	// Find the core with highest load that isn't overloaded.
+	// If all are overloaded, we might pick the least loaded later.
+	// For choosing a small task core, we want packing.
+	CoreEntry* candidate = entry->PeekMaximumLoadCore();
+
+	if (candidate != NULL) {
+		int32 load = candidate->GetLoad();
+		if (core == NULL || load > bestLoad) {
+			core = candidate;
+			bestLoad = load;
+		}
+	}
+	entry->ReadUnlockCore();
+}
+
+
 static CoreEntry*
 choose_small_task_core()
 {
@@ -56,22 +77,7 @@ choose_small_task_core()
 	int32 bestLoad = -1;
 
 	for (int32 i = 0; i < gPackageCount; i++) {
-		PackageEntry* entry = &gPackageEntries[i];
-		entry->ReadLockCore();
-
-		// Find the core with highest load that isn't overloaded.
-		// If all are overloaded, we might pick the least loaded later.
-		// For choosing a small task core, we want packing.
-		CoreEntry* candidate = entry->PeekMaximumLoadCore();
-
-		if (candidate != NULL) {
-			int32 load = candidate->GetLoad();
-			if (core == NULL || load > bestLoad) {
-				core = candidate;
-				bestLoad = load;
-			}
-		}
-		entry->ReadUnlockCore();
+		check_package_small_task(&gPackageEntries[i], core, bestLoad);
 	}
 
 	if (core == NULL)
@@ -107,6 +113,55 @@ choose_idle_core()
 }
 
 
+static void
+check_package_min_load(PackageEntry* entry, const CPUSet* mask,
+	CoreEntry*& bestCore, int32& bestLoad)
+{
+	entry->ReadLockCore();
+
+	CoreEntry* candidate = entry->PeekMinimumLoadCore();
+
+	if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask))) {
+		int32 load = candidate->GetLoad();
+		if (bestCore == NULL || load < bestLoad) {
+			bestCore = candidate;
+			bestLoad = load;
+		}
+	}
+	entry->ReadUnlockCore();
+}
+
+
+static void
+check_masked_packages_min_load(const CPUSet& mask, CoreEntry*& bestCore, int32& bestLoad)
+{
+	const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+	const int32 cpuCount = smp_get_num_cpus();
+	PackageEntry* lastPackage = NULL;
+
+	for (int32 i = 0; i < kCPUSetArraySize; i++) {
+		uint32 bits = mask.Bits(i);
+		while (bits != 0) {
+			int bit = __builtin_ctz(bits);
+			bits &= ~(1U << bit);
+			int32 cpuID = i * 32 + bit;
+
+			if (cpuID >= cpuCount)
+				continue;
+
+			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
+			if (cpuCore != NULL) {
+				PackageEntry* package = cpuCore->Package();
+				if (package != NULL && package != lastPackage) {
+					check_package_min_load(package, &mask, bestCore, bestLoad);
+					lastPackage = package;
+				}
+			}
+		}
+	}
+}
+
+
 static CoreEntry*
 choose_core(const ThreadData* threadData)
 {
@@ -127,21 +182,14 @@ choose_core(const ThreadData* threadData)
 		CoreEntry* bestCore = NULL;
 		int32 bestLoad = -1;
 
-		for (int32 i = 0; i < gPackageCount; i++) {
-			PackageEntry* entry = &gPackageEntries[i];
-			entry->ReadLockCore();
-
-			CoreEntry* candidate = entry->PeekMinimumLoadCore();
-
-			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-				int32 load = candidate->GetLoad();
-				if (bestCore == NULL || load < bestLoad) {
-					bestCore = candidate;
-					bestLoad = load;
-				}
+		if (useMask) {
+			check_masked_packages_min_load(mask, bestCore, bestLoad);
+		} else {
+			for (int32 i = 0; i < gPackageCount; i++) {
+				check_package_min_load(&gPackageEntries[i], NULL, bestCore, bestLoad);
 			}
-			entry->ReadUnlockCore();
 		}
+
 		core = bestCore;
 
 		if (core == NULL) {
@@ -153,6 +201,90 @@ choose_core(const ThreadData* threadData)
 
 	ASSERT(core != NULL);
 	return core;
+}
+
+
+static void
+check_package_packing(PackageEntry* entry, const CPUSet* mask,
+	CoreEntry*& other, int32& bestLoad, bool& foundNonOverloaded)
+{
+	entry->ReadLockCore();
+
+	// We want to pack: find the busiest core that is NOT overloaded (load < kHighLoad).
+	// If all active cores are overloaded, pick the least loaded one (to minimize overload).
+	CoreEntry* candidate = entry->PeekMaximumLoadCore();
+
+	if (candidate != NULL) {
+		if (candidate->GetLoad() >= kHighLoad) {
+			// The busiest is overloaded. Check if there is a less loaded one.
+			candidate = entry->PeekMinimumLoadCore();
+		}
+	}
+
+	if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask))) {
+		int32 load = candidate->GetLoad();
+		bool isOverloaded = load >= kHighLoad;
+
+		if (other == NULL) {
+			other = candidate;
+			bestLoad = load;
+			foundNonOverloaded = !isOverloaded;
+		} else if (foundNonOverloaded) {
+			if (!isOverloaded) {
+				// Both are non-overloaded. Pick the BUSIEST (packing).
+				if (load > bestLoad) {
+					other = candidate;
+					bestLoad = load;
+				}
+			}
+			// If candidate is overloaded, ignore it (we prefer the existing non-overloaded 'other')
+		} else {
+			if (!isOverloaded) {
+				// Found a non-overloaded core! It beats the current overloaded 'other'.
+				other = candidate;
+				bestLoad = load;
+				foundNonOverloaded = true;
+			} else {
+				// Both are overloaded. Pick the LEAST loaded (spread overload).
+				if (load < bestLoad) {
+					other = candidate;
+					bestLoad = load;
+				}
+			}
+		}
+	}
+	entry->ReadUnlockCore();
+}
+
+
+static void
+check_masked_packages_packing(const CPUSet& mask, CoreEntry*& other,
+	int32& bestLoad, bool& foundNonOverloaded)
+{
+	const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+	const int32 cpuCount = smp_get_num_cpus();
+	PackageEntry* lastPackage = NULL;
+
+	for (int32 i = 0; i < kCPUSetArraySize; i++) {
+		uint32 bits = mask.Bits(i);
+		while (bits != 0) {
+			int bit = __builtin_ctz(bits);
+			bits &= ~(1U << bit);
+			int32 cpuID = i * 32 + bit;
+
+			if (cpuID >= cpuCount)
+				continue;
+
+			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
+			if (cpuCore != NULL) {
+				PackageEntry* package = cpuCore->Package();
+				if (package != NULL && package != lastPackage) {
+					check_package_packing(package, &mask, other, bestLoad, foundNonOverloaded);
+					lastPackage = package;
+				}
+			}
+		}
+	}
 }
 
 
@@ -193,54 +325,12 @@ rebalance(const ThreadData* threadData)
 		int32 bestLoad = -1;
 		bool foundNonOverloaded = false;
 
-		for (int32 i = 0; i < gPackageCount; i++) {
-			PackageEntry* entry = &gPackageEntries[i];
-			entry->ReadLockCore();
-
-			// We want to pack: find the busiest core that is NOT overloaded (load < kHighLoad).
-			// If all active cores are overloaded, pick the least loaded one (to minimize overload).
-			CoreEntry* candidate = entry->PeekMaximumLoadCore();
-
-			if (candidate != NULL) {
-				if (candidate->GetLoad() >= kHighLoad) {
-					// The busiest is overloaded. Check if there is a less loaded one.
-					candidate = entry->PeekMinimumLoadCore();
-				}
+		if (useMask) {
+			check_masked_packages_packing(mask, other, bestLoad, foundNonOverloaded);
+		} else {
+			for (int32 i = 0; i < gPackageCount; i++) {
+				check_package_packing(&gPackageEntries[i], NULL, other, bestLoad, foundNonOverloaded);
 			}
-
-			if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-				int32 load = candidate->GetLoad();
-				bool isOverloaded = load >= kHighLoad;
-
-				if (other == NULL) {
-					other = candidate;
-					bestLoad = load;
-					foundNonOverloaded = !isOverloaded;
-				} else if (foundNonOverloaded) {
-					if (!isOverloaded) {
-						// Both are non-overloaded. Pick the BUSIEST (packing).
-						if (load > bestLoad) {
-							other = candidate;
-							bestLoad = load;
-						}
-					}
-					// If candidate is overloaded, ignore it (we prefer the existing non-overloaded 'other')
-				} else {
-					if (!isOverloaded) {
-						// Found a non-overloaded core! It beats the current overloaded 'other'.
-						other = candidate;
-						bestLoad = load;
-						foundNonOverloaded = true;
-					} else {
-						// Both are overloaded. Pick the LEAST loaded (spread overload).
-						if (load < bestLoad) {
-							other = candidate;
-							bestLoad = load;
-						}
-					}
-				}
-			}
-			entry->ReadUnlockCore();
 		}
 
 		// If other is NULL, we failed to find candidate.
@@ -324,19 +414,9 @@ rebalance_irqs(bool idle)
 	CoreEntry* other = NULL;
 	int32 bestLoad = -1;
 
+	// rebalance_irqs doesn't use thread mask, so we stick to full scan (no affinity in IRQ balancing here)
 	for (int32 i = 0; i < gPackageCount; i++) {
-		PackageEntry* entry = &gPackageEntries[i];
-		entry->ReadLockCore();
-
-		CoreEntry* candidate = entry->PeekMinimumLoadCore();
-		if (candidate != NULL) {
-			int32 load = candidate->GetLoad();
-			if (other == NULL || load < bestLoad) {
-				other = candidate;
-				bestLoad = load;
-			}
-		}
-		entry->ReadUnlockCore();
+		check_package_min_load(&gPackageEntries[i], NULL, other, bestLoad);
 	}
 
 	if (other == NULL)
