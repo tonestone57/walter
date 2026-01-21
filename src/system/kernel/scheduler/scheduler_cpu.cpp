@@ -572,7 +572,8 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	}
 	fCPUSet.SetBit(cpu->ID());
 
-	fCPUHeap.Insert(cpu, B_IDLE_PRIORITY);
+	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK)
+		panic("CoreEntry::AddCPU: failed to insert CPU into heap");
 }
 
 

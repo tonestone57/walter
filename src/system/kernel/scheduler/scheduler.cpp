@@ -863,7 +863,7 @@ init()
 	gSchedulerNodes = new(std::nothrow) SchedulerNode[nodeCount];
 	if (gSchedulerNodes == NULL)
 		return B_NO_MEMORY;
-	// No ArrayDeleter needed as this is permanent kernel memory
+	ArrayDeleter<SchedulerNode> schedulerNodesDeleter(gSchedulerNodes);
 
 	for (int32 i = 0; i < nodeCount; i++)
 		gSchedulerNodes[i].Init(i);
@@ -944,6 +944,7 @@ init()
 	packageEntriesDeleter.Detach();
 	coreEntriesDeleter.Detach();
 	cpuEntriesDeleter.Detach();
+	schedulerNodesDeleter.Detach();
 
 	return B_OK;
 }
