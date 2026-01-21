@@ -66,6 +66,7 @@ public:
 	inline				void			UnlockScheduler();
 
 	inline				void			LockRunQueue();
+	inline				bool			TryLockRunQueue();
 	inline				void			UnlockRunQueue();
 
 						void			PushFront(ThreadData* thread,
@@ -100,6 +101,7 @@ public:
 private:
 						void			_RequestPerformanceLevel(
 											ThreadData* threadData);
+						ThreadData*		_TryStealWork();
 
 	static				int32			_RescheduleEvent(timer* /* unused */);
 	static				int32			_UpdateLoadEvent(timer* /* unused */);
@@ -155,7 +157,11 @@ public:
 	inline				int32			ThreadCount() const;
 
 	inline				void			LockRunQueue();
+	inline				bool			TryLockRunQueue();
 	inline				void			UnlockRunQueue();
+
+						ThreadData*		StealThread(int32& stolenPriority,
+											int32 thiefCPU);
 
 						void			PushFront(ThreadData* thread,
 											int32 priority);
@@ -264,6 +270,9 @@ private:
 						uint32				fIdleCoreMask;
 						int32				fIdleCoreCount;
 						int32				fCoreCount;
+public:
+	inline				int32				CoreCount() const { return fCoreCount; }
+private:
 	mutable				rw_spinlock			fCoreLock;
 
 						int32				fCoreLoads[kMaxCoresPerPackage];
@@ -322,6 +331,14 @@ CPUEntry::LockRunQueue()
 }
 
 
+inline bool
+CPUEntry::TryLockRunQueue()
+{
+	SCHEDULER_ENTER_FUNCTION();
+	return try_acquire_spinlock(&fQueueLock);
+}
+
+
 inline void
 CPUEntry::UnlockRunQueue()
 {
@@ -376,6 +393,14 @@ CoreEntry::LockRunQueue()
 {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fQueueLock);
+}
+
+
+inline bool
+CoreEntry::TryLockRunQueue()
+{
+	SCHEDULER_ENTER_FUNCTION();
+	return try_acquire_spinlock(&fQueueLock);
 }
 
 

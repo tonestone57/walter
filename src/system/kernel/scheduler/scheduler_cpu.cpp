@@ -262,6 +262,11 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	CoreRunQueueLocker coreLocker(fCore);
 
 	ThreadData* sharedThread = fCore->PeekThread();
+	if (sharedThread == NULL && pinnedThread == NULL) {
+		// try to steal work from other cores in the same package
+		sharedThread = _TryStealWork();
+	}
+
 	if (sharedThread == NULL && pinnedThread == NULL && oldThread == NULL)
 		return NULL;
 
@@ -274,7 +279,8 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		return oldThread;
 
 	if (sharedPriority > pinnedPriority) {
-		fCore->Remove(sharedThread);
+		if (sharedThread->Core() == fCore)
+			fCore->Remove(sharedThread);
 		return sharedThread;
 	}
 
@@ -321,6 +327,42 @@ CPUEntry::TrackActivity(ThreadData* oldThreadData, ThreadData* nextThreadData)
 
 		nextThreadData->SetLastInterruptTime(cpuEntry->interrupt_time);
 	}
+}
+
+
+ThreadData*
+CPUEntry::_TryStealWork()
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	// iterate over other cores in the package and try to steal work
+	PackageEntry* package = fCore->Package();
+	int32 coreCount = package->CoreCount();
+	if (coreCount <= 1)
+		return NULL;
+
+	// Pick a random starting point to avoid convoys
+	int32 startIndex = fast_get_random<uint32>() % kMaxCoresPerPackage;
+
+	for (int32 i = 0; i < kMaxCoresPerPackage; i++) {
+		int32 index = (startIndex + i) % kMaxCoresPerPackage;
+		CoreEntry* victim = package->GetCore(index);
+
+		if (victim == NULL || victim == fCore || victim->CPUCount() == 0)
+			continue;
+
+		// Use TryLock to avoid contention
+		if (victim->TryLockRunQueue()) {
+			int32 stolenPriority = -1;
+			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
+			victim->UnlockRunQueue();
+
+			if (stolen != NULL)
+				return stolen;
+		}
+	}
+
+	return NULL;
 }
 
 
@@ -486,6 +528,24 @@ CoreEntry::Remove(ThreadData* thread)
 
 	fRunQueue.Remove(thread);
 	atomic_add(&fThreadCount, -1);
+}
+
+
+ThreadData*
+CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	ThreadData* thread = fRunQueue.PeekMaximum();
+	if (thread != NULL) {
+		CPUSet mask = thread->GetCPUMask();
+		if (!mask.IsEmpty() && !mask.GetBit(thiefCPU))
+			return NULL;
+
+		stolenPriority = thread->GetEffectivePriority();
+		Remove(thread);
+	}
+	return thread;
 }
 
 

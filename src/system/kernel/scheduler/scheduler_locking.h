@@ -45,6 +45,21 @@ public:
 	}
 };
 
+class CoreRunQueueTryLocking {
+public:
+	inline bool Lock(CoreEntry* core)
+	{
+		return core->TryLockRunQueue();
+	}
+
+	inline void Unlock(CoreEntry* core)
+	{
+		core->UnlockRunQueue();
+	}
+};
+
+typedef AutoLocker<CoreEntry, CoreRunQueueTryLocking> CoreRunQueueTryLocker;
+
 typedef AutoLocker<CoreEntry, CoreRunQueueLocking> CoreRunQueueLocker;
 
 class CoreCPUHeapLocking {
