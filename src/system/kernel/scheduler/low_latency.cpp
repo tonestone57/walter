@@ -98,6 +98,26 @@ choose_core(const ThreadData* threadData)
 			CoreEntry* sibling = package->GetIdleCore();
 			if (sibling != NULL && (!useMask || sibling->CPUMask().Matches(mask)))
 				return sibling;
+
+			// Check local NUMA node (Super Package) to keep traffic local
+			// This reduces interconnect saturation on large multi-socket systems.
+			SchedulerNode* node = package->Node();
+			if (node != NULL) {
+				uint64 idlePackageMask = node->IdlePackageMask();
+				while (idlePackageMask != 0) {
+					int32 packageIndex = __builtin_ctzll(idlePackageMask);
+					idlePackageMask &= ~(1ULL << packageIndex);
+
+					int32 globalPackageIndex = node->NodeIndex() * 64 + packageIndex;
+					if (globalPackageIndex >= gPackageCount)
+						continue;
+
+					PackageEntry* localPackage = &gPackageEntries[globalPackageIndex];
+					CoreEntry* localSibling = localPackage->GetIdleCore();
+					if (localSibling != NULL && (!useMask || localSibling->CPUMask().Matches(mask)))
+						return localSibling;
+				}
+			}
 		}
 	}
 

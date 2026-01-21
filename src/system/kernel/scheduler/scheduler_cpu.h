@@ -247,6 +247,7 @@ public:
 	inline				void				PackageWakesUp(PackageEntry* package);
 
 	inline				uint64				IdlePackageMask() const;
+	inline				int32				NodeIndex() const { return fNodeID; }
 
 private:
 						int32				fNodeID;
