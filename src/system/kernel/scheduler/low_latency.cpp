@@ -338,9 +338,39 @@ rebalance_irqs(bool idle)
 	CoreEntry* other = NULL;
 	int32 bestLoad = -1;
 
+	// Use random sampling if possible
+	bool tryRandom = gPackageCount > kRandomSearchThreshold;
+
+	if (tryRandom) {
+		int32 visited[kRandomSamples];
+		int32 samplesTaken = 0;
+		int32 attempts = 0;
+		const int32 kMaxAttempts = kRandomSamples * 2;
+
+		while (samplesTaken < kRandomSamples && attempts++ < kMaxAttempts) {
+			int32 i = fast_get_random<uint32>() % gPackageCount;
+
+			// Avoid checking the same package twice
+			bool collision = false;
+			for (int32 j = 0; j < samplesTaken; j++) {
+				if (visited[j] == i) {
+					collision = true;
+					break;
+				}
+			}
+			if (collision)
+				continue;
+			visited[samplesTaken++] = i;
+
+			check_package(&gPackageEntries[i], NULL, other, bestLoad);
+		}
+	}
+
 	// Use empty mask (NULL), as we don't care about affinity here
-	for (int32 i = 0; i < gPackageCount; i++) {
-		check_package(&gPackageEntries[i], NULL, other, bestLoad);
+	if (other == NULL) {
+		for (int32 i = 0; i < gPackageCount; i++) {
+			check_package(&gPackageEntries[i], NULL, other, bestLoad);
+		}
 	}
 
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
