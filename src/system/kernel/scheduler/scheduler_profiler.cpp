@@ -62,11 +62,11 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 		return;
 	atomic_add((int32*)&function->fCalled, 1);
 
-	FunctionEntry* stackEntry
-		= &fFunctionStacks[cpu][fFunctionStackPointers[cpu]];
-	fFunctionStackPointers[cpu]++;
+	int32 stackDepth = fFunctionStackPointers[cpu]++;
+	if (stackDepth >= (int32)kMaxFunctionStackEntries)
+		return;
 
-	ASSERT(fFunctionStackPointers[cpu] < kMaxFunctionStackEntries);
+	FunctionEntry* stackEntry = &fFunctionStacks[cpu][stackDepth];
 
 	stackEntry->fFunction = function;
 	stackEntry->fEntryTime = start;
@@ -83,9 +83,11 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 	nanotime_t start = system_time_nsecs();
 
 	ASSERT(fFunctionStackPointers[cpu] > 0);
-	fFunctionStackPointers[cpu]--;
-	FunctionEntry* stackEntry
-		= &fFunctionStacks[cpu][fFunctionStackPointers[cpu]];
+	int32 stackDepth = --fFunctionStackPointers[cpu];
+	if (stackDepth >= (int32)kMaxFunctionStackEntries)
+		return;
+
+	FunctionEntry* stackEntry = &fFunctionStacks[cpu][stackDepth];
 
 	nanotime_t timeSpent = start - stackEntry->fEntryTime;
 	timeSpent -= stackEntry->fProfilerTime;
@@ -95,8 +97,8 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 		timeSpent - stackEntry->fOthersTime);
 
 	nanotime_t profilerTime = stackEntry->fProfilerTime;
-	if (fFunctionStackPointers[cpu] > 0) {
-		stackEntry = &fFunctionStacks[cpu][fFunctionStackPointers[cpu] - 1];
+	if (stackDepth > 0) {
+		stackEntry = &fFunctionStacks[cpu][stackDepth - 1];
 		stackEntry->fOthersTime += timeSpent;
 		stackEntry->fProfilerTime += profilerTime;
 
@@ -320,4 +322,3 @@ dump_profiler(int argc, char** argv)
 
 
 #endif	// SCHEDULER_PROFILING
-
