@@ -1034,8 +1034,19 @@ _user_estimate_max_scheduling_latency(thread_id id)
 
 	ThreadData* threadData = thread->scheduler_data;
 	CoreEntry* core = threadData->Core();
-	if (core == NULL)
-		core = &gCoreEntries[get_random<int32>() % gCoreCount];
+	if (core == NULL) {
+		// Pick a random active core
+		// Loop until we find an initialized core (one with a package assigned)
+		// We use a retry limit to avoid infinite loops in degenerate cases
+		int retries = 0;
+		do {
+			core = &gCoreEntries[get_random<int32>() % gCoreCount];
+		} while (core->Package() == NULL && retries++ < 100);
+
+		// Fallback to the first core if random selection failed
+		if (core->Package() == NULL)
+			core = &gCoreEntries[0];
+	}
 
 	int32 threadCount = core->ThreadCount();
 	if (core->CPUCount() > 0)
