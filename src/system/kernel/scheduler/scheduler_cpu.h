@@ -266,6 +266,9 @@ private:
 						int32				fCoreCount;
 	mutable				rw_spinlock			fCoreLock;
 
+						int32				fCoreLoads[kMaxCoresPerPackage];
+						uint32				fEnabledCoreMask;
+
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
 typedef DoublyLinkedList<PackageEntry> IdlePackageList;

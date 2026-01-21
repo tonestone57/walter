@@ -500,6 +500,9 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 		fLoad = 0;
 		fCurrentLoad = 0;
 
+		atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
+		atomic_or((int32*)&fPackage->fEnabledCoreMask, 1U << fPackageIndex);
+
 		fPackage->AddIdleCore(this);
 	}
 	fCPUSet.SetBit(cpu->ID());
@@ -521,6 +524,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		thread_map(CoreEntry::_UnassignThread, this);
 
 		// core has been disabled
+		atomic_and((int32*)&fPackage->fEnabledCoreMask, ~(1U << fPackageIndex));
 		fPackage->RemoveIdleCore(this);
 
 		// get rid of threads
@@ -593,6 +597,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		// No locking needed for atomic updates of fLoad.
 		// fCurrentLoad is updated atomically.
 		fLoad = fCurrentLoad;
+		atomic_set(&fPackage->fCoreLoads[fPackageIndex], fLoad);
 		fLoadMeasurementEpoch++;
 		fLastLoadUpdate = now;
 	}
@@ -624,7 +629,9 @@ PackageEntry::Init(int32 id)
 {
 	fPackageID = id;
 	fIdleCoreMask = 0;
+	fEnabledCoreMask = 0;
 	memset(fCores, 0, sizeof(fCores));
+	memset(fCoreLoads, 0, sizeof(fCoreLoads));
 }
 
 
@@ -690,25 +697,15 @@ PackageEntry::PeekMinimumLoadCore() const
 	CoreEntry* minEntry = NULL;
 	int32 minLoad = -1;
 
-	// Linear scan over fCores.
-	// fCores might have NULLs if not all slots are used.
-	// We iterate up to fCoreCount? No, fCoreCount counts *active* cores.
-	// But fCores[index] is fixed at init.
-	// We need to iterate 0..kMaxCoresPerPackage, check if !NULL.
-	// Optimization: we could track max index. But kMaxCoresPerPackage is 32.
+	uint32 mask = atomic_get((int32*)&fEnabledCoreMask);
+	while (mask != 0) {
+		int32 i = __builtin_ctz(mask);
+		mask &= ~(1U << i);
 
-	for (int32 i = 0; i < kMaxCoresPerPackage; i++) {
-		CoreEntry* core = fCores[i];
-		if (core == NULL)
-			continue;
-
-		if (core->CPUCount() == 0) // Disabled?
-			continue;
-
-		int32 load = core->GetLoad();
+		int32 load = atomic_get(&fCoreLoads[i]);
 		if (minEntry == NULL || load < minLoad) {
 			minLoad = load;
-			minEntry = core;
+			minEntry = fCores[i];
 		}
 	}
 	return minEntry;
@@ -721,18 +718,15 @@ PackageEntry::PeekMaximumLoadCore() const
 	CoreEntry* maxEntry = NULL;
 	int32 maxLoad = -1;
 
-	for (int32 i = 0; i < kMaxCoresPerPackage; i++) {
-		CoreEntry* core = fCores[i];
-		if (core == NULL)
-			continue;
+	uint32 mask = atomic_get((int32*)&fEnabledCoreMask);
+	while (mask != 0) {
+		int32 i = __builtin_ctz(mask);
+		mask &= ~(1U << i);
 
-		if (core->CPUCount() == 0)
-			continue;
-
-		int32 load = core->GetLoad();
+		int32 load = atomic_get(&fCoreLoads[i]);
 		if (maxEntry == NULL || load > maxLoad) {
 			maxLoad = load;
-			maxEntry = core;
+			maxEntry = fCores[i];
 		}
 	}
 	return maxEntry;
