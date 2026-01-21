@@ -19,8 +19,8 @@ using namespace Scheduler;
 
 const bigtime_t kCacheExpire = 100000;
 
-static const int32 kRandomSearchThreshold = 4;
-static const int32 kRandomSamples = 4;
+static const int32 kRandomSearchThreshold = 32;
+static const int32 kRandomSamples = 16;
 
 
 static void
@@ -169,7 +169,7 @@ choose_core(const ThreadData* threadData)
 		// to avoid the O(N) overhead of locking every package.
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-		if (tryRandom) {
+		if (tryRandom && !useMask) {
 			int32 visited[kRandomSamples];
 			int32 samplesTaken = 0;
 			int32 attempts = 0;
@@ -190,19 +190,58 @@ choose_core(const ThreadData* threadData)
 					continue;
 				visited[samplesTaken++] = i;
 
-				check_package(&gPackageEntries[i], useMask ? &mask : NULL,
-					bestCore, bestLoad);
+				check_package(&gPackageEntries[i], NULL, bestCore, bestLoad);
+			}
+		} else if (useMask) {
+			// Iterate over allowed CPUs to find candidate packages
+			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+			const int32 cpuCount = smp_get_num_cpus();
+			PackageEntry* lastPackage = NULL;
+
+			for (int32 i = 0; i < kCPUSetArraySize; i++) {
+				uint32 bits = mask.Bits(i);
+				while (bits != 0) {
+					int bit = __builtin_ctz(bits);
+					bits &= ~(1U << bit);
+					int32 cpuID = i * 32 + bit;
+
+					if (cpuID >= cpuCount)
+						continue;
+
+					// We need to find the package for this CPU.
+					CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
+					if (cpuCore != NULL) {
+						PackageEntry* package = cpuCore->Package();
+						if (package != NULL && package != lastPackage) {
+							check_package(package, &mask, bestCore, bestLoad);
+							lastPackage = package;
+						}
+					}
+				}
 			}
 		}
 
-		// Fallback to full scan if random sampling failed to find a candidate
-		// or if we have few packages.
-		if (bestCore == NULL) {
+		// Fallback to full scan ONLY if we are not using random sampling (small system)
+		// AND we didn't use mask iteration (handled above).
+		// OR if random sampling failed completely to find *any* candidate (unlikely unless all broken).
+		if (bestCore == NULL && !tryRandom && !useMask) {
 			for (int32 i = 0; i < gPackageCount; i++) {
-				check_package(&gPackageEntries[i], useMask ? &mask : NULL,
-					bestCore, bestLoad);
+				check_package(&gPackageEntries[i], NULL, bestCore, bestLoad);
 			}
 		}
+
+		// If we still haven't found a core (e.g. random sampling failed to find any valid core,
+		// or mask iteration found nothing - which shouldn't happen if mask is valid),
+		// we might need a desperate fallback.
+		// However, for random sampling, we should have found something.
+		if (bestCore == NULL && tryRandom && !useMask) {
+			// Extremely unlikely: random sampling yielded no results (e.g. all sampled packages empty/disabled?)
+			// Fallback to scanning everything.
+			for (int32 i = 0; i < gPackageCount; i++) {
+				check_package(&gPackageEntries[i], NULL, bestCore, bestLoad);
+			}
+		}
+
 		core = bestCore;
 	}
 
@@ -245,7 +284,7 @@ rebalance(const ThreadData* threadData)
 	// Use random sampling if possible
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-	if (tryRandom) {
+	if (tryRandom && !useMask) {
 		int32 visited[kRandomSamples];
 		int32 samplesTaken = 0;
 		int32 attempts = 0;
@@ -266,17 +305,48 @@ rebalance(const ThreadData* threadData)
 				continue;
 			visited[samplesTaken++] = i;
 
-			check_package(&gPackageEntries[i], useMask ? &mask : NULL,
-				other, bestLoad);
+			check_package(&gPackageEntries[i], NULL, other, bestLoad);
+		}
+	} else if (useMask) {
+		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+		const int32 cpuCount = smp_get_num_cpus();
+		PackageEntry* lastPackage = NULL;
+
+		for (int32 i = 0; i < kCPUSetArraySize; i++) {
+			uint32 bits = mask.Bits(i);
+			while (bits != 0) {
+				int bit = __builtin_ctz(bits);
+				bits &= ~(1U << bit);
+				int32 cpuID = i * 32 + bit;
+
+				if (cpuID >= cpuCount)
+					continue;
+
+				CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
+				if (cpuCore != NULL) {
+					PackageEntry* package = cpuCore->Package();
+					if (package != NULL && package != lastPackage) {
+						check_package(package, &mask, other, bestLoad);
+						lastPackage = package;
+					}
+				}
+			}
 		}
 	}
 
-	if (other == NULL) {
+	if (other == NULL && !tryRandom && !useMask) {
 		for (int32 i = 0; i < gPackageCount; i++) {
-			check_package(&gPackageEntries[i], useMask ? &mask : NULL,
-				other, bestLoad);
+			check_package(&gPackageEntries[i], NULL, other, bestLoad);
 		}
 	}
+
+	if (other == NULL && tryRandom && !useMask) {
+		// Fallback for random failure
+		for (int32 i = 0; i < gPackageCount; i++) {
+			check_package(&gPackageEntries[i], NULL, other, bestLoad);
+		}
+	}
+
 	ASSERT(other != NULL);
 
 	// Check if the least loaded core is significantly less loaded than
@@ -367,7 +437,14 @@ rebalance_irqs(bool idle)
 	}
 
 	// Use empty mask (NULL), as we don't care about affinity here
-	if (other == NULL) {
+	if (other == NULL && !tryRandom) {
+		for (int32 i = 0; i < gPackageCount; i++) {
+			check_package(&gPackageEntries[i], NULL, other, bestLoad);
+		}
+	}
+
+	if (other == NULL && tryRandom) {
+		// Fallback for random failure
 		for (int32 i = 0; i < gPackageCount; i++) {
 			check_package(&gPackageEntries[i], NULL, other, bestLoad);
 		}
@@ -403,4 +480,3 @@ scheduler_mode_operations gSchedulerLowLatencyMode = {
 	rebalance,
 	rebalance_irqs,
 };
-
