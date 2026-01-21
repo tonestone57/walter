@@ -1038,10 +1038,11 @@ _user_estimate_max_scheduling_latency(thread_id id)
 		// Pick a random active core
 		// Loop until we find an initialized core (one with a package assigned)
 		// We use a retry limit to avoid infinite loops in degenerate cases
+		const int kMaxCoreSelectionRetries = 100;
 		int retries = 0;
 		do {
-			core = &gCoreEntries[get_random<int32>() % gCoreCount];
-		} while (core->Package() == NULL && retries++ < 100);
+			core = &gCoreEntries[fast_get_random<uint32>() % gCoreCount];
+		} while (core->Package() == NULL && retries++ < kMaxCoreSelectionRetries);
 
 		// Fallback to the first core if random selection failed
 		if (core->Package() == NULL)
