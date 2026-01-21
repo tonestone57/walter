@@ -66,6 +66,37 @@ check_package(PackageEntry* entry, const CPUSet* mask,
 }
 
 
+static void
+check_masked_packages(const CPUSet& mask, CoreEntry*& bestCore, int32& bestLoad)
+{
+	const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+	const int32 cpuCount = smp_get_num_cpus();
+	PackageEntry* lastPackage = NULL;
+
+	for (int32 i = 0; i < kCPUSetArraySize; i++) {
+		uint32 bits = mask.Bits(i);
+		while (bits != 0) {
+			int bit = __builtin_ctz(bits);
+			bits &= ~(1U << bit);
+			int32 cpuID = i * 32 + bit;
+
+			if (cpuID >= cpuCount)
+				continue;
+
+			// We need to find the package for this CPU.
+			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
+			if (cpuCore != NULL) {
+				PackageEntry* package = cpuCore->Package();
+				if (package != NULL && package != lastPackage) {
+					check_package(package, &mask, bestCore, bestLoad);
+					lastPackage = package;
+				}
+			}
+		}
+	}
+}
+
+
 static CoreEntry*
 choose_core(const ThreadData* threadData)
 {
@@ -193,50 +224,13 @@ choose_core(const ThreadData* threadData)
 				check_package(&gPackageEntries[i], NULL, bestCore, bestLoad);
 			}
 		} else if (useMask) {
-			// Iterate over allowed CPUs to find candidate packages
-			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
-			const int32 cpuCount = smp_get_num_cpus();
-			PackageEntry* lastPackage = NULL;
-
-			for (int32 i = 0; i < kCPUSetArraySize; i++) {
-				uint32 bits = mask.Bits(i);
-				while (bits != 0) {
-					int bit = __builtin_ctz(bits);
-					bits &= ~(1U << bit);
-					int32 cpuID = i * 32 + bit;
-
-					if (cpuID >= cpuCount)
-						continue;
-
-					// We need to find the package for this CPU.
-					CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
-					if (cpuCore != NULL) {
-						PackageEntry* package = cpuCore->Package();
-						if (package != NULL && package != lastPackage) {
-							check_package(package, &mask, bestCore, bestLoad);
-							lastPackage = package;
-						}
-					}
-				}
-			}
+			check_masked_packages(mask, bestCore, bestLoad);
 		}
 
 		// Fallback to full scan ONLY if we are not using random sampling (small system)
 		// AND we didn't use mask iteration (handled above).
 		// OR if random sampling failed completely to find *any* candidate (unlikely unless all broken).
-		if (bestCore == NULL && !tryRandom && !useMask) {
-			for (int32 i = 0; i < gPackageCount; i++) {
-				check_package(&gPackageEntries[i], NULL, bestCore, bestLoad);
-			}
-		}
-
-		// If we still haven't found a core (e.g. random sampling failed to find any valid core,
-		// or mask iteration found nothing - which shouldn't happen if mask is valid),
-		// we might need a desperate fallback.
-		// However, for random sampling, we should have found something.
-		if (bestCore == NULL && tryRandom && !useMask) {
-			// Extremely unlikely: random sampling yielded no results (e.g. all sampled packages empty/disabled?)
-			// Fallback to scanning everything.
+		if (bestCore == NULL && !useMask) {
 			for (int32 i = 0; i < gPackageCount; i++) {
 				check_package(&gPackageEntries[i], NULL, bestCore, bestLoad);
 			}
@@ -308,40 +302,10 @@ rebalance(const ThreadData* threadData)
 			check_package(&gPackageEntries[i], NULL, other, bestLoad);
 		}
 	} else if (useMask) {
-		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
-		const int32 cpuCount = smp_get_num_cpus();
-		PackageEntry* lastPackage = NULL;
-
-		for (int32 i = 0; i < kCPUSetArraySize; i++) {
-			uint32 bits = mask.Bits(i);
-			while (bits != 0) {
-				int bit = __builtin_ctz(bits);
-				bits &= ~(1U << bit);
-				int32 cpuID = i * 32 + bit;
-
-				if (cpuID >= cpuCount)
-					continue;
-
-				CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
-				if (cpuCore != NULL) {
-					PackageEntry* package = cpuCore->Package();
-					if (package != NULL && package != lastPackage) {
-						check_package(package, &mask, other, bestLoad);
-						lastPackage = package;
-					}
-				}
-			}
-		}
+		check_masked_packages(mask, other, bestLoad);
 	}
 
-	if (other == NULL && !tryRandom && !useMask) {
-		for (int32 i = 0; i < gPackageCount; i++) {
-			check_package(&gPackageEntries[i], NULL, other, bestLoad);
-		}
-	}
-
-	if (other == NULL && tryRandom && !useMask) {
-		// Fallback for random failure
+	if (other == NULL && !useMask) {
 		for (int32 i = 0; i < gPackageCount; i++) {
 			check_package(&gPackageEntries[i], NULL, other, bestLoad);
 		}
@@ -437,14 +401,7 @@ rebalance_irqs(bool idle)
 	}
 
 	// Use empty mask (NULL), as we don't care about affinity here
-	if (other == NULL && !tryRandom) {
-		for (int32 i = 0; i < gPackageCount; i++) {
-			check_package(&gPackageEntries[i], NULL, other, bestLoad);
-		}
-	}
-
-	if (other == NULL && tryRandom) {
-		// Fallback for random failure
+	if (other == NULL) {
 		for (int32 i = 0; i < gPackageCount; i++) {
 			check_package(&gPackageEntries[i], NULL, other, bestLoad);
 		}
