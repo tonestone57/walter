@@ -781,13 +781,23 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 		int32 currentPackageSize = 0;
 		int32 lastTopologyID = -1;
 
+		// Adaptive cluster size:
+		// Small systems (<= 512 cores): 8 cores/package to minimize contention.
+		// Large systems (> 512 cores): Increase size to stay within 64 packages.
+		int32 targetPackageSize = 8;
+		if (cpuCount > 64 * 8)
+			targetPackageSize = (cpuCount + 63) / 64;
+		if (targetPackageSize > kMaxCoresPerPackage)
+			targetPackageSize = kMaxCoresPerPackage;
+
 		for (int32 i = 0; i < cpuCount; i++) {
 			int32 cpuID = cpuList[i];
 			int32 topologyID = get_topology_id(cpuID);
 
 			if (i == 0) {
 				lastTopologyID = topologyID;
-			} else if (topologyID != lastTopologyID || currentPackageSize >= 8) {
+			} else if (topologyID != lastTopologyID
+					|| currentPackageSize >= targetPackageSize) {
 				packageCount++;
 				currentPackageSize = 0;
 				lastTopologyID = topologyID;
