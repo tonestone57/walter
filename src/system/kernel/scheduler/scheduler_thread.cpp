@@ -81,14 +81,39 @@ ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
 	}
 
 	CoreCPUHeapLocker _(core);
-	int32 index = 0;
-	CPUEntry* cpu;
-	do {
-		cpu = core->CPUHeap()->PeekRoot(index++);
-	} while (useMask && cpu != NULL && !mask.GetBit(cpu->ID()));
-	ASSERT(cpu != NULL);
+	CPUEntry* bestCPU = NULL;
+	int32 bestKey = INT32_MAX;
 
-	if (CPUPriorityHeap::GetKey(cpu) < threadPriority) {
+	int32 index = 0;
+	while (true) {
+		CPUEntry* cpu = core->CPUHeap()->PeekRoot(index++);
+		if (cpu == NULL)
+			break;
+
+		if (useMask && !mask.GetBit(cpu->ID()))
+			continue;
+
+		int32 key = CPUPriorityHeap::GetKey(cpu);
+		if (bestCPU == NULL || key < bestKey) {
+			bestCPU = cpu;
+			bestKey = key;
+
+			if (key == B_IDLE_PRIORITY)
+				break;
+		}
+	}
+
+	CPUEntry* cpu = bestCPU;
+	if (cpu == NULL) {
+		// Should not happen if the core mask intersection is valid
+		// Fallback to the first CPU in the core if possible, or panic?
+		// ChooseCoreAndCPU logic implies valid intersection.
+		// If useMask is true, we must have found something.
+		// If useMask is false, we definitely found something (root).
+		panic("scheduler: no valid CPU found in core %" B_PRId32, core->ID());
+	}
+
+	if (bestKey < threadPriority) {
 		cpu->UpdatePriority(threadPriority);
 		rescheduleNeeded = true;
 	} else
