@@ -236,11 +236,29 @@ private:
 // packages can go to the deep state of sleep). The heap stores only packages
 // with at least one core active and one core idle. The packages with all cores
 // idle are stored in gPackageIdleList (in LIFO manner).
+// Group of packages. Used to improve scalability on systems with many packages.
+class SchedulerNode {
+public:
+											SchedulerNode();
+
+						void				Init(int32 id);
+
+	inline				void				PackageGoesIdle(PackageEntry* package);
+	inline				void				PackageWakesUp(PackageEntry* package);
+
+	inline				uint64				IdlePackageMask() const;
+
+private:
+						int32				fNodeID;
+						uint64				fIdlePackageMask;
+} CACHE_LINE_ALIGN;
+
+
 class PackageEntry {
 public:
 											PackageEntry();
 
-						void				Init(int32 id);
+						void				Init(int32 id, SchedulerNode* node);
 
 	inline				void				CoreGoesIdle(CoreEntry* core);
 	inline				void				CoreWakesUp(CoreEntry* core);
@@ -248,6 +266,8 @@ public:
 						CoreEntry*			GetIdleCore(int32 index = 0) const;
 	inline				uint32				IdleCoreMask() const;
 	inline				CoreEntry*			GetCore(int32 index) const;
+	inline				SchedulerNode*		Node() const { return fNode; }
+	inline				int32				NodeIndex() const { return fNodeIndex; }
 
 						void				AddIdleCore(CoreEntry* core);
 						void				RemoveIdleCore(CoreEntry* core);
@@ -265,6 +285,8 @@ public:
 
 private:
 						int32				fPackageID;
+						SchedulerNode*		fNode;
+						int32				fNodeIndex;
 
 						CoreEntry*			fCores[kMaxCoresPerPackage];
 						uint32				fIdleCoreMask;
@@ -287,8 +309,11 @@ extern CoreEntry* gCoreEntries;
 extern int32 gCoreCount;
 
 extern PackageEntry* gPackageEntries;
-extern uint64 gIdlePackageMask;
 extern int32 gPackageCount;
+
+extern SchedulerNode* gSchedulerNodes;
+extern uint64 gIdleNodeMask;
+extern int32 gNodeCount;
 
 
 inline void
@@ -513,7 +538,7 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 
 	if (oldMask == 0) {
 		// package goes idle (first core)
-		atomic_or64((int64*)&gIdlePackageMask, 1ULL << fPackageID);
+		fNode->PackageGoesIdle(this);
 	}
 }
 
@@ -528,8 +553,44 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 
 	if ((oldMask & ~(1U << core->PackageIndex())) == 0) {
 		// package wakes up (last core)
-		atomic_and64((int64*)&gIdlePackageMask, ~(1ULL << fPackageID));
+		fNode->PackageWakesUp(this);
 	}
+}
+
+
+inline void
+SchedulerNode::PackageGoesIdle(PackageEntry* package)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	uint64 oldMask = atomic_or64((int64*)&fIdlePackageMask, 1ULL << package->NodeIndex());
+
+	if (oldMask == 0) {
+		// node goes idle (first package)
+		atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
+	}
+}
+
+
+inline void
+SchedulerNode::PackageWakesUp(PackageEntry* package)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	uint64 oldMask = atomic_and64((int64*)&fIdlePackageMask, ~(1ULL << package->NodeIndex()));
+
+	if ((oldMask & ~(1ULL << package->NodeIndex())) == 0) {
+		// node wakes up (last package)
+		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
+	}
+}
+
+
+inline uint64
+SchedulerNode::IdlePackageMask() const
+{
+	SCHEDULER_ENTER_FUNCTION();
+	return atomic_get64((int64*)&fIdlePackageMask);
 }
 
 

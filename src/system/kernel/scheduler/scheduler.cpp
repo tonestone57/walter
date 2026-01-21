@@ -782,11 +782,12 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 		int32 lastTopologyID = -1;
 
 		// Adaptive cluster size:
-		// Small systems (<= 512 cores): 8 cores/package to minimize contention.
-		// Large systems (> 512 cores): Increase size to stay within 64 packages.
+		// We use 8 cores/package as the baseline for minimal lock contention.
+		// With 4096 packages (64 nodes * 64 packages), we can support 32k cores.
+		// We only increase package size if we exceed this massive limit.
 		int32 targetPackageSize = 8;
-		if (cpuCount > 64 * 8)
-			targetPackageSize = (cpuCount + 63) / 64;
+		if (cpuCount > 4096 * 8)
+			targetPackageSize = (cpuCount + 4095) / 4096;
 		if (targetPackageSize > kMaxCoresPerPackage)
 			targetPackageSize = kMaxCoresPerPackage;
 
@@ -835,11 +836,11 @@ init()
 	if (result != B_OK)
 		return result;
 
-	if (packageCount > 64) {
-		dprintf("scheduler: system has too many packages (%" B_PRId32 " > 64). "
-			"Limiting to 64 packages. Excess cores will be disabled.\n",
+	if (packageCount > 4096) {
+		dprintf("scheduler: system has too many packages (%" B_PRId32 " > 4096). "
+			"Limiting to 4096 packages. Excess cores will be disabled.\n",
 			packageCount);
-		packageCount = 64;
+		packageCount = 4096;
 	}
 
 	// disable parts of the scheduler logic that are not needed
@@ -848,6 +849,24 @@ init()
 
 	gCoreCount = coreCount;
 	gPackageCount = packageCount;
+
+	// Initialize Scheduler Nodes (Hierarchical Bitmask Root)
+	// We need 1 node for every 64 packages.
+	int32 nodeCount = (packageCount + 63) / 64;
+	if (nodeCount > 64) {
+		// Should be impossible given 64-package clamping, but future-proof.
+		dprintf("scheduler: limiting nodes to 64 (was %" B_PRId32 ")\n", nodeCount);
+		nodeCount = 64;
+	}
+	gNodeCount = nodeCount;
+
+	gSchedulerNodes = new(std::nothrow) SchedulerNode[nodeCount];
+	if (gSchedulerNodes == NULL)
+		return B_NO_MEMORY;
+	// No ArrayDeleter needed as this is permanent kernel memory
+
+	for (int32 i = 0; i < nodeCount; i++)
+		gSchedulerNodes[i].Init(i);
 
 	gCPUEntries = new(std::nothrow) CPUEntry[cpuCount];
 	if (gCPUEntries == NULL)
@@ -864,8 +883,10 @@ init()
 		return B_NO_MEMORY;
 	ArrayDeleter<PackageEntry> packageEntriesDeleter(gPackageEntries);
 
-	for (int32 i = 0; i < packageCount; i++)
-		gPackageEntries[i].Init(i);
+	for (int32 i = 0; i < packageCount; i++) {
+		int32 nodeIndex = i / 64;
+		gPackageEntries[i].Init(i, &gSchedulerNodes[nodeIndex]);
+	}
 
 	// Map Core to Package and assign index within package
 	int32* packageCoreCounters = new(std::nothrow) int32[packageCount];

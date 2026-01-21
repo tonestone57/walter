@@ -104,24 +104,38 @@ choose_core(const ThreadData* threadData)
 	CoreEntry* core = NULL;
 
 	// wake new package/core
-	uint64 idlePackageMask = atomic_get64((int64*)&gIdlePackageMask);
-	while (idlePackageMask != 0) {
-		int32 packageIndex = __builtin_ctzll(idlePackageMask);
-		idlePackageMask &= ~(1ULL << packageIndex);
+	uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
+	while (idleNodeMask != 0) {
+		int32 nodeIndex = __builtin_ctzll(idleNodeMask);
+		idleNodeMask &= ~(1ULL << nodeIndex);
 
-		PackageEntry* package = &gPackageEntries[packageIndex];
-		uint32 idleMask = package->IdleCoreMask();
-		while (idleMask != 0) {
-			int32 bitIdx = __builtin_ctz(idleMask);
-			idleMask &= ~(1U << bitIdx);
+		SchedulerNode* node = &gSchedulerNodes[nodeIndex];
+		uint64 idlePackageMask = node->IdlePackageMask();
 
-			CoreEntry* candidate = package->GetCore(bitIdx);
-			if (!useMask || candidate->CPUMask().Matches(mask)) {
-				core = candidate;
-				break;
+		while (idlePackageMask != 0) {
+			int32 packageIndex = __builtin_ctzll(idlePackageMask);
+			idlePackageMask &= ~(1ULL << packageIndex);
+
+			int32 globalPackageIndex = nodeIndex * 64 + packageIndex;
+			// Safety check for bounds, though masks shouldn't be set if out of bounds
+			if (globalPackageIndex >= gPackageCount)
+				continue;
+
+			PackageEntry* package = &gPackageEntries[globalPackageIndex];
+			uint32 idleMask = package->IdleCoreMask();
+			while (idleMask != 0) {
+				int32 bitIdx = __builtin_ctz(idleMask);
+				idleMask &= ~(1U << bitIdx);
+
+				CoreEntry* candidate = package->GetCore(bitIdx);
+				if (!useMask || candidate->CPUMask().Matches(mask)) {
+					core = candidate;
+					break;
+				}
 			}
+			if (core != NULL)
+				break;
 		}
-
 		if (core != NULL)
 			break;
 	}

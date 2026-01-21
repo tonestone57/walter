@@ -23,8 +23,11 @@ CoreEntry* gCoreEntries;
 int32 gCoreCount;
 
 PackageEntry* gPackageEntries;
-uint64 gIdlePackageMask = 0;
 int32 gPackageCount;
+
+SchedulerNode* gSchedulerNodes;
+uint64 gIdleNodeMask = 0;
+int32 gNodeCount;
 
 
 }	// namespace Scheduler
@@ -680,6 +683,21 @@ CoreEntry::_UnassignThread(Thread* thread, void* data)
 }
 
 
+SchedulerNode::SchedulerNode()
+	:
+	fIdlePackageMask(0)
+{
+}
+
+
+void
+SchedulerNode::Init(int32 id)
+{
+	fNodeID = id;
+	fIdlePackageMask = 0;
+}
+
+
 PackageEntry::PackageEntry()
 	:
 	fIdleCoreCount(0),
@@ -690,9 +708,11 @@ PackageEntry::PackageEntry()
 
 
 void
-PackageEntry::Init(int32 id)
+PackageEntry::Init(int32 id, SchedulerNode* node)
 {
 	fPackageID = id;
+	fNode = node;
+	fNodeIndex = id % 64; // Assuming 64 packages per node max
 	fIdleCoreMask = 0;
 	fEnabledCoreMask = 0;
 	memset(fCores, 0, sizeof(fCores));
@@ -709,7 +729,7 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 	int32 oldMask = atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
 
 	if (oldMask == 0)
-		atomic_or64((int64*)&gIdlePackageMask, 1ULL << fPackageID);
+		fNode->PackageGoesIdle(this);
 }
 
 
@@ -722,7 +742,7 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 	fCoreCount--;
 
 	if ((oldMask & ~(1U << core->PackageIndex())) == 0)
-		atomic_and64((int64*)&gIdlePackageMask, ~(1ULL << fPackageID));
+		fNode->PackageWakesUp(this);
 }
 
 
@@ -963,15 +983,26 @@ static int
 dump_idle_cores(int /* argc */, char** /* argv */)
 {
 	kprintf("Idle packages:\n");
-	uint64 mask = gIdlePackageMask;
+	uint64 nodeMask = gIdleNodeMask;
 
-	if (mask != 0) {
-		kprintf("package cores\n");
+	if (nodeMask != 0) {
+		kprintf("node package cores\n");
 
-		while (mask != 0) {
-			int32 bit = __builtin_ctzll(mask);
-			mask &= ~(1ULL << bit);
-			DebugDumper::DumpIdleCoresInPackage(&gPackageEntries[bit]);
+		while (nodeMask != 0) {
+			int32 nodeIndex = __builtin_ctzll(nodeMask);
+			nodeMask &= ~(1ULL << nodeIndex);
+
+			uint64 packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
+			while (packageMask != 0) {
+				int32 packageIndex = __builtin_ctzll(packageMask);
+				packageMask &= ~(1ULL << packageIndex);
+
+				int32 globalPackageIndex = nodeIndex * 64 + packageIndex;
+				if (globalPackageIndex < gPackageCount) {
+					kprintf("%-4" B_PRId32 " ", nodeIndex);
+					DebugDumper::DumpIdleCoresInPackage(&gPackageEntries[globalPackageIndex]);
+				}
+			}
 		}
 	} else
 		kprintf("No idle packages.\n");
