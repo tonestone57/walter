@@ -473,6 +473,7 @@ CPUPriorityHeap::Dump()
 
 CoreEntry::CoreEntry()
 	:
+	fPackage(NULL),
 	fCPUCount(0),
 	fIdleCPUCount(0),
 	fThreadCount(0),

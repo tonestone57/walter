@@ -836,9 +836,10 @@ init()
 		return result;
 
 	if (packageCount > 64) {
-		panic("scheduler: system has too many packages (%" B_PRId32 " > 64). "
-			"This kernel build supports a maximum of 64 scheduling packages "
-			"(approx. 2048 cores).", packageCount);
+		dprintf("scheduler: system has too many packages (%" B_PRId32 " > 64). "
+			"Limiting to 64 packages. Excess cores will be disabled.\n",
+			packageCount);
+		packageCount = 64;
 	}
 
 	// disable parts of the scheduler logic that are not needed
@@ -886,6 +887,12 @@ init()
 	for (int32 i = 0; i < coreCount; i++) {
 		int32 packageID = coreToPackage[i];
 		CoreEntry* core = &gCoreEntries[i];
+
+		if (packageID >= packageCount) {
+			// This core belongs to a package beyond the limit. Skip initialization.
+			continue;
+		}
+
 		PackageEntry* package = &gPackageEntries[packageID];
 		int32 packageIndex = packageCoreCounters[packageID]++;
 
@@ -902,8 +909,14 @@ init()
 
 	for (int32 i = 0; i < cpuCount; i++) {
 		CoreEntry* core = &gCoreEntries[sCPUToCore[i]];
-		gCPUEntries[i].Init(i, core);
 
+		if (core->Package() == NULL) {
+			dprintf("scheduler: disabling cpu %" B_PRId32 " (topology limit)\n", i);
+			gCPU[i].disabled = true;
+			continue;
+		}
+
+		gCPUEntries[i].Init(i, core);
 		core->AddCPU(&gCPUEntries[i]);
 	}
 

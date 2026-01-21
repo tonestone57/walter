@@ -19,6 +19,9 @@ using namespace Scheduler;
 
 const bigtime_t kCacheExpire = 100000;
 
+static const int32 kRandomSearchThreshold = 4;
+static const int32 kRandomSamples = 4;
+
 
 static void
 switch_to_mode()
@@ -45,14 +48,14 @@ has_cache_expired(const ThreadData* threadData)
 
 
 static void
-check_package(PackageEntry* entry, const CPUSet& mask, bool useMask,
+check_package(PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& bestCore, int32& bestLoad)
 {
 	entry->ReadLockCore();
 
 	CoreEntry* candidate = entry->PeekMinimumLoadCore();
 
-	if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+	if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask))) {
 		int32 load = candidate->GetLoad();
 		if (bestCore == NULL || load < bestLoad) {
 			bestCore = candidate;
@@ -130,15 +133,27 @@ choose_core(const ThreadData* threadData)
 
 		// If we have many packages, use random sampling (Power of Two Choices)
 		// to avoid the O(N) overhead of locking every package.
-		const int32 kRandomSearchThreshold = 4;
-		const int32 kRandomSamples = 4;
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 		if (tryRandom) {
+			int32 visited[kRandomSamples];
 			for (int32 k = 0; k < kRandomSamples; k++) {
 				int32 i = fast_get_random<uint32>() % gPackageCount;
-				check_package(&gPackageEntries[i], mask, useMask, bestCore,
-					bestLoad);
+
+				// Avoid checking the same package twice
+				bool collision = false;
+				for (int32 j = 0; j < k; j++) {
+					if (visited[j] == i) {
+						collision = true;
+						break;
+					}
+				}
+				if (collision)
+					continue;
+				visited[k] = i;
+
+				check_package(&gPackageEntries[i], useMask ? &mask : NULL,
+					bestCore, bestLoad);
 			}
 		}
 
@@ -146,8 +161,8 @@ choose_core(const ThreadData* threadData)
 		// or if we have few packages.
 		if (bestCore == NULL) {
 			for (int32 i = 0; i < gPackageCount; i++) {
-				check_package(&gPackageEntries[i], mask, useMask, bestCore,
-					bestLoad);
+				check_package(&gPackageEntries[i], useMask ? &mask : NULL,
+					bestCore, bestLoad);
 			}
 		}
 		core = bestCore;
@@ -190,20 +205,34 @@ rebalance(const ThreadData* threadData)
 	int32 bestLoad = -1;
 
 	// Use random sampling if possible
-	const int32 kRandomSearchThreshold = 4;
-	const int32 kRandomSamples = 4;
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 	if (tryRandom) {
+		int32 visited[kRandomSamples];
 		for (int32 k = 0; k < kRandomSamples; k++) {
 			int32 i = fast_get_random<uint32>() % gPackageCount;
-			check_package(&gPackageEntries[i], mask, useMask, other, bestLoad);
+
+			// Avoid checking the same package twice
+			bool collision = false;
+			for (int32 j = 0; j < k; j++) {
+				if (visited[j] == i) {
+					collision = true;
+					break;
+				}
+			}
+			if (collision)
+				continue;
+			visited[k] = i;
+
+			check_package(&gPackageEntries[i], useMask ? &mask : NULL,
+				other, bestLoad);
 		}
 	}
 
 	if (other == NULL) {
 		for (int32 i = 0; i < gPackageCount; i++) {
-			check_package(&gPackageEntries[i], mask, useMask, other, bestLoad);
+			check_package(&gPackageEntries[i], useMask ? &mask : NULL,
+				other, bestLoad);
 		}
 	}
 	ASSERT(other != NULL);
@@ -267,10 +296,9 @@ rebalance_irqs(bool idle)
 	CoreEntry* other = NULL;
 	int32 bestLoad = -1;
 
-	// Use empty mask, as we don't care about affinity here
-	CPUSet mask;
+	// Use empty mask (NULL), as we don't care about affinity here
 	for (int32 i = 0; i < gPackageCount; i++) {
-		check_package(&gPackageEntries[i], mask, false, other, bestLoad);
+		check_package(&gPackageEntries[i], NULL, other, bestLoad);
 	}
 
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
