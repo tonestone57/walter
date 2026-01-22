@@ -974,6 +974,46 @@ init()
 		core->AddCPU(&gCPUEntries[i]);
 	}
 
+	// Determine CPU Capacities (Heterogeneous Support)
+	// We use the CPU frequency as a proxy for performance capacity.
+	uint64 maxFreq = 0;
+	uint64* cpuFreqs = new(std::nothrow) uint64[cpuCount];
+	if (cpuFreqs != NULL) {
+		ArrayDeleter<uint64> cpuFreqsDeleter(cpuFreqs);
+		for (int32 i = 0; i < cpuCount; i++) {
+			cpuFreqs[i] = cpu_frequency(i);
+			if (cpuFreqs[i] > maxFreq)
+				maxFreq = cpuFreqs[i];
+		}
+
+		if (maxFreq > 0) {
+			bool heterogeneous = false;
+			for (int32 i = 0; i < cpuCount; i++) {
+				if (cpuFreqs[i] != maxFreq && cpuFreqs[i] != 0) {
+					heterogeneous = true;
+					break;
+				}
+			}
+
+			if (heterogeneous) {
+				dprintf("scheduler: heterogeneous CPUs detected (max frequency: %"
+					B_PRIu64 ")\n", maxFreq);
+				for (int32 i = 0; i < cpuCount; i++) {
+					int32 coreID = sCPUToCore[i];
+					CoreEntry* core = &gCoreEntries[coreID];
+					if (cpuFreqs[i] != 0) {
+						int32 capacity = (cpuFreqs[i] * kDefaultCapacity)
+							/ maxFreq;
+						// Enforce a minimum capacity to avoid division by zero anomalies
+						if (capacity < 128)
+							capacity = 128;
+						core->SetCapacity(capacity);
+					}
+				}
+			}
+		}
+	}
+
 	packageEntriesDeleter.Detach();
 	coreEntriesDeleter.Detach();
 	cpuEntriesDeleter.Detach();

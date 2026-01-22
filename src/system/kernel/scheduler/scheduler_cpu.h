@@ -182,6 +182,9 @@ public:
 											bigtime_t activeTime);
 
 	inline				int32			GetLoad() const;
+	inline				void			SetCapacity(int32 capacity)
+											{ fCapacity = capacity; }
+	inline				int32			Capacity() const { return fCapacity; }
 						bigtime_t		GetMinVirtualRuntime() const;
 	inline				uint32			LoadMeasurementEpoch() const
 											{ return fLoadMeasurementEpoch; }
@@ -210,6 +213,7 @@ private:
 						int32			fPackageIndex;
 
 						int32			fCPUCount;
+						int32			fCapacity;
 						CPUSet			fCPUSet;
 						int32			fIdleCPUCount;
 						CPUPriorityHeap	fCPUHeap;
@@ -475,7 +479,9 @@ CoreEntry::GetLoad() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(fCPUCount > 0);
-	return std::min(fLoad / fCPUCount, kMaxLoad);
+	int32 load = fLoad / fCPUCount;
+	load = (int64)load * kDefaultCapacity / fCapacity;
+	return std::min(load, kMaxLoad);
 }
 
 

@@ -481,6 +481,7 @@ CoreEntry::CoreEntry()
 	:
 	fPackage(NULL),
 	fCPUCount(0),
+	fCapacity(kDefaultCapacity),
 	fIdleCPUCount(0),
 	fThreadCount(0),
 	fActiveTime(0),
@@ -666,8 +667,10 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		// fCurrentLoad is updated atomically.
 		fLoad = fCurrentLoad;
 		if (fCPUCount > 0) {
+			int32 load = fLoad / fCPUCount;
+			load = (int64)load * kDefaultCapacity / fCapacity;
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex],
-				std::min(fLoad / fCPUCount, kMaxLoad));
+				std::min(load, kMaxLoad));
 		}
 		fLoadMeasurementEpoch++;
 		fLastLoadUpdate = now;

@@ -42,6 +42,8 @@ const int kVeryHighLoad = (kMaxLoad + kHighLoad) / 2;
 
 const int kLoadDifference = kMaxLoad * 20 / 100;
 
+const int32 kDefaultCapacity = 1024;
+
 extern bool gSingleCore;
 extern bool gTrackCoreLoad;
 extern bool gTrackCPULoad;
