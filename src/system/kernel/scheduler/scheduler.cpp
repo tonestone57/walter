@@ -191,8 +191,43 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		if (targetCPU->ID() == smp_get_current_cpu()) {
 			gCPU[targetCPU->ID()].invoke_scheduler = true;
 		} else {
-			smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
-				NULL, SMP_MSG_FLAG_ASYNC);
+			// Adaptive Interrupt Coalescing (Lazy Rescheduling):
+			// If the target CPU is running a non-idle thread and its quantum is
+			// about to expire, we can avoid the overhead of an immediate IPI.
+			// The timer interrupt will trigger the reschedule shortly.
+
+			bool sendICI = true;
+			cpu_ent* targetCPUEnt = &gCPU[targetCPU->ID()];
+
+			// Note: We access running_thread without a lock. It is safe because
+			// we only check if it is idle. If we race with a context switch,
+			// the worst case is we send an unnecessary ICI or delay one slightly.
+			if (targetCPUEnt->running_thread != NULL) {
+				ThreadData* targetThreadData
+					= targetCPUEnt->running_thread->scheduler_data;
+
+				if (!targetThreadData->IsIdle()) {
+					// Check if the quantum timer is close to firing.
+					// We use atomic_get64 to safely read the 64-bit schedule_time
+					// on 32-bit platforms, though we might still race with updates.
+					bigtime_t scheduleTime = atomic_get64(
+						(volatile int64*)&targetCPUEnt->quantum_timer.schedule_time);
+
+					// Threshold: 20% of base quantum, capped at 500us.
+					bigtime_t threshold = gCurrentMode->base_quantum / 5;
+					if (threshold > 500)
+						threshold = 500;
+
+					bigtime_t timeLeft = scheduleTime - system_time();
+					if (timeLeft > 0 && timeLeft < threshold)
+						sendICI = false;
+				}
+			}
+
+			if (sendICI) {
+				smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
+					NULL, SMP_MSG_FLAG_ASYNC);
+			}
 		}
 	}
 }
