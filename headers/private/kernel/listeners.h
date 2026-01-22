@@ -34,7 +34,7 @@ struct SchedulerListener : DoublyLinkedListLinkImpl<SchedulerListener> {
 
 typedef DoublyLinkedList<SchedulerListener> SchedulerListenerList;
 extern SchedulerListenerList gSchedulerListeners;
-extern spinlock gSchedulerListenersLock;
+extern rw_spinlock gSchedulerListenersLock;
 
 
 template<typename Parameter1>
@@ -43,6 +43,7 @@ NotifySchedulerListeners(void (SchedulerListener::*hook)(Parameter1),
 	Parameter1 parameter1)
 {
 	if (!gSchedulerListeners.IsEmpty()) {
+		InterruptsReadSpinLocker locker(gSchedulerListenersLock);
 		SchedulerListenerList::Iterator it = gSchedulerListeners.GetIterator();
 		while (SchedulerListener* listener = it.Next())
 			(listener->*hook)(parameter1);
@@ -57,6 +58,7 @@ NotifySchedulerListeners(
 	Parameter1 parameter1, Parameter2 parameter2)
 {
 	if (!gSchedulerListeners.IsEmpty()) {
+		InterruptsReadSpinLocker locker(gSchedulerListenersLock);
 		SchedulerListenerList::Iterator it = gSchedulerListeners.GetIterator();
 		while (SchedulerListener* listener = it.Next())
 			(listener->*hook)(parameter1, parameter2);

@@ -61,7 +61,7 @@ using namespace Scheduler;
 static bool sSchedulerEnabled;
 
 SchedulerListenerList gSchedulerListeners;
-spinlock gSchedulerListenersLock = B_SPINLOCK_INITIALIZER;
+rw_spinlock gSchedulerListenersLock = B_RW_SPINLOCK_INITIALIZER;
 
 static scheduler_mode_operations* sSchedulerModes[] = {
 	&gSchedulerLowLatencyMode,
@@ -1013,7 +1013,7 @@ SchedulerListener::~SchedulerListener()
 void
 scheduler_add_listener(struct SchedulerListener* listener)
 {
-	InterruptsSpinLocker _(gSchedulerListenersLock);
+	InterruptsWriteSpinLocker _(gSchedulerListenersLock);
 	gSchedulerListeners.Add(listener);
 }
 
@@ -1023,7 +1023,7 @@ scheduler_add_listener(struct SchedulerListener* listener)
 void
 scheduler_remove_listener(struct SchedulerListener* listener)
 {
-	InterruptsSpinLocker _(gSchedulerListenersLock);
+	InterruptsWriteSpinLocker _(gSchedulerListenersLock);
 	gSchedulerListeners.Remove(listener);
 }
 
