@@ -96,6 +96,8 @@ public:
 						void			StartQuantumTimer(ThreadData* thread,
 											bool wasPreempted);
 
+	inline				int32			IncrementRescheduleCounter();
+
 	static inline		CPUEntry*		GetCPU(int32 cpu);
 
 private:
@@ -120,6 +122,7 @@ private:
 						bigtime_t		fMeasureTime;
 
 						bool			fUpdateLoadEvent;
+						int32			fRescheduleCounter;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
@@ -283,8 +286,10 @@ public:
 	inline				void				ReadLockCore();
 	inline				void				ReadUnlockCore();
 
-						CoreEntry*			PeekMinimumLoadCore() const;
-						CoreEntry*			PeekMaximumLoadCore() const;
+						CoreEntry*			PeekMinimumLoadCore(
+												const CPUSet* mask = NULL) const;
+						CoreEntry*			PeekMaximumLoadCore(
+												const CPUSet* mask = NULL) const;
 
 private:
 						int32				fPackageID;
@@ -373,6 +378,13 @@ CPUEntry::UnlockRunQueue()
 {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fQueueLock);
+}
+
+
+inline int32
+CPUEntry::IncrementRescheduleCounter()
+{
+	return ++fRescheduleCounter;
 }
 
 

@@ -82,7 +82,8 @@ CPUEntry::CPUEntry()
 	fLoad(0),
 	fMeasureActiveTime(0),
 	fMeasureTime(0),
-	fUpdateLoadEvent(false)
+	fUpdateLoadEvent(false),
+	fRescheduleCounter(0)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -782,7 +783,7 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 
 
 CoreEntry*
-PackageEntry::PeekMinimumLoadCore() const
+PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 {
 	CoreEntry* minEntry = NULL;
 	int32 minLoad = -1;
@@ -790,8 +791,8 @@ PackageEntry::PeekMinimumLoadCore() const
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fCoreCount > 8) {
-		uint32 mask = atomic_get((int32*)&fEnabledCoreMask);
-		if (mask == 0)
+		uint32 enabledMask = atomic_get((int32*)&fEnabledCoreMask);
+		if (enabledMask == 0)
 			return NULL;
 
 		int32 firstIndex = -1;
@@ -805,10 +806,13 @@ PackageEntry::PeekMinimumLoadCore() const
 			int32 i = fast_get_random<uint32>() % registeredCores;
 
 			// Check if this core is enabled
-			if (!((1U << i) & mask))
+			if (!((1U << i) & enabledMask))
 				continue;
 
 			CoreEntry* candidate = fCores[i];
+			if (mask != NULL && !mask->GetBit(candidate->ID()))
+				continue;
+
 			int32 load = atomic_get(&fCoreLoads[i]);
 
 			if (firstIndex == -1) {
@@ -830,15 +834,19 @@ PackageEntry::PeekMinimumLoadCore() const
 	}
 
 	// Linear Scan (Robust Path for small clusters or fallback)
-	uint32 mask = atomic_get((int32*)&fEnabledCoreMask);
-	while (mask != 0) {
-		int32 i = __builtin_ctz(mask);
-		mask &= ~(1U << i);
+	uint32 enabledMask = atomic_get((int32*)&fEnabledCoreMask);
+	while (enabledMask != 0) {
+		int32 i = __builtin_ctz(enabledMask);
+		enabledMask &= ~(1U << i);
+
+		CoreEntry* candidate = fCores[i];
+		if (mask != NULL && !mask->GetBit(candidate->ID()))
+			continue;
 
 		int32 load = atomic_get(&fCoreLoads[i]);
 		if (minEntry == NULL || load < minLoad) {
 			minLoad = load;
-			minEntry = fCores[i];
+			minEntry = candidate;
 		}
 	}
 	return minEntry;
@@ -846,20 +854,24 @@ PackageEntry::PeekMinimumLoadCore() const
 
 
 CoreEntry*
-PackageEntry::PeekMaximumLoadCore() const
+PackageEntry::PeekMaximumLoadCore(const CPUSet* mask) const
 {
 	CoreEntry* maxEntry = NULL;
 	int32 maxLoad = -1;
 
-	uint32 mask = atomic_get((int32*)&fEnabledCoreMask);
-	while (mask != 0) {
-		int32 i = __builtin_ctz(mask);
-		mask &= ~(1U << i);
+	uint32 enabledMask = atomic_get((int32*)&fEnabledCoreMask);
+	while (enabledMask != 0) {
+		int32 i = __builtin_ctz(enabledMask);
+		enabledMask &= ~(1U << i);
+
+		CoreEntry* candidate = fCores[i];
+		if (mask != NULL && !mask->GetBit(candidate->ID()))
+			continue;
 
 		int32 load = atomic_get(&fCoreLoads[i]);
 		if (maxEntry == NULL || load > maxLoad) {
 			maxLoad = load;
-			maxEntry = fCores[i];
+			maxEntry = candidate;
 		}
 	}
 	return maxEntry;

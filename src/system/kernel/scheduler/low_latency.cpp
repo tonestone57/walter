@@ -53,9 +53,9 @@ check_package(PackageEntry* entry, const CPUSet* mask,
 {
 	entry->ReadLockCore();
 
-	CoreEntry* candidate = entry->PeekMinimumLoadCore();
+	CoreEntry* candidate = entry->PeekMinimumLoadCore(mask);
 
-	if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask))) {
+	if (candidate != NULL) {
 		int32 load = candidate->GetLoad();
 		if (bestCore == NULL || load < bestLoad) {
 			bestCore = candidate;

@@ -119,9 +119,9 @@ check_package_min_load(PackageEntry* entry, const CPUSet* mask,
 {
 	entry->ReadLockCore();
 
-	CoreEntry* candidate = entry->PeekMinimumLoadCore();
+	CoreEntry* candidate = entry->PeekMinimumLoadCore(mask);
 
-	if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask))) {
+	if (candidate != NULL) {
 		int32 load = candidate->GetLoad();
 		if (bestCore == NULL || load < bestLoad) {
 			bestCore = candidate;
@@ -212,16 +212,16 @@ check_package_packing(PackageEntry* entry, const CPUSet* mask,
 
 	// We want to pack: find the busiest core that is NOT overloaded (load < kHighLoad).
 	// If all active cores are overloaded, pick the least loaded one (to minimize overload).
-	CoreEntry* candidate = entry->PeekMaximumLoadCore();
+	CoreEntry* candidate = entry->PeekMaximumLoadCore(mask);
 
 	if (candidate != NULL) {
 		if (candidate->GetLoad() >= kHighLoad) {
 			// The busiest is overloaded. Check if there is a less loaded one.
-			candidate = entry->PeekMinimumLoadCore();
+			candidate = entry->PeekMinimumLoadCore(mask);
 		}
 	}
 
-	if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask))) {
+	if (candidate != NULL) {
 		int32 load = candidate->GetLoad();
 		bool isOverloaded = load >= kHighLoad;
 
