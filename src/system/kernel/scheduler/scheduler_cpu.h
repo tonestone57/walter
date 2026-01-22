@@ -217,7 +217,6 @@ private:
 						spinlock		fQueueLock;
 
 						bigtime_t		fActiveTime;
-	mutable				seqlock			fActiveTimeLock;
 
 						int32			fLoad;
 						int32			fCurrentLoad;
@@ -275,6 +274,9 @@ public:
 						void				RegisterCore(int32 index,
 												CoreEntry* core);
 
+	inline				int32				RegisteredCoreCount() const
+											{ return fRegisteredCoreCount; }
+
 	static inline		PackageEntry*		GetMostIdlePackage();
 	static inline		PackageEntry*		GetLeastIdlePackage();
 
@@ -293,6 +295,7 @@ private:
 						uint32				fIdleCoreMask;
 						int32				fIdleCoreCount;
 						int32				fCoreCount;
+						int32				fRegisteredCoreCount;
 public:
 	inline				int32				CoreCount() const { return fCoreCount; }
 private:
@@ -442,8 +445,7 @@ inline void
 CoreEntry::IncreaseActiveTime(bigtime_t activeTime)
 {
 	SCHEDULER_ENTER_FUNCTION();
-	WriteSequentialLocker _(fActiveTimeLock);
-	fActiveTime += activeTime;
+	atomic_add64((int64*)&fActiveTime, activeTime);
 }
 
 
@@ -451,14 +453,7 @@ inline bigtime_t
 CoreEntry::GetActiveTime() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-
-	bigtime_t activeTime;
-	uint32 count;
-	do {
-		count = acquire_read_seqlock(&fActiveTimeLock);
-		activeTime = fActiveTime;
-	} while (!release_read_seqlock(&fActiveTimeLock, count));
-	return activeTime;
+	return atomic_get64((int64*)&fActiveTime);
 }
 
 
@@ -700,4 +695,3 @@ PackageEntry::ReadUnlockCore()
 
 
 #endif	// KERNEL_SCHEDULER_CPU_H
-

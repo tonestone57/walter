@@ -340,15 +340,17 @@ CPUEntry::_TryStealWork()
 
 	// iterate over other cores in the package and try to steal work
 	PackageEntry* package = fCore->Package();
-	int32 coreCount = package->CoreCount();
-	if (coreCount <= 1)
+
+	int32 registeredCores = package->RegisteredCoreCount();
+	if (registeredCores <= 1)
 		return NULL;
 
 	// Pick a random starting point to avoid convoys
-	int32 startIndex = fast_get_random<uint32>() % kMaxCoresPerPackage;
+	// We modulo by registeredCores to avoid wasting iterations on unassigned array slots.
+	int32 startIndex = fast_get_random<uint32>() % registeredCores;
 
-	for (int32 i = 0; i < kMaxCoresPerPackage; i++) {
-		int32 index = (startIndex + i) % kMaxCoresPerPackage;
+	for (int32 i = 0; i < registeredCores; i++) {
+		int32 index = (startIndex + i) % registeredCores;
 		CoreEntry* victim = package->GetCore(index);
 
 		if (victim == NULL || victim == fCore || victim->CPUCount() == 0)
@@ -488,7 +490,6 @@ CoreEntry::CoreEntry()
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
-	B_INITIALIZE_SEQLOCK(&fActiveTimeLock);
 }
 
 
@@ -702,7 +703,8 @@ SchedulerNode::Init(int32 id)
 PackageEntry::PackageEntry()
 	:
 	fIdleCoreCount(0),
-	fCoreCount(0)
+	fCoreCount(0),
+	fRegisteredCoreCount(0)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fCoreLock);
 }
@@ -716,6 +718,7 @@ PackageEntry::Init(int32 id, SchedulerNode* node)
 	fNodeIndex = id % 64; // Assuming 64 packages per node max
 	fIdleCoreMask = 0;
 	fEnabledCoreMask = 0;
+	fRegisteredCoreCount = 0;
 	memset(fCores, 0, sizeof(fCores));
 	memset(fCoreLoads, 0, sizeof(fCoreLoads));
 }
@@ -774,6 +777,7 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 {
 	ASSERT(index >= 0 && index < kMaxCoresPerPackage);
 	fCores[index] = core;
+	fRegisteredCoreCount = std::max(fRegisteredCoreCount, index + 1);
 }
 
 
@@ -792,12 +796,13 @@ PackageEntry::PeekMinimumLoadCore() const
 
 		int32 firstIndex = -1;
 		int32 attempts = 0;
+		int32 registeredCores = fRegisteredCoreCount;
 
 		// Try to pick two distinct random valid cores.
 		// We limit attempts to avoid infinite loops if the mask is sparse.
 		while (attempts++ < 4) {
-			// Select a random bit index (0-31)
-			int32 i = fast_get_random<uint32>() % kMaxCoresPerPackage;
+			// Select a random bit index based on registered cores to avoid sparse array slots
+			int32 i = fast_get_random<uint32>() % registeredCores;
 
 			// Check if this core is enabled
 			if (!((1U << i) & mask))
@@ -921,7 +926,7 @@ DebugDumper::DumpIdleCoresInPackage(PackageEntry* package)
 DebugDumper::DumpPackageCores(PackageEntry* package)
 {
 	kprintf("Package %" B_PRId32 " Cores:\n", package->fPackageID);
-	for (int32 i = 0; i < kMaxCoresPerPackage; i++) {
+	for (int32 i = 0; i < package->RegisteredCoreCount(); i++) {
 		CoreEntry* core = package->GetCore(i);
 		if (core != NULL) {
 			DumpCoreEntryLoad(core);
@@ -1026,4 +1031,3 @@ void Scheduler::init_debug_commands()
 			"List idle cores", "\nList idle cores", 0);
 	}
 }
-
