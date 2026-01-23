@@ -366,6 +366,53 @@ CPUEntry::_TryStealWork()
 		}
 	}
 
+	// Topology-Aware Extension: Try to steal from sibling packages in the same
+	// NUMA/Cluster node. This allows load balancing across the local interconnect
+	// without incurring the high cost of a global search or remote node access.
+
+	SchedulerNode* node = package->Node();
+	if (node == NULL)
+		return NULL;
+
+	// Invert IdlePackageMask to find packages that have NO idle cores (fully busy)
+	uint64 busyPackageMask = ~node->IdlePackageMask();
+
+	// Limit our search to valid packages within this node
+	// (Node 0 covers packages 0-63, Node 1 covers 64-127, etc.)
+	int32 nodeBaseIndex = node->NodeIndex() * 64;
+
+	while (busyPackageMask != 0) {
+		int32 bit = __builtin_ctzll(busyPackageMask);
+		busyPackageMask &= ~(1ULL << bit);
+
+		int32 packageIndex = nodeBaseIndex + bit;
+		if (packageIndex >= gPackageCount)
+			continue;
+
+		// Skip our own package (already checked)
+		if (packageIndex == package->fPackageID)
+			continue;
+
+		PackageEntry* victimPackage = &gPackageEntries[packageIndex];
+		int32 victimCoreCount = victimPackage->RegisteredCoreCount();
+		if (victimCoreCount == 0)
+			continue;
+
+		// Pick a random core in the victim package
+		// We only try one core per package to keep latency low.
+		int32 coreIndex = fast_get_random<uint32>() % victimCoreCount;
+		CoreEntry* victim = victimPackage->GetCore(coreIndex);
+
+		if (victim != NULL && victim->TryLockRunQueue()) {
+			int32 stolenPriority = -1;
+			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
+			victim->UnlockRunQueue();
+
+			if (stolen != NULL)
+				return stolen;
+		}
+	}
+
 	return NULL;
 }
 
