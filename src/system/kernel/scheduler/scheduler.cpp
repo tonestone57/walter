@@ -954,9 +954,15 @@ init()
 		int32 packageIndex = packageCoreCounters[packageID]++;
 
 		if (packageIndex >= kMaxCoresPerPackage) {
-			panic("Scheduler: Package %" B_PRId32 " has too many cores (%" B_PRId32
-				" > %" B_PRId32 "). Recompile with increased kMaxCoresPerPackage.",
-				packageID, packageIndex + 1, kMaxCoresPerPackage);
+			// Disable excess cores instead of panicking
+			dprintf("Scheduler: Package %" B_PRId32 " has too many cores (%" B_PRId32
+				" > %" B_PRId32 "). Disabling core %" B_PRId32 ".\n",
+				packageID, packageIndex + 1, kMaxCoresPerPackage, i);
+
+			// We can't easily mark it disabled here as we are iterating cores, not CPUs.
+			// But we skip Init(), so Package() remains NULL.
+			// The next loop iterates CPUs and checks if Core->Package() is NULL.
+			continue;
 		}
 
 		core->Init(i, package);
