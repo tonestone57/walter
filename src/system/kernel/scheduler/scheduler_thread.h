@@ -48,6 +48,7 @@ public:
 	inline	bool		IsIdle() const;
 
 	inline	bool		HasCacheExpired() const;
+	inline	int32		HomePackage() const { return fHomePackage; }
 	inline	CoreEntry*	Rebalance() const;
 
 	inline	int32		GetEffectivePriority() const;
@@ -126,6 +127,7 @@ private:
 
 			int32		fPriorityBoost;
 			bigtime_t	fEntryTime;
+			int32		fHomePackage;
 
 	mutable	int32		fEffectivePriority;
 	mutable	bigtime_t	fBaseQuantum;

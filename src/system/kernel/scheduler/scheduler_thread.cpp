@@ -31,6 +31,7 @@ ThreadData::_InitBase()
 
 	fPriorityBoost = 0;
 	fEntryTime = 0;
+	fHomePackage = -1;
 
 	fEffectivePriority = GetPriority();
 	fBaseQuantum = sQuantumLengths[GetEffectivePriority()];
@@ -140,6 +141,7 @@ ThreadData::Init()
 	ThreadData* currentThreadData = currentThread->scheduler_data;
 	fNeededLoad = currentThreadData->fNeededLoad;
 	fVirtualRuntime = currentThreadData->fVirtualRuntime;
+	fHomePackage = currentThreadData->fHomePackage;
 
 	if (!IsRealTime()) {
 		fEntryTime = currentThreadData->fEntryTime;
@@ -155,6 +157,7 @@ ThreadData::Init(CoreEntry* core)
 	_InitBase();
 
 	fCore = core;
+	fHomePackage = core->Package()->ID();
 	fReady = true;
 	fNeededLoad = 0;
 }
@@ -165,6 +168,7 @@ ThreadData::Dump() const
 {
 	kprintf("\tentry_time:\t\t%" B_PRId64 "\n", fEntryTime);
 	kprintf("\tpriority_boost:\t\t%" B_PRId32 "\n", fPriorityBoost);
+	kprintf("\thome_package:\t\t%" B_PRId32 "\n", fHomePackage);
 
 	kprintf("\teffective_priority:\t%" B_PRId32 "\n", GetEffectivePriority());
 
@@ -215,6 +219,10 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 
 	ASSERT(targetCore != NULL);
 	ASSERT(targetCPU != NULL);
+
+	// First touch: assign home package if not yet assigned
+	if (fHomePackage == -1)
+		fHomePackage = targetCore->Package()->ID();
 
 	if (fCore != targetCore) {
 		fLoadMeasurementEpoch = targetCore->LoadMeasurementEpoch() - 1;

@@ -154,6 +154,28 @@ choose_core(const ThreadData* threadData)
 
 	CoreEntry* core = NULL;
 
+	// Check Home Package (NUMA/Memory Affinity)
+	// If the previous core was not suitable (or cache expired), we try to return
+	// the thread to its home package where its memory was likely allocated.
+	int32 homePackageID = threadData->HomePackage();
+	if (core == NULL && homePackageID >= 0 && homePackageID < gPackageCount) {
+		PackageEntry* homePackage = &gPackageEntries[homePackageID];
+		CoreEntry* candidate = homePackage->GetIdleCore();
+
+		if (candidate != NULL) {
+			if (!useMask || candidate->CPUMask().Matches(mask))
+				core = candidate;
+		} else {
+			// If no idle core in home package, check for lightly loaded one
+			CoreEntry* bestHomeCore = NULL;
+			int32 bestHomeLoad = -1;
+			check_package(homePackage, &mask, bestHomeCore, bestHomeLoad);
+
+			if (bestHomeCore != NULL && bestHomeLoad < kLoadDifference)
+				core = bestHomeCore;
+		}
+	}
+
 	// wake new package/core
 	uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
 	while (idleNodeMask != 0) {
@@ -328,6 +350,25 @@ rebalance(const ThreadData* threadData)
 	// we lower the threshold for migration to improve latency.
 	bool congested = coreVRuntime > 0 && otherVRuntime > coreVRuntime + 20000;
 	int32 threshold = congested ? 0 : kLoadDifference;
+
+	// Advanced NUMA Support:
+	// If the candidate core 'other' is in the thread's Home Package,
+	// we reduce the migration threshold to encourage returning home.
+	// Conversely, if 'other' is remote and we are currently home, we increase it.
+	int32 homePackageID = threadData->HomePackage();
+	if (homePackageID >= 0) {
+		int32 currentPackageID = core->Package()->ID();
+		int32 otherPackageID = other->Package()->ID();
+
+		if (otherPackageID == homePackageID && currentPackageID != homePackageID) {
+			// Bonus for returning home: effectively 0 threshold or even negative?
+			// Let's just remove the friction (threshold).
+			threshold = 0;
+		} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
+			// Penalty for leaving home: double the threshold.
+			threshold *= 2;
+		}
+	}
 
 	if (otherLoad + threshold >= coreLoad)
 		return core;
