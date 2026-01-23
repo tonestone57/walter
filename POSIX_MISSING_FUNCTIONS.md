@@ -83,4 +83,4 @@ Based on the [os-test](https://sortix.org/os-test/include/) results, the followi
 *   **Missing:**
     *   `F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK` (Open File Description Locks).
 *   **Difficulty: Hard**
-    *   Requires updating the kernel file locking subsystem to support locks associated with the file description rather than the process (resolving issues with multi-threaded locking and closing descriptors).
+    *   Requires updating `src/system/kernel/fs/vfs.cpp` (specifically `common_fcntl` and the advisory lock implementation) to support locks associated with the file description rather than the process/thread context. This involves changing the kernel's `advisory_lock` structure and logic to handle the new lock types and their ownership semantics (persisting across `fork`, not closing on `close` unless all references are gone, etc.).
