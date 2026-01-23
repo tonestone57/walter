@@ -18,6 +18,9 @@
 namespace Scheduler {
 
 
+const bigtime_t kPriorityBoostInterval = 300000;
+
+
 struct CACHE_LINE_ALIGN ThreadData : public DoublyLinkedListLinkImpl<ThreadData>,
 	RunQueueLinkImpl<ThreadData> {
 private:
@@ -98,7 +101,6 @@ public:
 
 private:
 	inline	void		_UpdatePriorityBoost();
-	inline	int32		_GetSkipCount() const;
 
 			void		_ComputeNeededLoad();
 
@@ -122,8 +124,8 @@ private:
 
 			Thread*		fThread;
 
-			int32		fSkipCount;
 			int32		fPriorityBoost;
+			bigtime_t	fEntryTime;
 
 	mutable	int32		fEffectivePriority;
 	mutable	bigtime_t	fBaseQuantum;
@@ -213,14 +215,14 @@ ThreadData::_UpdatePriorityBoost()
 	if (IsIdle() || IsRealTime())
 		return;
 
-	TRACE("increasing thread %ld skip count\n", fThread->id);
-
 	int32 oldPriority = GetEffectivePriority();
-	fSkipCount++;
 	_ComputeEffectivePriority();
 	int32 newPriority = GetEffectivePriority();
 
 	if (oldPriority != newPriority) {
+		TRACE("increasing thread %ld priority boost to %" B_PRId32 "\n",
+			fThread->id, fPriorityBoost);
+
 		if (fEnqueuedInCPURunQueue) {
 			ASSERT(fThread->pinned_to_cpu > 0);
 			CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
@@ -275,7 +277,6 @@ ThreadData::ResetPriorityBoost()
 	SCHEDULER_ENTER_FUNCTION();
 
 	fPriorityBoost = 0;
-	fSkipCount = 0;
 	_ComputeEffectivePriority();
 }
 
@@ -391,6 +392,8 @@ ThreadData::PutBack()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	fEntryTime = system_time();
+
 	int32 priority = GetEffectivePriority();
 
 	if (fThread->pinned_to_cpu > 0) {
@@ -424,6 +427,8 @@ inline void
 ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	fEntryTime = system_time();
 
 	bool wasReady = fReady;
 	if (!fReady) {

@@ -29,8 +29,8 @@ ThreadData::_InitBase()
 	fReady = false;
 	fQuickStartCredit = false;
 
-	fSkipCount = 0;
 	fPriorityBoost = 0;
+	fEntryTime = 0;
 
 	fEffectivePriority = GetPriority();
 	fBaseQuantum = sQuantumLengths[GetEffectivePriority()];
@@ -142,7 +142,7 @@ ThreadData::Init()
 	fVirtualRuntime = currentThreadData->fVirtualRuntime;
 
 	if (!IsRealTime()) {
-		fSkipCount = currentThreadData->fSkipCount;
+		fEntryTime = currentThreadData->fEntryTime;
 
 		_ComputeEffectivePriority();
 	}
@@ -163,7 +163,7 @@ ThreadData::Init(CoreEntry* core)
 void
 ThreadData::Dump() const
 {
-	kprintf("\tskip_count:\t\t%" B_PRId32 "\n", fSkipCount);
+	kprintf("\tentry_time:\t\t%" B_PRId64 "\n", fEntryTime);
 	kprintf("\tpriority_boost:\t\t%" B_PRId32 "\n", fPriorityBoost);
 
 	kprintf("\teffective_priority:\t%" B_PRId32 "\n", GetEffectivePriority());
@@ -345,14 +345,6 @@ ThreadData::ComputeQuantumLengths()
 }
 
 
-inline int32
-ThreadData::_GetSkipCount() const
-{
-	SCHEDULER_ENTER_FUNCTION();
-	return fSkipCount;
-}
-
-
 void
 ThreadData::DonateTimesliceTo(Thread* beneficiary)
 {
@@ -404,7 +396,7 @@ ThreadData::_ComputeEffectivePriority() const
 	else if (IsRealTime())
 		fEffectivePriority = GetPriority();
 	else {
-		fPriorityBoost = fSkipCount >> 1;
+		fPriorityBoost = (system_time() - fEntryTime) / kPriorityBoostInterval;
 		fEffectivePriority = GetPriority() + fPriorityBoost;
 
 		fEffectivePriority = std::max(fEffectivePriority,

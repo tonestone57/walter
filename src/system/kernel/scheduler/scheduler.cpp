@@ -79,51 +79,79 @@ static int32* sCPUToPackage;
 
 
 static void
-UpdatePriorityBoost(CoreEntry* core, CPUEntry* cpu, ThreadData* running)
+UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Throttle priority boosting to improve scalability.
-	// We only run this O(N) operation every 50th reschedule.
-	if (cpu->IncrementRescheduleCounter() % 50 != 0)
-		return;
+	// Scalable Priority Boosting:
+	// Instead of scanning all threads (O(N)), we scan only the heads of
+	// priority queues (O(1) relative to thread count).
+	// We verify if the longest-waiting thread in each queue is starving.
+	// This maintains O(1) complexity regardless of the number of threads.
 
-	/*
-	 * Safety Note:
-	 * _UpdatePriorityBoost may remove the thread from the run queue and
-	 * re-insert it at a different (higher) priority.
-	 *
-	 * This is safe with the current RunQueue iterator implementation because:
-	 * 1. The iterator advances its internal state (caches the next element)
-	 *    before returning the current element. Removing the current element
-	 *    is therefore safe.
-	 * 2. Priority boost always increases priority (moves thread to a higher
-	 *    priority list). Since iteration proceeds from high to low priority,
-	 *    the thread will not be visited again.
-	 *
-	 * WARNING: Do not modify this logic to decrease priority during iteration
-	 * without verifying the iterator safety, as it could lead to infinite loops.
-	 */
+	const int kMaxThreadsToCheckPerQueue = 5;
 
+	// Check CPU RunQueue
 	{
 		CPURunQueueLocker locker(cpu);
-		ThreadRunQueue::ConstIterator it = cpu->GetConstIterator();
-		while (it.HasNext()) {
-			ThreadData* thread = it.Next();
+		const ThreadRunQueue* runQueue = cpu->RunQueue();
+		const uint32* bitmap = runQueue->GetBitmap();
 
-			if (thread != running)
-				thread->_UpdatePriorityBoost();
+		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
+			uint32 val = bitmap[i];
+			if (val == 0)
+				continue;
+
+			int bit = fls(val) - 1;
+			while (true) {
+				unsigned int priority = i * 32 + bit;
+				ThreadData* thread = runQueue->GetHead(priority);
+				int count = 0;
+
+				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
+					ThreadData* next = thread->GetRunQueueLink()->fNext;
+					thread->_UpdatePriorityBoost();
+					// If thread moved, it was removed from this queue.
+					// 'next' is correct either way.
+					thread = next;
+				}
+
+				val &= ~(1UL << bit);
+				if (val == 0)
+					break;
+				bit = fls(val) - 1;
+			}
 		}
 	}
 
+	// Check Core RunQueue
 	{
 		CoreRunQueueLocker locker(core);
-		ThreadRunQueue::ConstIterator it = core->GetConstIterator();
-		while (it.HasNext()) {
-			ThreadData* thread = it.Next();
+		const ThreadRunQueue* runQueue = core->RunQueue();
+		const uint32* bitmap = runQueue->GetBitmap();
 
-			if (thread != running)
-				thread->_UpdatePriorityBoost();
+		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
+			uint32 val = bitmap[i];
+			if (val == 0)
+				continue;
+
+			int bit = fls(val) - 1;
+			while (true) {
+				unsigned int priority = i * 32 + bit;
+				ThreadData* thread = runQueue->GetHead(priority);
+				int count = 0;
+
+				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
+					ThreadData* next = thread->GetRunQueueLink()->fNext;
+					thread->_UpdatePriorityBoost();
+					thread = next;
+				}
+
+				val &= ~(1UL << bit);
+				if (val == 0)
+					break;
+				bit = fls(val) - 1;
+			}
 		}
 	}
 }
@@ -481,7 +509,7 @@ reschedule(int32 nextState)
 		cpu->UpdatePriority(nextThreadData->GetEffectivePriority());
 	}
 
-	UpdatePriorityBoost(core, cpu, nextThreadData);
+	UpdatePriorityBoostScalable(core, cpu);
 
 	Thread* nextThread = nextThreadData->GetThread();
 	ASSERT(!gCPU[thisCPU].disabled || nextThreadData->IsIdle());
