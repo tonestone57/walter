@@ -20,7 +20,6 @@ using namespace Scheduler;
 const bigtime_t kCacheExpire = 100000;
 
 static const int32 kRandomSearchThreshold = 32;
-static const int32 kRandomSamples = 16;
 
 
 static void
@@ -223,12 +222,15 @@ choose_core(const ThreadData* threadData)
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 		if (tryRandom && !useMask) {
-			int32 visited[kRandomSamples];
+			// Dynamic sampling: use gRandomSamples instead of kRandomSamples
+			const int32 kMaxRandomSamples = 256;
+			int32 visited[kMaxRandomSamples];
+			int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
 			int32 samplesTaken = 0;
 			int32 attempts = 0;
-			const int32 kMaxAttempts = kRandomSamples * 2;
+			const int32 kMaxAttempts = samplesToTake * 2;
 
-			while (samplesTaken < kRandomSamples && attempts++ < kMaxAttempts) {
+			while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 				int32 i = fast_get_random<uint32>() % gPackageCount;
 
 				// Avoid checking the same package twice
@@ -301,12 +303,15 @@ rebalance(const ThreadData* threadData)
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 	if (tryRandom && !useMask) {
-		int32 visited[kRandomSamples];
+		// Dynamic sampling: use gRandomSamples instead of kRandomSamples
+		const int32 kMaxRandomSamples = 256;
+		int32 visited[kMaxRandomSamples];
+		int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
 		int32 samplesTaken = 0;
 		int32 attempts = 0;
-		const int32 kMaxAttempts = kRandomSamples * 2;
+		const int32 kMaxAttempts = samplesToTake * 2;
 
-		while (samplesTaken < kRandomSamples && attempts++ < kMaxAttempts) {
+		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 			int32 i = fast_get_random<uint32>() % gPackageCount;
 
 			// Avoid checking the same package twice
@@ -417,12 +422,15 @@ rebalance_irqs(bool idle)
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 	if (tryRandom) {
-		int32 visited[kRandomSamples];
+		// Dynamic sampling: use gRandomSamples instead of kRandomSamples
+		const int32 kMaxRandomSamples = 256;
+		int32 visited[kMaxRandomSamples];
+		int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
 		int32 samplesTaken = 0;
 		int32 attempts = 0;
-		const int32 kMaxAttempts = kRandomSamples * 2;
+		const int32 kMaxAttempts = samplesToTake * 2;
 
-		while (samplesTaken < kRandomSamples && attempts++ < kMaxAttempts) {
+		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 			int32 i = fast_get_random<uint32>() % gPackageCount;
 
 			// Avoid checking the same package twice

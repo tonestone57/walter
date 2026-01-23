@@ -53,6 +53,7 @@ scheduler_mode_operations* gCurrentMode;
 bool gSingleCore;
 bool gTrackCoreLoad;
 bool gTrackCPULoad;
+int32 gRandomSamples;
 
 }	// namespace Scheduler
 
@@ -1015,6 +1016,27 @@ init()
 			}
 		}
 	}
+
+	// Calculate dynamic random sampling parameters based on system size
+	// We aim for sqrt(N) scaling to maintain coverage without linear cost.
+	// Baseline: 16 samples for small/medium systems (up to ~256 packages)
+	// Max: 64 samples for massive systems (4096 packages)
+	// Simple heuristic: 16 + sqrt(packageCount)
+	int32 samples = 16;
+	if (packageCount > 16) {
+		// Integer square root approximation
+		int32 root = 0;
+		while ((root + 1) * (root + 1) <= packageCount)
+			root++;
+		samples = 16 + root;
+	}
+	// Clamp to a reasonable maximum to ensure O(1) bound
+	if (samples > 64)
+		samples = 64;
+
+	gRandomSamples = samples;
+	dprintf("scheduler: dynamic random sampling set to %" B_PRId32 " (packages: %" B_PRId32 ")\n",
+		gRandomSamples, packageCount);
 
 	packageEntriesDeleter.Detach();
 	coreEntriesDeleter.Detach();

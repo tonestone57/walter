@@ -45,6 +45,7 @@ const int32 kDefaultCapacity = 1024;
 extern bool gSingleCore;
 extern bool gTrackCoreLoad;
 extern bool gTrackCPULoad;
+extern int32 gRandomSamples;
 
 
 void init_debug_commands();
@@ -54,4 +55,3 @@ void init_debug_commands();
 
 
 #endif	// KERNEL_SCHEDULER_COMMON_H
-
