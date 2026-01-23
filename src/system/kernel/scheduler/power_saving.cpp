@@ -141,6 +141,9 @@ check_masked_packages_min_load(const CPUSet& mask, CoreEntry*& bestCore, int32& 
 
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
 		uint32 bits = mask.Bits(i);
+		if (bits == 0)
+			continue;
+
 		while (bits != 0) {
 			int bit = __builtin_ctz(bits);
 			bits &= ~(1U << bit);
@@ -170,7 +173,21 @@ choose_core(const ThreadData* threadData)
 	CoreEntry* core = NULL;
 
 	CPUSet mask = threadData->GetCPUMask();
-	const bool useMask = !mask.IsEmpty();
+	bool useMask = !mask.IsEmpty();
+
+	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
+	if (useMask) {
+		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+		bool allEnabled = true;
+		for (int32 i = 0; i < kCPUSetArraySize; i++) {
+			if (mask.Bits(i) != gCPUEnabled.Bits(i)) {
+				allEnabled = false;
+				break;
+			}
+		}
+		if (allEnabled)
+			useMask = false;
+	}
 
 	// try to pack all threads on one core
 	core = choose_small_task_core();
@@ -267,6 +284,9 @@ check_masked_packages_packing(const CPUSet& mask, CoreEntry*& other,
 
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
 		uint32 bits = mask.Bits(i);
+		if (bits == 0)
+			continue;
+
 		while (bits != 0) {
 			int bit = __builtin_ctz(bits);
 			bits &= ~(1U << bit);

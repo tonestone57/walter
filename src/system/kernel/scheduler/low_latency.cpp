@@ -104,7 +104,22 @@ choose_core(const ThreadData* threadData)
 	// core (L2 cache) to minimize cache misses.
 	CoreEntry* previousCore = threadData->PreviousCore();
 	CPUSet mask = threadData->GetCPUMask();
-	const bool useMask = !mask.IsEmpty();
+	bool useMask = !mask.IsEmpty();
+
+	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
+	// to enable global random sampling instead of slow mask iteration.
+	if (useMask) {
+		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+		bool allEnabled = true;
+		for (int32 i = 0; i < kCPUSetArraySize; i++) {
+			if (mask.Bits(i) != gCPUEnabled.Bits(i)) {
+				allEnabled = false;
+				break;
+			}
+		}
+		if (allEnabled)
+			useMask = false;
+	}
 
 	if (previousCore != NULL && !has_cache_expired(threadData)) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
