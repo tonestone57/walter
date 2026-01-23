@@ -414,9 +414,38 @@ rebalance_irqs(bool idle)
 	CoreEntry* other = NULL;
 	int32 bestLoad = -1;
 
-	// rebalance_irqs doesn't use thread mask, so we stick to full scan (no affinity in IRQ balancing here)
-	for (int32 i = 0; i < gPackageCount; i++) {
-		check_package_min_load(&gPackageEntries[i], NULL, other, bestLoad);
+	// Use random sampling if possible
+	bool tryRandom = gPackageCount > kRandomSearchThreshold;
+
+	if (tryRandom) {
+		const int32 kMaxRandomSamples = 256;
+		int32 visited[kMaxRandomSamples];
+		int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
+		int32 samplesTaken = 0;
+		int32 attempts = 0;
+		const int32 kMaxAttempts = samplesToTake * 2;
+
+		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
+			int32 i = fast_get_random<uint32>() % gPackageCount;
+
+			// Avoid checking the same package twice
+			bool collision = false;
+			for (int32 j = 0; j < samplesTaken; j++) {
+				if (visited[j] == i) {
+					collision = true;
+					break;
+				}
+			}
+			if (collision)
+				continue;
+			visited[samplesTaken++] = i;
+
+			check_package_min_load(&gPackageEntries[i], NULL, other, bestLoad);
+		}
+	} else {
+		for (int32 i = 0; i < gPackageCount; i++) {
+			check_package_min_load(&gPackageEntries[i], NULL, other, bestLoad);
+		}
 	}
 
 	if (other == NULL)

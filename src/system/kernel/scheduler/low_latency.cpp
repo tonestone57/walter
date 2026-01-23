@@ -19,8 +19,6 @@ using namespace Scheduler;
 
 const bigtime_t kCacheExpire = 100000;
 
-static const int32 kRandomSearchThreshold = 32;
-
 
 static void
 switch_to_mode()
