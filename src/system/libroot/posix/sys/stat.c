@@ -52,6 +52,11 @@ _lstat_current(const char* path, struct stat* stat)
 int
 fstatat(int fd, const char* path, struct stat* stat, int flag)
 {
+	if ((flag & ~AT_SYMLINK_NOFOLLOW) != 0) {
+		__set_errno(EINVAL);
+		return -1;
+	}
+
 	RETURN_AND_SET_ERRNO(_kern_read_stat(fd, path, (flag & AT_SYMLINK_NOFOLLOW) == 0,
 		stat, sizeof(struct stat)));
 }
