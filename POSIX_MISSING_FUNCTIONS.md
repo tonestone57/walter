@@ -78,3 +78,9 @@ Based on the [os-test](https://sortix.org/os-test/include/) results, the followi
     *   `pthread_cancel`, `pthread_detach`
     *   `pthread_cond_init`, `pthread_cond_timedwait`
     *   `pthread_rwlock_rdlock`, `pthread_rwlock_wrlock`, `pthread_rwlock_timedrdlock`, `pthread_rwlock_timedwrlock`
+
+### 14. `fcntl.h` (File Control)
+*   **Missing:**
+    *   `F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK` (Open File Description Locks).
+*   **Difficulty: Hard**
+    *   Requires updating the kernel file locking subsystem to support locks associated with the file description rather than the process (resolving issues with multi-threaded locking and closing descriptors).
