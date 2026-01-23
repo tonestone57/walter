@@ -125,7 +125,7 @@ private:
 
 			Thread*		fThread;
 
-			int32		fPriorityBoost;
+	mutable	int32		fPriorityBoost;
 			bigtime_t	fEntryTime;
 			int32		fHomePackage;
 
@@ -278,6 +278,7 @@ ThreadData::ResetPriorityBoost()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	fEntryTime = system_time();
 	fPriorityBoost = 0;
 	_ComputeEffectivePriority();
 }

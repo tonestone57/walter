@@ -80,8 +80,7 @@ CPUEntry::CPUEntry()
 	fLoad(0),
 	fMeasureActiveTime(0),
 	fMeasureTime(0),
-	fUpdateLoadEvent(false),
-	fRescheduleCounter(0)
+	fUpdateLoadEvent(false)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
