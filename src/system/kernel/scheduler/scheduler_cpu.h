@@ -481,7 +481,7 @@ CoreEntry::GetLoad() const
 	ASSERT(fCPUCount > 0);
 	int32 load = fLoad / fCPUCount;
 	load = (int64)load * kDefaultCapacity / fCapacity;
-	return std::min(load, kMaxLoad);
+	return min_c(load, kMaxLoad);
 }
 
 

@@ -161,7 +161,7 @@ ThreadData::_GetMinimalPriority() const
 	const int32 kMinimalPriority = B_LOWEST_ACTIVE_PRIORITY;
 
 	int32 priority = GetPriority() / kDivisor;
-	return std::max(std::min(priority, kMaximalPriority), kMinimalPriority);
+	return max_c(min_c(priority, kMaximalPriority), kMinimalPriority);
 }
 
 
@@ -300,7 +300,7 @@ ThreadData::GetQuantumLeft()
 
 	bigtime_t quantum = ComputeQuantum() - fTimeUsed;
 	quantum += stolenTime;
-	quantum = std::max(quantum, gCurrentMode->minimal_quantum);
+	quantum = max_c(quantum, gCurrentMode->minimal_quantum);
 
 	return quantum;
 }
@@ -324,7 +324,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	fTimeUsed += timeUsed;
 
 	bigtime_t timeLeft = ComputeQuantum() - fTimeUsed;
-	timeLeft = std::max(bigtime_t(0), timeLeft);
+	timeLeft = max_c(bigtime_t(0), timeLeft);
 
 	// too little time left, it's better make the next quantum a bit longer
 	bigtime_t skipTime = gCurrentMode->minimal_quantum / 2;
@@ -542,7 +542,7 @@ ThreadData::UpdateActivity(bigtime_t active)
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (!IsRealTime()) {
-		int32 priority = std::max((int32)1, GetEffectivePriority());
+		int32 priority = max_c((int32)1, GetEffectivePriority());
 		fVirtualRuntime += (active * B_URGENT_DISPLAY_PRIORITY) / priority;
 	}
 

@@ -1132,7 +1132,7 @@ _user_estimate_max_scheduling_latency(thread_id id)
 				/ threadData->GetEffectivePriority();
 	}
 
-	return std::min(std::max(threadCount * gCurrentMode->base_quantum,
+	return min_c(max_c(threadCount * gCurrentMode->base_quantum,
 			gCurrentMode->minimal_quantum),
 		gCurrentMode->maximum_latency);
 }

@@ -7,8 +7,6 @@
 #define KERNEL_SCHEDULER_COMMON_H
 
 
-#include <algorithm>
-
 #include <debug.h>
 #include <kscheduler.h>
 #include <load_tracking.h>

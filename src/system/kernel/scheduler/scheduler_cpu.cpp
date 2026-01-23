@@ -9,8 +9,6 @@
 #include <util/AutoLock.h>
 #include <util/Random.h>
 
-#include <algorithm>
-
 #include "scheduler_thread.h"
 
 
@@ -278,7 +276,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	if (sharedThread != NULL)
 		sharedPriority = sharedThread->GetEffectivePriority();
 
-	int32 rest = std::max(pinnedPriority, sharedPriority);
+	int32 rest = max_c(pinnedPriority, sharedPriority);
 	if (oldPriority > rest || (!putAtBack && oldPriority == rest))
 		return oldThread;
 
@@ -403,7 +401,7 @@ CPUEntry::_RequestPerformanceLevel(ThreadData* threadData)
 		return;
 	}
 
-	int32 load = std::max(threadData->GetLoad(), fCore->GetLoad());
+	int32 load = max_c(threadData->GetLoad(), fCore->GetLoad());
 	ASSERT_PRINT(load >= 0 && load <= kMaxLoad, "load is out of range %"
 		B_PRId32 " (max of %" B_PRId32 " %" B_PRId32 ")", load,
 		threadData->GetLoad(), fCore->GetLoad());
@@ -781,7 +779,7 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 {
 	ASSERT(index >= 0 && index < kMaxCoresPerPackage);
 	fCores[index] = core;
-	fRegisteredCoreCount = std::max(fRegisteredCoreCount, index + 1);
+	fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
 }
 
 
