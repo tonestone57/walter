@@ -66,3 +66,15 @@ Based on the [os-test](https://sortix.org/os-test/include/) results, the followi
 *   **Missing:** Support for `SPN PS` (Process Scheduling) option in `posix_spawn`.
 *   **Difficulty: Medium**
     *   Requires implementing `posix_spawnattr_setschedparam`, `posix_spawnattr_setschedpolicy`, etc., and ensuring the kernel `spawn` machinery honors these attributes.
+
+### 13. `pthread.h` (POSIX Threads)
+*   **Missing:**
+    *   `pthread_mutex_consistent`
+    *   `pthread_setschedprio`
+    *   `pthread_mutexattr_getrobust`, `pthread_mutexattr_setrobust` (Robust Mutex support)
+*   **Difficulty: Hard**
+    *   Robust mutexes require kernel support to handle owner death ("EOWNERDEAD"). `pthread_setschedprio` requires dynamic priority adjustment logic.
+*   **Verified Present:**
+    *   `pthread_cancel`, `pthread_detach`
+    *   `pthread_cond_init`, `pthread_cond_timedwait`
+    *   `pthread_rwlock_rdlock`, `pthread_rwlock_wrlock`, `pthread_rwlock_timedrdlock`, `pthread_rwlock_timedwrlock`
