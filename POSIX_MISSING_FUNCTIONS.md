@@ -1,0 +1,68 @@
+# Missing POSIX Functions in Haiku OS
+
+Based on the [os-test](https://sortix.org/os-test/include/) results, the following POSIX headers and functions are missing or incomplete in Haiku. The difficulty to implement each is estimated below.
+
+## Missing Headers
+
+### 1. `aio.h` (Asynchronous Input and Output)
+*   **Missing:** All functions (`aio_cancel`, `aio_error`, `aio_fsync`, `aio_read`, `aio_return`, `aio_suspend`, `aio_write`, `lio_listio`) and types (`struct aiocb`).
+*   **Difficulty: Hard**
+    *   Requires implementing a POSIX-compliant Asynchronous I/O subsystem in the kernel and/or `libroot`. While Haiku has an asynchronous-friendly architecture, bridging it to the specific POSIX AIO semantics is significant work.
+
+### 2. `mqueue.h` (Message Queues)
+*   **Missing:** All functions (`mq_close`, `mq_getattr`, `mq_notify`, `mq_open`, `mq_receive`, `mq_send`, `mq_setattr`, `mq_timedreceive`, `mq_timedsend`, `mq_unlink`) and types.
+*   **Difficulty: Hard**
+    *   Requires implementing POSIX message queues. Haiku has native `BPort` message passing, but POSIX message queues have different semantics (priorities, notification methods, file-descriptor-like access) that would likely require a dedicated kernel implementation or a complex userland wrapper.
+
+### 3. `sys/shm.h` (XSI Shared Memory)
+*   **Missing:** All functions (`shmat`, `shmctl`, `shmdt`, `shmget`) and types.
+*   **Difficulty: Hard**
+    *   This represents System V (XSI) Shared Memory. Haiku implements POSIX Shared Memory (`sys/mman.h`, `shm_open`), which is preferred, but legacy applications may require SysV SHM. Implementing this requires new kernel mechanisms to emulate the XSI keys and attachment model.
+
+### 4. `ndbm.h` (Database Operations)
+*   **Missing:** All functions (`dbm_clearerr`, `dbm_close`, `dbm_delete`, `dbm_error`, `dbm_fetch`, `dbm_firstkey`, `dbm_nextkey`, `dbm_open`, `dbm_store`) and types.
+*   **Difficulty: Medium**
+    *   These functions are typically provided by a library like Berkeley DB (libdb) or GDBM. The difficulty lies in porting/integrating such a library into the base system or creating a compatibility wrapper, rather than kernel development.
+
+### 5. `iconv.h` (Codeset Conversion)
+*   **Missing:** All functions (`iconv`, `iconv_close`, `iconv_open`) and types.
+*   **Difficulty: Medium**
+    *   Requires a character set conversion library. This is standard functionality (often via `libiconv` or implementation in `libc`). Haiku has its own `libtextencoding`, so this would involve either porting `libiconv` to the base system or writing a wrapper around Haiku's native encoding kit.
+
+### 6. `libintl.h` (Internationalization / gettext)
+*   **Missing:** Most functions (`bindtextdomain`, `gettext`, `dgettext`, etc.).
+*   **Difficulty: Medium**
+    *   These are the standard GNU gettext functions. Haiku uses the `BLocale` kit. Providing these requires integrating an implementation (like GNU gettext's runtime) into `libroot` or providing a compatibility layer.
+
+### 7. `wordexp.h` (Word Expansion)
+*   **Missing:** `wordexp`, `wordfree`.
+*   **Difficulty: Medium**
+    *   Requires implementing shell-style word expansion rules (variable substitution, command substitution, etc.). This usually involves invoking a shell or interacting with a shell library.
+
+### 8. `fmtmsg.h` (Message Display)
+*   **Missing:** `fmtmsg`.
+*   **Difficulty: Medium**
+    *   Requires implementing the formatted message display function in `libc`. This is logically self-contained but requires adherence to specific formatting rules and console interaction.
+
+### 9. `cpio.h` (CPIO Archive Values)
+*   **Missing:** Defines (`C_IRGRP`, `MAGIC`, etc.).
+*   **Difficulty: Easy**
+    *   This header defines constants for the CPIO file format. Adding it simply requires creating the header with the standard values.
+
+## Incomplete Headers
+
+### 10. `dirent.h` (Directory Entries)
+*   **Missing:** `d_type` field in `struct dirent`, `DT_*` macros (e.g., `DT_DIR`, `DT_REG`), and `posix_getdents`.
+*   **Difficulty: Hard**
+    *   Adding `d_type` requires changing the `struct dirent` ABI. More importantly, it requires updating the kernel `readdir` syscall and filesystem implementations to return file type information within the directory listing (to avoid `stat` penalties), which is a significant cross-cutting change.
+
+### 11. `unistd.h` (Standard Symbolic Constants and Types)
+*   **Missing:**
+    *   `dup3`, `pipe2` (Newer POSIX atomic-close-on-exec variants). **Difficulty: Medium** (Requires kernel support).
+    *   `fexecve`. **Difficulty: Medium**.
+    *   Various `_SC_` feature macros (e.g., `_SC_THREADS`, `_SC_SEMAPHORES`, `_SC_ASYNCHRONOUS_IO`) are currently undeclared or unimplemented in `sysconf`. **Difficulty: Easy** (if feature exists) to **Hard** (if feature is missing).
+
+### 12. `spawn.h` (Process Spawning)
+*   **Missing:** Support for `SPN PS` (Process Scheduling) option in `posix_spawn`.
+*   **Difficulty: Medium**
+    *   Requires implementing `posix_spawnattr_setschedparam`, `posix_spawnattr_setschedpolicy`, etc., and ensuring the kernel `spawn` machinery honors these attributes.
