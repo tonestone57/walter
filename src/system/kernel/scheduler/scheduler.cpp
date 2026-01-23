@@ -28,6 +28,7 @@
 #include <smp.h>
 #include <timer.h>
 #include <util/Random.h>
+#include <slab/Slab.h>
 
 #include "scheduler_common.h"
 #include "scheduler_cpu.h"
@@ -67,6 +68,8 @@ static scheduler_mode_operations* sSchedulerModes[] = {
 	&gSchedulerLowLatencyMode,
 	&gSchedulerPowerSavingMode,
 };
+
+static object_cache* sThreadDataCache;
 
 // Since CPU IDs used internally by the kernel bear no relation to the actual
 // CPU topology the following arrays are used to efficiently get the core
@@ -191,43 +194,8 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		if (targetCPU->ID() == smp_get_current_cpu()) {
 			gCPU[targetCPU->ID()].invoke_scheduler = true;
 		} else {
-			// Adaptive Interrupt Coalescing (Lazy Rescheduling):
-			// If the target CPU is running a non-idle thread and its quantum is
-			// about to expire, we can avoid the overhead of an immediate IPI.
-			// The timer interrupt will trigger the reschedule shortly.
-
-			bool sendICI = true;
-			cpu_ent* targetCPUEnt = &gCPU[targetCPU->ID()];
-
-			// Note: We access running_thread without a lock. It is safe because
-			// we only check if it is idle. If we race with a context switch,
-			// the worst case is we send an unnecessary ICI or delay one slightly.
-			if (targetCPUEnt->running_thread != NULL) {
-				ThreadData* targetThreadData
-					= targetCPUEnt->running_thread->scheduler_data;
-
-				if (!targetThreadData->IsIdle()) {
-					// Check if the quantum timer is close to firing.
-					// We use atomic_get64 to safely read the 64-bit schedule_time
-					// on 32-bit platforms, though we might still race with updates.
-					bigtime_t scheduleTime = atomic_get64(
-						(volatile int64*)&targetCPUEnt->quantum_timer.schedule_time);
-
-					// Threshold: 20% of base quantum, capped at 500us.
-					bigtime_t threshold = gCurrentMode->base_quantum / 5;
-					if (threshold > 500)
-						threshold = 500;
-
-					bigtime_t timeLeft = scheduleTime - system_time();
-					if (timeLeft > 0 && timeLeft < threshold)
-						sendICI = false;
-				}
-			}
-
-			if (sendICI) {
-				smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
-					NULL, SMP_MSG_FLAG_ASYNC);
-			}
+			smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
+				NULL, SMP_MSG_FLAG_ASYNC);
 		}
 	}
 }
@@ -588,9 +556,11 @@ scheduler_reschedule(int32 nextState)
 status_t
 scheduler_on_thread_create(Thread* thread, bool idleThread)
 {
-	thread->scheduler_data = new(std::nothrow) ThreadData(thread);
-	if (thread->scheduler_data == NULL)
+	void* buffer = object_cache_alloc(sThreadDataCache, 0);
+	if (buffer == NULL)
 		return B_NO_MEMORY;
+
+	thread->scheduler_data = new(buffer) ThreadData(thread);
 	return B_OK;
 }
 
@@ -616,7 +586,11 @@ scheduler_on_thread_init(Thread* thread)
 void
 scheduler_on_thread_destroy(Thread* thread)
 {
-	delete thread->scheduler_data;
+	if (thread->scheduler_data != NULL) {
+		thread->scheduler_data->~ThreadData();
+		object_cache_free(sThreadDataCache, thread->scheduler_data);
+		thread->scheduler_data = NULL;
+	}
 }
 
 
@@ -1034,6 +1008,11 @@ scheduler_init()
 #ifdef SCHEDULER_PROFILING
 	Profiling::Profiler::Initialize();
 #endif
+
+	sThreadDataCache = create_object_cache("scheduler thread data",
+		sizeof(ThreadData), CACHE_LINE_SIZE, NULL, NULL, NULL);
+	if (sThreadDataCache == NULL)
+		panic("scheduler_init: failed to create thread data cache");
 
 	status_t result = init();
 	if (result != B_OK)

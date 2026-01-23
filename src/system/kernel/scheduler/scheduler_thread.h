@@ -18,7 +18,7 @@
 namespace Scheduler {
 
 
-struct ThreadData : public DoublyLinkedListLinkImpl<ThreadData>,
+struct CACHE_LINE_ALIGN ThreadData : public DoublyLinkedListLinkImpl<ThreadData>,
 	RunQueueLinkImpl<ThreadData> {
 private:
 	inline	void		_InitBase();
