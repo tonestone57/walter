@@ -84,3 +84,30 @@ Based on the [os-test](https://sortix.org/os-test/include/) results, the followi
     *   `F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK` (Open File Description Locks).
 *   **Difficulty: Hard**
     *   Requires updating `src/system/kernel/fs/vfs.cpp` (specifically `common_fcntl` and the advisory lock implementation) to support locks associated with the file description rather than the process/thread context. This involves changing the kernel's `advisory_lock` structure and logic to handle the new lock types and their ownership semantics (persisting across `fork`, not closing on `close` unless all references are gone, etc.).
+
+## Files Needing Updates
+
+To implement the missing features, the following files and directories would likely need modification or creation:
+
+*   **Open File Description Locks (`F_OFD_SETLK`)**:
+    *   `src/system/kernel/fs/vfs.cpp` (locking logic in `common_fcntl`, `acquire_advisory_lock`, `release_advisory_lock`, `test_advisory_lock`)
+    *   `headers/posix/fcntl.h` (add macros)
+
+*   **POSIX Spawn (`spawn.h` scheduling support)**:
+    *   `src/system/libroot/posix/spawn.cpp` (implement attribute setters/getters)
+    *   `src/system/kernel/team.cpp` (or similar, to honor scheduling attributes during thread creation if not handled in userland)
+
+*   **Pthread Robust Mutexes & Priority**:
+    *   `src/system/libroot/posix/pthread/pthread_mutex.cpp`
+    *   `src/system/libroot/posix/pthread/pthread_mutexattr.c`
+    *   `src/system/kernel/locks/user_mutex.cpp` (kernel support for robust mutexes)
+
+*   **Sysconf Feature Macros**:
+    *   `src/system/libroot/posix/unistd/conf.cpp` (add cases to `__sysconf`)
+    *   `headers/posix/unistd.h` (define constants)
+
+*   **New Subsystems (AIO, MQueue, SysV SHM)**:
+    *   Would require creating new directories and files under `src/system/kernel/` and `src/system/libroot/posix/`.
+
+*   **Iconv/Intl**:
+    *   Would likely involve importing 3rd party code (like `libiconv` or `gettext`) into `src/system/libroot/posix/glibc/` or similar locations, or linking against existing system libraries.
