@@ -141,6 +141,14 @@ extern int			_kern_xsi_msgsnd(int messageQueueID,
 						const void *messagePointer, size_t messageSize,
 						int messageFlags);
 
+/* POSIX XSI shared memory syscalls */
+extern int			_kern_xsi_shmget(key_t key, size_t size, int shmflg);
+extern void*		_kern_xsi_shmat(int shmid, const void *shmaddr,
+						int shmflg);
+extern int			_kern_xsi_shmdt(const void *shmaddr);
+extern int			_kern_xsi_shmctl(int shmid, int cmd,
+						struct shmid_ds *buf);
+
 /* team & thread syscalls */
 extern thread_id	_kern_load_image(const char* const* flatArgs,
 						size_t flatArgsSize, int32 argCount, int32 envCount,

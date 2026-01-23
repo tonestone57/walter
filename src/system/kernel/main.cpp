@@ -48,6 +48,7 @@
 #include <posix/realtime_sem.h>
 #include <posix/xsi_message_queue.h>
 #include <posix/xsi_semaphore.h>
+#include <posix/xsi_shared_memory.h>
 #include <real_time_clock.h>
 #include <sem.h>
 #include <smp.h>
@@ -226,6 +227,7 @@ _start(kernel_args *bootKernelArgs, int currentCPU)
 		realtime_sem_init();
 		xsi_sem_init();
 		xsi_msg_init();
+		xsi_shm_init();
 
 		// Start a thread to finish initializing the rest of the system. Note,
 		// it won't be scheduled before calling scheduler_start() (on any CPU).

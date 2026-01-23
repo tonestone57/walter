@@ -39,6 +39,7 @@
 #include <posix/realtime_sem.h>
 #include <posix/xsi_message_queue.h>
 #include <posix/xsi_semaphore.h>
+#include <posix/xsi_shared_memory.h>
 #include <real_time_clock.h>
 #include <safemode.h>
 #include <sem.h>
