@@ -246,11 +246,14 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	const bigtime_t kHighLoadQuantum = gCurrentMode->base_quantum;
+	const bigtime_t kMinGranularity = 1200;
+	const bigtime_t kHighLoadQuantum = std::max(gCurrentMode->base_quantum,
+		kMinGranularity);
 	const bigtime_t kMediumQuantum = gCurrentMode->base_quantum
 		* gCurrentMode->quantum_multipliers[0];
 	const bigtime_t kMaxQuantum = gCurrentMode->maximum_latency;
-	const bigtime_t kDisplayQuantum = gCurrentMode->minimal_quantum;
+	const bigtime_t kDisplayQuantum = std::max(gCurrentMode->minimal_quantum,
+		kMinGranularity);
 
 	// Define constants locally to ensure availability
 	const int32 kLocalMaxLoad = 1000;
@@ -306,7 +309,7 @@ ThreadData::ComputeQuantum() const
 
 	bigtime_t quantum = targetQuantum;
 
-	return std::max(quantum, gCurrentMode->minimal_quantum);
+	return std::max(quantum, kMinGranularity);
 }
 
 
