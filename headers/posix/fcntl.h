@@ -23,6 +23,10 @@
 #define F_DUPFD_CLOEXEC 0x0200		/* duplicate fd with close on exec set */
 #define F_DUPFD_CLOFORK 0x0400		/* duplicate fd with close on fork set */
 
+#define F_OFD_GETLK		36
+#define F_OFD_SETLK		37
+#define F_OFD_SETLKW	38
+
 /* advisory locking types */
 #define F_RDLCK         0x0040		/* read or shared lock */
 #define F_UNLCK         0x0200		/* unlock */
