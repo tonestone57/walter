@@ -8,6 +8,7 @@
 #include <sys/ipc.h>
 #include <sys/types.h>
 #include <time.h>
+#include <OS.h>
 
 /* Operation flags for shmget() */
 #define SHM_R		0400		/* Read permission */
@@ -24,7 +25,7 @@
 #define SHM_UNLOCK	12			/* Unlock segment (root only) */
 
 /* Segment low boundary address multiple */
-#define SHMLBA		4096		/* Attach address must be page-aligned */
+#define SHMLBA		B_PAGE_SIZE	/* Attach address must be page-aligned */
 
 typedef unsigned long shmatt_t;
 
