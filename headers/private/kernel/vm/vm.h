@@ -112,6 +112,8 @@ area_id vm_create_null_area(team_id team, const char *name, void **address,
 			uint32 addressSpec, addr_t size, uint32 flags);
 area_id vm_copy_area(team_id team, const char *name, void **_address,
 			uint32 addressSpec, area_id sourceID);
+status_t vm_clone_address_space(team_id sourceTeam, team_id targetTeam,
+			area_id areaToSkip);
 area_id vm_clone_area(team_id team, const char *name, void **address,
 			uint32 addressSpec, uint32 protection, uint32 mapping,
 			area_id sourceArea, bool kernel);

@@ -2158,30 +2158,15 @@ fork_team(void)
 	// TODO: should be able to handle stack areas differently (ie. don't have
 	// them copy-on-write)
 
-	areaCookie = 0;
-	while (get_next_area_info(B_CURRENT_TEAM, &areaCookie, &info) == B_OK) {
-		if (info.area == parentTeam->user_data_area) {
-			// don't clone the user area; just create a new one
-			status = create_team_user_data(team, info.address);
-			if (status != B_OK)
-				break;
+	status = create_team_user_data(team, (void*)parentTeam->user_data);
+	if (status != B_OK)
+		goto err4;
 
-			thread->user_thread = team_allocate_user_thread(team);
-		} else {
-			void* address;
-			area_id area = vm_copy_area(team->address_space->ID(), info.name,
-				&address, B_CLONE_ADDRESS, info.area);
-			if (area < B_OK) {
-				status = area;
-				break;
-			}
+	thread->user_thread = team_allocate_user_thread(team);
 
-			if (info.area == parentThread->user_stack_area)
-				thread->user_stack_area = area;
-		}
-	}
-
-	if (status < B_OK)
+	status = vm_clone_address_space(parentTeam->id, team->id,
+		parentTeam->user_data_area);
+	if (status != B_OK)
 		goto err4;
 
 	if (thread->user_thread == NULL) {
@@ -2191,6 +2176,15 @@ fork_team(void)
 #endif
 		status = B_ERROR;
 		goto err4;
+	}
+
+	if (parentThread->user_stack_area >= 0) {
+		team->address_space->ReadLock();
+		VMArea* area = team->address_space->LookupArea(
+			parentThread->user_stack_base);
+		if (area != NULL)
+			thread->user_stack_area = area->id;
+		team->address_space->ReadUnlock();
 	}
 
 	thread->user_stack_base = parentThread->user_stack_base;

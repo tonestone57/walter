@@ -1625,7 +1625,11 @@ test_advisory_lock(struct vnode* vnode, struct file_descriptor* descriptor,
 		struct advisory_lock* lock = iterator.Next();
 
 		bool isOwnLock = false;
-		if (descriptor != NULL || lock->is_ofd) {
+		if ((descriptor != NULL) != lock->is_ofd) {
+			// One is OFD, the other POSIX: they only conflict if they are
+			// from different teams.
+			isOwnLock = (lock->team == team);
+		} else if (descriptor != NULL) {
 			// OFD locks conflict with anything that is not the same file
 			// description.
 			isOwnLock = (lock->bound_to == boundTo);
@@ -1805,7 +1809,11 @@ acquire_advisory_lock(struct vnode* vnode, io_context* context,
 			struct advisory_lock* lock = iterator.Next();
 
 			bool isOwnLock = false;
-			if (isOFD || lock->is_ofd) {
+			if (isOFD != lock->is_ofd) {
+				// One is OFD, the other POSIX: they only conflict if they are
+				// from different teams.
+				isOwnLock = (lock->team == team);
+			} else if (isOFD) {
 				// OFD locks conflict with anything that is not the same file
 				// description.
 				isOwnLock = (lock->bound_to == boundTo);
