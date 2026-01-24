@@ -48,9 +48,8 @@ Based on the [os-test](https://sortix.org/os-test/include/) results, the followi
     *   Requires implementing the formatted message display function in `libc`. This is logically self-contained but requires adherence to specific formatting rules and console interaction.
 
 ### 9. `cpio.h` (CPIO Archive Values)
-*   **Missing:** Defines (`C_IRGRP`, `MAGIC`, etc.).
-*   **Difficulty: Easy**
-    *   This header defines constants for the CPIO file format. Adding it simply requires creating the header with the standard values.
+*   **Status: Implemented**
+    *   Header added with standard definitions.
 
 ## Incomplete Headers
 
