@@ -101,19 +101,24 @@ waitid(idtype_t idType, id_t id, siginfo_t* info, int options)
 
 		case P_PID:
 			// the child with the given ID
-			if (id <= 0)
-				RETURN_AND_SET_ERRNO(EINVAL);
+			if (id <= 0) {
+				__set_errno(EINVAL);
+				return -1;
+			}
 			break;
 
 		case P_PGID:
 			// any child in the given process group
-			if (id <= 1)
-				RETURN_AND_SET_ERRNO(EINVAL);
+			if (id <= 1) {
+				__set_errno(EINVAL);
+				return -1;
+			}
 			id = -id;
 			break;
 
 		default:
-			RETURN_AND_SET_ERRNO(EINVAL);
+			__set_errno(EINVAL);
+			return -1;
 	}
 
 	pid_t child = _kern_wait_for_child(id, options, info, NULL);

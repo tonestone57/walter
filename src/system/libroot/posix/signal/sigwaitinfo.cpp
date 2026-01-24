@@ -47,13 +47,16 @@ sigtimedwait(const sigset_t* set, siginfo_t* info,
 
 	status_t error = _kern_sigwait(set, info, flags, timeoutMicros);
 
-	pthread_testcancel();
+	if (error != B_OK) {
+		pthread_testcancel();
 
-	if (error != B_OK && invalidTime)
-		error = EINVAL;
+		if (invalidTime) {
+			__set_errno(EINVAL);
+			return -1;
+		}
 
-	if (error != B_OK)
 		RETURN_AND_SET_ERRNO(error);
+	}
 
 	return info->si_signo;
 }
