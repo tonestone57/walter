@@ -60,10 +60,12 @@ Based on the [os-test](https://sortix.org/os-test/include/) results, the followi
 
 ### 11. `unistd.h` (Standard Symbolic Constants and Types)
 *   **Missing:**
-    *   `dup3`, `pipe2` (Newer POSIX atomic-close-on-exec variants). **Difficulty: Medium** (Requires kernel support).
     *   `fexecve`. **Difficulty: Medium**.
     *   Various `_SC_` feature macros (e.g., `_SC_THREADS`, `_SC_SEMAPHORES`, `_SC_ASYNCHRONOUS_IO`) are currently undeclared or unimplemented in `sysconf`. **Difficulty: Easy** (if feature exists) to **Hard** (if feature is missing).
-    *   `gethostid`, `sethostid`. **Status: Implemented**.
+*   **Status: Implemented**
+    *   `gethostid`, `sethostid`.
+    *   `dup3`, `pipe2` (Newer POSIX atomic-close-on-exec variants).
+    *   `preadv`, `pwritev`.
 
 ### 12. `spawn.h` (Process Spawning)
 *   **Missing:** Support for `SPN PS` (Process Scheduling) option in `posix_spawn`.

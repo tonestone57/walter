@@ -526,9 +526,9 @@ _user_xsi_shmat(int shmid, const void *shmaddr, int shmflg)
 	area_id sourceArea = shm->AreaID();
 
 	// Determine protection
-	uint32 protection = B_READ_AREA | B_WRITE_AREA;
+	uint32 protection = B_READ_AREA | B_WRITE_AREA | B_SHARED_AREA;
 	if (shmflg & SHM_RDONLY)
-		protection = B_READ_AREA;
+		protection = B_READ_AREA | B_SHARED_AREA;
 
 	void* address = (void*)shmaddr;
 	uint32 addressSpec = B_ANY_ADDRESS;

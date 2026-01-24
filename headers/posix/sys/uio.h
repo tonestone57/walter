@@ -21,8 +21,10 @@ extern "C" {
 
 ssize_t readv(int fd, const struct iovec *vector, int count);
 ssize_t readv_pos(int fd, off_t pos, const struct iovec *vec, int count);
+ssize_t preadv(int fd, const struct iovec *vector, int count, off_t offset);
 ssize_t writev(int fd, const struct iovec *vector, int count);
 ssize_t writev_pos(int fd, off_t pos, const struct iovec *vec, int count);
+ssize_t pwritev(int fd, const struct iovec *vector, int count, off_t offset);
 
 #ifdef __cplusplus
 }
