@@ -246,10 +246,11 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	const bigtime_t kHighLoadQuantum = 1600;
-	const bigtime_t kMediumQuantum = 3200;
-	const bigtime_t kMaxQuantum = 24000;
-	const bigtime_t kDisplayQuantum = 1200;
+	const bigtime_t kHighLoadQuantum = gCurrentMode->base_quantum;
+	const bigtime_t kMediumQuantum = gCurrentMode->base_quantum
+		* gCurrentMode->quantum_multipliers[0];
+	const bigtime_t kMaxQuantum = gCurrentMode->maximum_latency;
+	const bigtime_t kDisplayQuantum = gCurrentMode->minimal_quantum;
 
 	// Define constants locally to ensure availability
 	const int32 kLocalMaxLoad = 1000;
