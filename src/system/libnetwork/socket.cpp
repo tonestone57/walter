@@ -177,7 +177,7 @@ connect(int socket, const struct sockaddr *address, socklen_t addressLength)
 		addressLength = sizeof(struct sockaddr_in);
 	}
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(
+	RETURN_AND_SET_ERRNO(
 		_kern_connect(socket, address, addressLength));
 }
 
@@ -214,8 +214,6 @@ accept4(int socket, struct sockaddr *_address, socklen_t *_addressLength, int fl
 	}
 
 	int acceptSocket = _kern_accept(socket, address, &addressLength, flags);
-
-	pthread_testcancel();
 
 	if (acceptSocket < 0) {
 		errno = acceptSocket;
