@@ -16,17 +16,17 @@ pthread_condattr_init(pthread_condattr_t *_condAttr)
 	pthread_condattr *attr;
 
 	if (_condAttr == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr = (pthread_condattr *)malloc(sizeof(pthread_condattr));
 	if (attr == NULL)
-		return B_NO_MEMORY;
+		return ENOMEM;
 
 	attr->process_shared = false;
 	attr->clock_id = CLOCK_REALTIME;
 
 	*_condAttr = attr;
-	return B_OK;
+	return 0;
 }
 
 
@@ -36,12 +36,12 @@ pthread_condattr_destroy(pthread_condattr_t *_condAttr)
 	pthread_condattr *attr;
 
 	if (_condAttr == NULL || (attr = *_condAttr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*_condAttr = NULL;
 	free(attr);
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -51,10 +51,10 @@ pthread_condattr_getpshared(const pthread_condattr_t *_condAttr, int *_processSh
 	pthread_condattr *attr;
 
 	if (_condAttr == NULL || (attr = *_condAttr) == NULL || _processShared == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*_processShared = attr->process_shared ? PTHREAD_PROCESS_SHARED : PTHREAD_PROCESS_PRIVATE;
-	return B_OK;
+	return 0;
 }
 
 
@@ -66,10 +66,10 @@ pthread_condattr_setpshared(pthread_condattr_t *_condAttr, int processShared)
 	if (_condAttr == NULL || (attr = *_condAttr) == NULL
 		|| processShared < PTHREAD_PROCESS_PRIVATE
 		|| processShared > PTHREAD_PROCESS_SHARED)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr->process_shared = processShared == PTHREAD_PROCESS_SHARED ? true : false;
-	return B_OK;
+	return 0;
 }
 
 
@@ -79,10 +79,10 @@ pthread_condattr_getclock(const pthread_condattr_t *_condAttr, clockid_t *_clock
 	pthread_condattr *attr;
 
 	if (_condAttr == NULL || (attr = *_condAttr) == NULL || _clockID == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*_clockID = attr->clock_id;
-	return B_OK;
+	return 0;
 }
 
 
@@ -93,8 +93,8 @@ pthread_condattr_setclock(pthread_condattr_t *_condAttr, clockid_t clockID)
 
 	if (_condAttr == NULL || (attr = *_condAttr) == NULL
 		|| (clockID != CLOCK_REALTIME && clockID != CLOCK_MONOTONIC))
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr->clock_id = clockID;
-	return B_OK;
+	return 0;
 }

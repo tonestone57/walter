@@ -33,7 +33,7 @@ pthread_barrier_init(pthread_barrier_t* barrier,
 		? *_attr : &pthread_barrierattr_default;
 
 	if (barrier == NULL || attr == NULL || count < 1)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	barrier->flags = attr->process_shared ? BARRIER_FLAG_SHARED : 0;
 	barrier->lock = B_USER_MUTEX_LOCKED;
@@ -41,7 +41,7 @@ pthread_barrier_init(pthread_barrier_t* barrier,
 	barrier->waiter_count = 0;
 	barrier->waiter_max = count;
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -93,7 +93,7 @@ int
 pthread_barrier_wait(pthread_barrier_t* barrier)
 {
 	if (barrier == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	if (barrier->waiter_max == 1)
 		return PTHREAD_BARRIER_SERIAL_THREAD;
@@ -136,7 +136,7 @@ int
 pthread_barrier_destroy(pthread_barrier_t* barrier)
 {
 	barrier_ensure_idle(barrier);
-	return B_OK;
+	return 0;
 }
 
 
@@ -147,12 +147,12 @@ pthread_barrierattr_init(pthread_barrierattr_t* _attr)
 		sizeof(pthread_barrierattr));
 
 	if (attr == NULL)
-		return B_NO_MEMORY;
+		return ENOMEM;
 
 	*attr = pthread_barrierattr_default;
 	*_attr = attr;
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -162,11 +162,11 @@ pthread_barrierattr_destroy(pthread_barrierattr_t* _attr)
 	pthread_barrierattr* attr = _attr != NULL ? *_attr : NULL;
 
 	if (attr == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	free(attr);
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -176,12 +176,12 @@ pthread_barrierattr_getpshared(const pthread_barrierattr_t* _attr, int* shared)
 	pthread_barrierattr* attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL || shared == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*shared = attr->process_shared
 		? PTHREAD_PROCESS_SHARED : PTHREAD_PROCESS_PRIVATE;
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -193,7 +193,7 @@ pthread_barrierattr_setpshared(pthread_barrierattr_t* _attr, int shared)
 	if (_attr == NULL || (attr = *_attr) == NULL
 		|| shared < PTHREAD_PROCESS_PRIVATE
 		|| shared > PTHREAD_PROCESS_SHARED) {
-		return B_BAD_VALUE;
+		return EINVAL;
 	}
 
 	attr->process_shared = shared == PTHREAD_PROCESS_SHARED;

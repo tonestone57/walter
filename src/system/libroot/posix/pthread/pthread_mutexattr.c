@@ -16,17 +16,17 @@ pthread_mutexattr_init(pthread_mutexattr_t *_mutexAttr)
 	pthread_mutexattr *attr;
 
 	if (_mutexAttr == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr = (pthread_mutexattr *)malloc(sizeof(pthread_mutexattr));
 	if (attr == NULL)
-		return B_NO_MEMORY;
+		return ENOMEM;
 
 	attr->type = PTHREAD_MUTEX_DEFAULT;
 	attr->process_shared = false;
 
 	*_mutexAttr = attr;
-	return B_OK;
+	return 0;
 }
 
 
@@ -36,12 +36,12 @@ pthread_mutexattr_destroy(pthread_mutexattr_t *_mutexAttr)
 	pthread_mutexattr *attr;
 
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*_mutexAttr = NULL;
 	free(attr);
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -51,10 +51,10 @@ pthread_mutexattr_gettype(const pthread_mutexattr_t *_mutexAttr, int *_type)
 	pthread_mutexattr *attr;
 
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL || _type == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*_type = attr->type;
-	return B_OK;
+	return 0;
 }
 
 
@@ -66,10 +66,10 @@ pthread_mutexattr_settype(pthread_mutexattr_t *_mutexAttr, int type)
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL
 		|| type < PTHREAD_MUTEX_DEFAULT
 		|| type > PTHREAD_MUTEX_RECURSIVE)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr->type = type;
-	return B_OK;
+	return 0;
 }
 
 
@@ -81,12 +81,12 @@ pthread_mutexattr_getpshared(const pthread_mutexattr_t *_mutexAttr,
 
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL
 		|| _processShared == NULL) {
-		return B_BAD_VALUE;
+		return EINVAL;
 	}
 
 	*_processShared = attr->process_shared ? PTHREAD_PROCESS_SHARED
 		: PTHREAD_PROCESS_PRIVATE;
-	return B_OK;
+	return 0;
 }
 
 
@@ -99,11 +99,11 @@ pthread_mutexattr_setpshared(pthread_mutexattr_t *_mutexAttr,
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL
 		|| processShared < PTHREAD_PROCESS_PRIVATE
 		|| processShared > PTHREAD_PROCESS_SHARED) {
-		return B_BAD_VALUE;
+		return EINVAL;
 	}
 
 	attr->process_shared = processShared == PTHREAD_PROCESS_SHARED;
-	return B_OK;
+	return 0;
 }
 
 
@@ -115,13 +115,13 @@ pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *_mutexAttr,
 
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL
 		|| _priorityCeiling == NULL) {
-		return B_BAD_VALUE;
+		return EINVAL;
 	}
 
 	*_priorityCeiling = 0;
 		// not implemented
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -132,10 +132,10 @@ pthread_mutexattr_setprioceiling(pthread_mutexattr_t *_mutexAttr,
 	pthread_mutexattr *attr;
 
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	// not implemented
-	return B_NOT_ALLOWED;
+	return EPERM;
 }
 
 
@@ -147,13 +147,13 @@ pthread_mutexattr_getprotocol(const pthread_mutexattr_t *_mutexAttr,
 
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL
 		|| _protocol == NULL) {
-		return B_BAD_VALUE;
+		return EINVAL;
 	}
 
 	*_protocol = 0;
 		// not implemented
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -163,8 +163,8 @@ pthread_mutexattr_setprotocol(pthread_mutexattr_t *_mutexAttr, int protocol)
 	pthread_mutexattr *attr;
 
 	if (_mutexAttr == NULL || (attr = *_mutexAttr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	// not implemented
-	return B_NOT_ALLOWED;
+	return EPERM;
 }
