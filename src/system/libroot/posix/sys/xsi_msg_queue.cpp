@@ -39,7 +39,7 @@ ssize_t
 msgrcv(int messageQueueID, void *messagePointer, size_t messageSize,
 	long messageType, int messageFlags)
 {
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_xsi_msgrcv(messageQueueID,
+	RETURN_AND_SET_ERRNO(_kern_xsi_msgrcv(messageQueueID,
 		messagePointer, messageSize, messageType, messageFlags));
 }
 
@@ -48,6 +48,6 @@ int
 msgsnd(int messageQueueID, const void *messagePointer, size_t messageSize,
 	int messageFlags)
 {
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_xsi_msgsnd(messageQueueID,
+	RETURN_AND_SET_ERRNO(_kern_xsi_msgsnd(messageQueueID,
 		messagePointer, messageSize, messageFlags));
 }
