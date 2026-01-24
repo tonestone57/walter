@@ -67,6 +67,11 @@ unlink(const char *path)
 int
 unlinkat(int fd, const char *path, int flag)
 {
+	if ((flag & ~AT_REMOVEDIR) != 0) {
+		__set_errno(EINVAL);
+		return -1;
+	}
+
 	if ((flag & AT_REMOVEDIR) != 0)
 		RETURN_AND_SET_ERRNO(_kern_remove_dir(fd, path));
 	else
@@ -84,6 +89,11 @@ link(const char *toPath, const char *linkPath)
 int
 linkat(int toFD, const char *toPath, int linkFD, const char *linkPath, int flag)
 {
+	if ((flag & ~AT_SYMLINK_FOLLOW) != 0) {
+		__set_errno(EINVAL);
+		return -1;
+	}
+
 	int status = _kern_create_link(linkFD, linkPath, toFD, toPath,
 		(flag & AT_SYMLINK_FOLLOW) != 0);
 

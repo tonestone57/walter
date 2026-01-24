@@ -60,6 +60,11 @@ utimensat(int fd, const char *path, const struct timespec times[2], int flag)
 	status_t status;
 	uint32 mask = 0;
 
+	if ((flag & ~AT_SYMLINK_NOFOLLOW) != 0) {
+		__set_errno(EINVAL);
+		return -1;
+	}
+
 	// Init the stat time fields to the current time, if at least one time is
 	// supposed to be set to it.
 	if (times == NULL || times[0].tv_nsec == UTIME_NOW
@@ -75,8 +80,10 @@ utimensat(int fd, const char *path, const struct timespec times[2], int flag)
 			mask |= B_STAT_ACCESS_TIME;
 
 			if (times[0].tv_nsec != UTIME_NOW) {
-				if (times[0].tv_nsec < 0 || times[0].tv_nsec > 999999999)
-					RETURN_AND_SET_ERRNO(EINVAL);
+				if (times[0].tv_nsec < 0 || times[0].tv_nsec > 999999999) {
+					__set_errno(EINVAL);
+					return -1;
+				}
 			}
 
 			stat.st_atim = times[0];
@@ -87,8 +94,10 @@ utimensat(int fd, const char *path, const struct timespec times[2], int flag)
 			mask |= B_STAT_MODIFICATION_TIME;
 
 			if (times[1].tv_nsec != UTIME_NOW) {
-				if (times[1].tv_nsec < 0 || times[1].tv_nsec > 999999999)
-					RETURN_AND_SET_ERRNO(EINVAL);
+				if (times[1].tv_nsec < 0 || times[1].tv_nsec > 999999999) {
+					__set_errno(EINVAL);
+					return -1;
+				}
 			}
 
 			stat.st_mtim = times[1];

@@ -48,6 +48,11 @@ fchmodat(int fd, const char* path, mode_t mode, int flag)
 	struct stat stat;
 	status_t status;
 
+	if ((flag & ~AT_SYMLINK_NOFOLLOW) != 0) {
+		__set_errno(EINVAL);
+		return -1;
+	}
+
 	stat.st_mode = mode;
 	status = _kern_write_stat(fd, path, (flag & AT_SYMLINK_NOFOLLOW) == 0, &stat,
 		sizeof(struct stat), B_STAT_MODE);
