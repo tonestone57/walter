@@ -43,6 +43,7 @@
 #include <port.h>
 #include <posix/realtime_sem.h>
 #include <posix/xsi_semaphore.h>
+#include <posix/xsi_shared_memory.h>
 #include <safemode.h>
 #include <sem.h>
 #include <syscall_process_info.h>
@@ -444,6 +445,7 @@ Team::Team(team_id id, bool kernel)
 	user_mutex_context = NULL;
 	realtime_sem_context = NULL;
 	xsi_sem_context = NULL;
+	xsi_shm_context = NULL;
 	death_entry = NULL;
 
 	dead_children.condition_variable.Init(&dead_children, "team children");
@@ -1990,6 +1992,7 @@ exec_team(const char* path, char**& _flatArgs, size_t flatArgsSize,
 	delete_team_user_data(team);
 	vm_delete_areas(team->address_space, false);
 	xsi_sem_undo(team);
+	xsi_shm_exec_team(team);
 	delete_owned_ports(team);
 	sem_delete_owned_sems(team);
 	remove_images(team);
@@ -2143,6 +2146,8 @@ fork_team(void)
 		}
 	}
 
+	xsi_shm_fork_team(parentTeam, team);
+
 	// create an address space for this team
 	status = VMAddressSpace::Create(team->id, USER_BASE, USER_SIZE, false,
 		&team->address_space);
@@ -2276,6 +2281,7 @@ err4:
 	team->address_space->RemoveAndPut();
 err3:
 	delete_realtime_sem_context(team->realtime_sem_context);
+	xsi_shm_exit_team(team);
 err2:
 	free(forkArgs);
 err1:
@@ -3332,6 +3338,7 @@ team_delete_team(Team* team, port_id debuggerPort)
 	delete_user_mutex_context(team->user_mutex_context);
 	delete_realtime_sem_context(team->realtime_sem_context);
 	xsi_sem_undo(team);
+	xsi_shm_exit_team(team);
 	remove_images(team);
 	team->address_space->RemoveAndPut();
 

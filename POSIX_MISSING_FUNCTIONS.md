@@ -15,9 +15,12 @@ Based on the [os-test](https://sortix.org/os-test/include/) results, the followi
     *   Requires implementing POSIX message queues. Haiku has native `BPort` message passing, but POSIX message queues have different semantics (priorities, notification methods, file-descriptor-like access) that would likely require a dedicated kernel implementation or a complex userland wrapper.
 
 ### 3. `sys/shm.h` (XSI Shared Memory)
-*   **Missing:** All functions (`shmat`, `shmctl`, `shmdt`, `shmget`) and types.
-*   **Difficulty: Hard**
-    *   This represents System V (XSI) Shared Memory. Haiku implements POSIX Shared Memory (`sys/mman.h`, `shm_open`), which is preferred, but legacy applications may require SysV SHM. Implementing this requires new kernel mechanisms to emulate the XSI keys and attachment model.
+*   **Status: Implemented**
+    *   Functions `shmat`, `shmctl`, `shmdt`, `shmget` are now implemented in the kernel and libroot.
+*   **Implementation Details:**
+    *   Kernel implementation in `src/system/kernel/posix/xsi_shared_memory.cpp`.
+    *   Userland wrappers in `src/system/libroot/posix/sys/xsi_shm.cpp`.
+    *   Lifecycle management (fork/exec/exit cleanup) integrated via `src/system/kernel/team.cpp` and `xsi_shm_context`.
 
 ### 4. `ndbm.h` (Database Operations)
 *   **Missing:** All functions (`dbm_clearerr`, `dbm_close`, `dbm_delete`, `dbm_error`, `dbm_fetch`, `dbm_firstkey`, `dbm_nextkey`, `dbm_open`, `dbm_store`) and types.

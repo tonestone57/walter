@@ -61,7 +61,7 @@ public:
 		memset((void *)&fSettings, 0, sizeof(struct shmid_ds));
 		fSettings.shm_ctime = (time_t)real_time_clock();
 		fSettings.shm_segsz = size;
-		fSettings.shm_cpid = getpid();
+		fSettings.shm_cpid = team_get_current_team_id();
 		fSettings.shm_lpid = 0;
 		fSettings.shm_nattch = 0;
 		fSettings.shm_atime = 0;
@@ -91,15 +91,16 @@ public:
 
 	bool HasPermission() const
 	{
+		// Write permission check
 		if ((fSettings.shm_perm.mode & S_IWOTH) != 0)
 			return true;
 
-		uid_t uid = geteuid();
+		uid_t uid = team_geteuid(team_get_current_team_id());
 		if (uid == 0 || (uid == fSettings.shm_perm.uid
 			&& (fSettings.shm_perm.mode & S_IWUSR) != 0))
 			return true;
 
-		gid_t gid = getegid();
+		gid_t gid = team_get_effective_gid(team_get_current_team_id());
 		if (gid == fSettings.shm_perm.gid
 			&& (fSettings.shm_perm.mode & S_IWGRP) != 0)
 			return true;
@@ -109,8 +110,29 @@ public:
 
 	bool HasReadPermission() const
 	{
-		// TODO: fix this to check read bits
-		return HasPermission();
+		if ((fSettings.shm_perm.mode & S_IROTH) != 0)
+			return true;
+
+		uid_t uid = team_geteuid(team_get_current_team_id());
+		if (uid == 0 || (uid == fSettings.shm_perm.uid
+			&& (fSettings.shm_perm.mode & S_IRUSR) != 0))
+			return true;
+
+		gid_t gid = team_get_effective_gid(team_get_current_team_id());
+		if (gid == fSettings.shm_perm.gid
+			&& (fSettings.shm_perm.mode & S_IRGRP) != 0)
+			return true;
+
+		return false;
+	}
+
+	bool IsOwner() const
+	{
+		uid_t uid = team_geteuid(team_get_current_team_id());
+		if (uid == 0 || uid == fSettings.shm_perm.uid
+			|| uid == fSettings.shm_perm.cuid)
+			return true;
+		return false;
 	}
 
 	int ID() const
@@ -140,8 +162,10 @@ public:
 
 	void SetPermissions(int flags)
 	{
-		fSettings.shm_perm.uid = fSettings.shm_perm.cuid = geteuid();
-		fSettings.shm_perm.gid = fSettings.shm_perm.cgid = getegid();
+		fSettings.shm_perm.uid = fSettings.shm_perm.cuid
+			= team_geteuid(team_get_current_team_id());
+		fSettings.shm_perm.gid = fSettings.shm_perm.cgid
+			= team_get_effective_gid(team_get_current_team_id());
 		fSettings.shm_perm.mode = (flags & 0x01ff);
 	}
 
@@ -232,95 +256,37 @@ static mutex sXsiSharedMemoryLock;
 static int32 sXsiSharedMemoryCount = 0;
 
 
-namespace {
+struct shm_attachment : DoublyLinkedListLinkImpl<shm_attachment> {
+	addr_t address;
+	XsiSharedMemory* shm;
+};
 
-class XsiShmTeamData : public AssociatedData {
-public:
-	XsiShmTeamData(team_id teamId)
-		:
-		fTeamID(teamId),
-		fLink(NULL)
+struct xsi_shm_context {
+	mutex lock;
+	DoublyLinkedList<shm_attachment> attachments;
+
+	xsi_shm_context()
 	{
-		mutex_init(&fLock, "xsi shm team data");
+		mutex_init(&lock, "xsi shm context");
 	}
 
-	virtual ~XsiShmTeamData();
-
-	virtual void OwnerDeleted(AssociatedDataOwner* owner);
-
-	status_t Add(addr_t address, XsiSharedMemory* shm)
+	~xsi_shm_context()
 	{
-		MutexLocker locker(fLock);
-		Attachment* attachment = new(std::nothrow) Attachment;
-		if (attachment == NULL)
-			return B_NO_MEMORY;
-		attachment->address = address;
-		attachment->shm = shm;
-		fAttachments.Add(attachment);
-		return B_OK;
+		mutex_destroy(&lock);
 	}
-
-	void Remove(addr_t address)
-	{
-		MutexLocker locker(fLock);
-		for (AttachmentList::Iterator it = fAttachments.GetIterator();
-				Attachment* attachment = it.Next();) {
-			if (attachment->address == address) {
-				fAttachments.Remove(attachment);
-				delete attachment;
-				break;
-			}
-		}
-	}
-
-	team_id TeamID() const { return fTeamID; }
-	XsiShmTeamData*& Link() { return fLink; }
-
-private:
-	struct Attachment : DoublyLinkedListLinkImpl<Attachment> {
-		addr_t address;
-		XsiSharedMemory* shm;
-	};
-
-	typedef DoublyLinkedList<Attachment> AttachmentList;
-
-	team_id fTeamID;
-	XsiShmTeamData* fLink;
-	mutex fLock;
-	AttachmentList fAttachments;
 };
 
 
-struct TeamDataHashTableDefinition {
-	typedef team_id				KeyType;
-	typedef XsiShmTeamData		ValueType;
-
-	size_t HashKey (const team_id key) const { return (size_t)key; }
-	size_t Hash(XsiShmTeamData *variable) const { return (size_t)variable->TeamID(); }
-	bool Compare(const team_id key, XsiShmTeamData *variable) const
-		{ return key == variable->TeamID(); }
-	XsiShmTeamData*& GetLink(XsiShmTeamData *variable) const
-		{ return variable->Link(); }
-};
-
-static BOpenHashTable<TeamDataHashTableDefinition> sTeamDataHashTable;
-static mutex sTeamDataLock;
+//	#pragma mark - Team Functions
 
 
 void
-_DetachXsiShm(XsiShmTeamData::Attachment* attachment)
+_DetachXsiShm(shm_attachment* attachment)
 {
 	XsiSharedMemory* shm = attachment->shm;
 	MutexLocker hashLocker(sXsiSharedMemoryLock);
-	// Check if shm still exists?
-	// It should, because we are attached.
-	// But to be safe, lookup?
-	if (sSharedMemoryHashTable.Lookup(shm->ID()) != shm) {
-		// Weird, maybe RMID happened and it was removed from ID hash?
-		// But sAreaIdHashTable should have it.
-		// If RMID happened, it's removed from ID hash but kept in AreaID hash.
-		// We hold a pointer.
-	}
+	// We don't check if shm exists in hash, we rely on the pointer being valid
+	// because we hold a reference (logically) via nattch.
 
 	MutexLocker objectLocker(shm->Lock());
 
@@ -328,7 +294,7 @@ _DetachXsiShm(XsiShmTeamData::Attachment* attachment)
 		shm->GetShmDs().shm_nattch--;
 
 	shm->GetShmDs().shm_dtime = real_time_clock();
-	// shm_lpid? Team is dead.
+	// We can't easily set lpid here as this might be called during team destruction
 
 	if (shm->IsMarkedForDeletion() && shm->GetShmDs().shm_nattch == 0) {
 		sAreaIdHashTable.Remove(shm);
@@ -343,26 +309,74 @@ _DetachXsiShm(XsiShmTeamData::Attachment* attachment)
 }
 
 
-XsiShmTeamData::~XsiShmTeamData()
+void
+xsi_shm_fork_team(Team* parent, Team* child)
 {
-	while (Attachment* attachment = fAttachments.RemoveHead()) {
-		_DetachXsiShm(attachment);
-		delete attachment;
+	if (parent->xsi_shm_context == NULL)
+		return;
+
+	xsi_shm_context* parentContext = parent->xsi_shm_context;
+	MutexLocker parentLocker(parentContext->lock);
+
+	if (parentContext->attachments.IsEmpty())
+		return;
+
+	xsi_shm_context* childContext = new(std::nothrow) xsi_shm_context;
+	if (childContext == NULL)
+		return; // ENOMEM, but we can't fail the fork easily here, just don't inherit
+
+	for (DoublyLinkedList<shm_attachment>::Iterator it = parentContext->attachments.GetIterator();
+			shm_attachment* attachment = it.Next();) {
+
+		shm_attachment* newAttachment = new(std::nothrow) shm_attachment;
+		if (newAttachment == NULL)
+			continue;
+
+		newAttachment->address = attachment->address;
+		newAttachment->shm = attachment->shm;
+
+		// Increment nattch
+		XsiSharedMemory* shm = attachment->shm;
+		MutexLocker objectLocker(shm->Lock());
+		shm->GetShmDs().shm_nattch++;
+		objectLocker.Unlock();
+
+		childContext->attachments.Add(newAttachment);
 	}
-	mutex_destroy(&fLock);
+
+	child->xsi_shm_context = childContext;
 }
 
 
 void
-XsiShmTeamData::OwnerDeleted(AssociatedDataOwner* owner)
+xsi_shm_exec_team(Team* team)
 {
-	MutexLocker locker(sTeamDataLock);
-	sTeamDataHashTable.Remove(this);
-	locker.Unlock();
-	ReleaseReference();
+	if (team->xsi_shm_context == NULL)
+		return;
+
+	xsi_shm_exit_team(team);
+	team->xsi_shm_context = NULL;
 }
 
-} // namespace
+
+void
+xsi_shm_exit_team(Team* team)
+{
+	if (team->xsi_shm_context == NULL)
+		return;
+
+	xsi_shm_context* context = team->xsi_shm_context;
+	MutexLocker locker(context->lock);
+
+	while (shm_attachment* attachment = context->attachments.RemoveHead()) {
+		_DetachXsiShm(attachment);
+		delete attachment;
+	}
+
+	locker.Unlock();
+	delete context;
+	team->xsi_shm_context = NULL;
+}
 
 
 //	#pragma mark - Kernel exported API
@@ -381,13 +395,9 @@ xsi_shm_init()
 	status =  sAreaIdHashTable.Init();
 	if (status != B_OK)
 		panic("xsi_shm_init() failed to initialize area id hash table\n");
-	status =  sTeamDataHashTable.Init();
-	if (status != B_OK)
-		panic("xsi_shm_init() failed to initialize team data hash table\n");
 
 	mutex_init(&sIpcLock, "global POSIX shared memory IPC table");
 	mutex_init(&sXsiSharedMemoryLock, "global POSIX xsi shared memory table");
-	mutex_init(&sTeamDataLock, "global POSIX xsi shared memory team data table");
 }
 
 
@@ -409,31 +419,31 @@ _user_xsi_shmget(key_t key, size_t size, int flags)
 		ipcKey = sIpcHashTable.Lookup(key);
 		if (ipcKey == NULL || ipcKey->SharedMemoryID() == -1) {
 			if (!(flags & IPC_CREAT)) {
-				return ENOENT;
+				return -ENOENT;
 			}
 			if (ipcKey == NULL) {
 				ipcKey = new(std::nothrow) Ipc(key);
 				if (ipcKey == NULL) {
-					return ENOMEM;
+					return -ENOMEM;
 				}
 				sIpcHashTable.Insert(ipcKey);
 			}
 		} else {
 			if ((flags & IPC_CREAT) && (flags & IPC_EXCL)) {
-				return EEXIST;
+				return -EEXIST;
 			}
 			int shmId = ipcKey->SharedMemoryID();
 
 			MutexLocker locker(sXsiSharedMemoryLock);
 			shm = sSharedMemoryHashTable.Lookup(shmId);
 			if (shm == NULL) {
-				return EINVAL;
+				return -EINVAL;
 			}
 			if (!shm->HasPermission()) {
-				return EACCES;
+				return -EACCES;
 			}
 			if (size > shm->GetShmDs().shm_segsz) {
-				return EINVAL;
+				return -EINVAL;
 			}
 			create = false;
 		}
@@ -441,7 +451,7 @@ _user_xsi_shmget(key_t key, size_t size, int flags)
 
 	if (create) {
 		if (atomic_get(&sXsiSharedMemoryCount) >= MAX_XSI_SHARED_MEMORY) {
-			return ENOSPC;
+			return -ENOSPC;
 		}
 
 		// Create kernel area
@@ -458,7 +468,7 @@ _user_xsi_shmget(key_t key, size_t size, int flags)
 		shm = new(std::nothrow) XsiSharedMemory(flags, size);
 		if (shm == NULL) {
 			vm_delete_area(VMAddressSpace::KernelID(), areaID, true);
-			return ENOMEM;
+			return -ENOMEM;
 		}
 		shm->SetAreaID(areaID);
 		atomic_add(&sXsiSharedMemoryCount, 1);
@@ -505,7 +515,11 @@ _user_xsi_shmat(int shmid, const void *shmaddr, int shmflg)
 	MutexLocker objectLocker(shm->Lock());
 	hashLocker.Unlock();
 
-	if (!shm->HasPermission()) {
+	bool hasPermission = (shmflg & SHM_RDONLY)
+		? shm->HasReadPermission()
+		: (shm->HasReadPermission() && shm->HasPermission());
+
+	if (!hasPermission) {
 		return (void *)EACCES;
 	}
 
@@ -526,7 +540,8 @@ _user_xsi_shmat(int shmid, const void *shmaddr, int shmflg)
 	}
 
 	area_id newArea = vm_clone_area(VMAddressSpace::CurrentID(), "xsi_shm",
-		&address, addressSpec, protection, B_CLONE_ADDRESS, sourceArea, false);
+		&address, addressSpec, protection, REGION_NO_PRIVATE_MAP, sourceArea,
+		false);
 
 	if (newArea < 0) {
 		return (void *)newArea;
@@ -534,35 +549,33 @@ _user_xsi_shmat(int shmid, const void *shmaddr, int shmflg)
 
 	// Register attachment
 	Team* team = thread_get_current_thread()->team;
-	XsiShmTeamData* teamData = NULL;
 
-	MutexLocker teamDataLocker(sTeamDataLock);
-	teamData = sTeamDataHashTable.Lookup(team->id);
-	if (teamData == NULL) {
-		teamData = new(std::nothrow) XsiShmTeamData(team->id);
-		if (teamData == NULL) {
+	// Check if context exists
+	if (team->xsi_shm_context == NULL) {
+		team->xsi_shm_context = new(std::nothrow) xsi_shm_context;
+		if (team->xsi_shm_context == NULL) {
 			vm_delete_area(VMAddressSpace::CurrentID(), newArea, true);
 			return (void*)ENOMEM;
 		}
-		if (!team->AddData(teamData)) {
-			// Team is dying
-			delete teamData;
-			vm_delete_area(VMAddressSpace::CurrentID(), newArea, true);
-			return (void*)EINVAL;
-		}
-		sTeamDataHashTable.Insert(teamData);
 	}
-	teamDataLocker.Unlock();
 
-	status_t status = teamData->Add((addr_t)address, shm);
-	if (status != B_OK) {
+	xsi_shm_context* context = team->xsi_shm_context;
+	MutexLocker contextLocker(context->lock);
+
+	shm_attachment* attachment = new(std::nothrow) shm_attachment;
+	if (attachment == NULL) {
 		vm_delete_area(VMAddressSpace::CurrentID(), newArea, true);
-		return (void*)status;
+		return (void*)ENOMEM;
 	}
+	attachment->address = (addr_t)address;
+	attachment->shm = shm;
+	context->attachments.Add(attachment);
+
+	contextLocker.Unlock();
 
 	shm->GetShmDs().shm_nattch++;
 	shm->GetShmDs().shm_atime = real_time_clock();
-	shm->GetShmDs().shm_lpid = getpid();
+	shm->GetShmDs().shm_lpid = team_get_current_team_id();
 
 	return address;
 }
@@ -576,13 +589,13 @@ _user_xsi_shmdt(const void *shmaddr)
 	// Find area at address
 	area_id area = _user_area_for((void*)shmaddr);
 	if (area < 0) {
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	area_info info;
 	status_t status = _user_get_area_info(area, &info);
 	if (status != B_OK) {
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	// Lock global hash to lookup by source area
@@ -590,19 +603,26 @@ _user_xsi_shmdt(const void *shmaddr)
 	XsiSharedMemory *shm = sAreaIdHashTable.Lookup(info.source_area);
 
 	if (shm == NULL) {
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	MutexLocker objectLocker(shm->Lock());
 
 	// Unregister attachment first
 	Team* team = thread_get_current_thread()->team;
-	MutexLocker teamDataLocker(sTeamDataLock);
-	XsiShmTeamData* teamData = sTeamDataHashTable.Lookup(team->id);
-	if (teamData) {
-		teamData->Remove((addr_t)shmaddr);
+	if (team->xsi_shm_context != NULL) {
+		xsi_shm_context* context = team->xsi_shm_context;
+		MutexLocker contextLocker(context->lock);
+
+		for (DoublyLinkedList<shm_attachment>::Iterator it = context->attachments.GetIterator();
+				shm_attachment* attachment = it.Next();) {
+			if (attachment->address == (addr_t)shmaddr) {
+				context->attachments.Remove(attachment);
+				delete attachment;
+				break;
+			}
+		}
 	}
-	teamDataLocker.Unlock();
 
 	// Detach
 	status = vm_delete_area(VMAddressSpace::CurrentID(), area, true);
@@ -611,7 +631,7 @@ _user_xsi_shmdt(const void *shmaddr)
 
 	shm->GetShmDs().shm_nattch--;
 	shm->GetShmDs().shm_dtime = real_time_clock();
-	shm->GetShmDs().shm_lpid = getpid();
+	shm->GetShmDs().shm_lpid = team_get_current_team_id();
 
 	if (shm->IsMarkedForDeletion() && shm->GetShmDs().shm_nattch == 0) {
 		sAreaIdHashTable.Remove(shm);
@@ -637,7 +657,7 @@ _user_xsi_shmctl(int shmid, int cmd, struct shmid_ds *buf)
 	MutexLocker hashLocker(sXsiSharedMemoryLock);
 	XsiSharedMemory *shm = sSharedMemoryHashTable.Lookup(shmid);
 	if (shm == NULL) {
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	MutexLocker objectLocker(shm->Lock());
@@ -650,7 +670,7 @@ _user_xsi_shmctl(int shmid, int cmd, struct shmid_ds *buf)
 	switch (cmd) {
 		case IPC_STAT: {
 			if (!shm->HasReadPermission()) {
-				return EACCES;
+				return -EACCES;
 			}
 			struct shmid_ds data = shm->GetShmDs();
 			if (user_memcpy(buf, &data, sizeof(struct shmid_ds)) != B_OK) {
@@ -660,8 +680,8 @@ _user_xsi_shmctl(int shmid, int cmd, struct shmid_ds *buf)
 		}
 
 		case IPC_SET: {
-			if (!shm->HasPermission()) {
-				return EPERM;
+			if (!shm->IsOwner()) {
+				return -EPERM;
 			}
 			struct shmid_ds data;
 			if (user_memcpy(&data, buf, sizeof(struct shmid_ds)) != B_OK) {
@@ -672,9 +692,9 @@ _user_xsi_shmctl(int shmid, int cmd, struct shmid_ds *buf)
 		}
 
 		case IPC_RMID: {
-			if (!shm->HasPermission()) {
+			if (!shm->IsOwner()) {
 				hashLocker.Unlock();
-				return EPERM;
+				return -EPERM;
 			}
 
 			// Remove from IPC hash
@@ -708,7 +728,7 @@ _user_xsi_shmctl(int shmid, int cmd, struct shmid_ds *buf)
 		}
 
 		default:
-			return EINVAL;
+			return -EINVAL;
 	}
 
 	return B_OK;

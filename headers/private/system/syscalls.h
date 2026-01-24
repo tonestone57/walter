@@ -30,6 +30,7 @@ struct fs_info;
 struct iovec;
 struct loadavg;
 struct msqid_ds;
+struct shmid_ds;
 struct net_stat;
 struct pollfd;
 struct rlimit;

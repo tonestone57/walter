@@ -13,9 +13,15 @@
 #include <kernel.h>
 
 
+struct Team;
+struct xsi_shm_context;
+
 __BEGIN_DECLS
 
 extern void xsi_shm_init();
+extern void xsi_shm_fork_team(struct Team* parent, struct Team* child);
+extern void xsi_shm_exec_team(struct Team* team);
+extern void xsi_shm_exit_team(struct Team* team);
 
 /* user calls */
 int _user_xsi_shmget(key_t key, size_t size, int shmflg);
