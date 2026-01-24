@@ -397,18 +397,31 @@ CPUEntry::_TryStealWork()
 		if (victimCoreCount == 0)
 			continue;
 
-		// Pick a random core in the victim package
-		// We only try one core per package to keep latency low.
-		int32 coreIndex = fast_get_random<uint32>() % victimCoreCount;
-		CoreEntry* victim = victimPackage->GetCore(coreIndex);
+		// Try to steal from a random busy core in the victim package
+		// We make a few attempts to find a valid, busy, and unlocked core
+		const int kMaxStealAttempts = 4;
+		int32 attempts = 0;
+		while (attempts++ < kMaxStealAttempts) {
+			int32 coreIndex = fast_get_random<uint32>() % victimCoreCount;
+			CoreEntry* victim = victimPackage->GetCore(coreIndex);
 
-		if (victim != NULL && victim->TryLockRunQueue()) {
-			int32 stolenPriority = -1;
-			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
-			victim->UnlockRunQueue();
+			// Skip invalid cores
+			if (victim == NULL)
+				continue;
 
-			if (stolen != NULL)
-				return stolen;
+			// Skip idle cores (check IdleCoreMask directly to avoid locking)
+			uint32 idleMask = victimPackage->IdleCoreMask();
+			if ((idleMask & (1U << victim->PackageIndex())) != 0)
+				continue;
+
+			if (victim->TryLockRunQueue()) {
+				int32 stolenPriority = -1;
+				ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
+				victim->UnlockRunQueue();
+
+				if (stolen != NULL)
+					return stolen;
+			}
 		}
 	}
 
