@@ -1,59 +1,88 @@
 # Bug Report
 
-## Critical / Major Bugs
+## Security Vulnerabilities
 
-### 1. Incorrect Return Values in POSIX Semaphore Implementation
+### 1. Kernel GDB Stub Buffer Overflow Risk
+*   **File:** `src/system/kernel/debug/gdb.cpp`
+*   **Bug:** `gdb_reply` uses `vsprintf` into a static 512-byte buffer `sReply` without size checking.
+*   **Details:** `vsprintf(sReply + 1, format, args);` does not enforce the 512-byte limit. If a debug message exceeds this length, it causes a kernel stack or global data corruption (depending on where `sReply` is, here it's static/global).
+*   **Impact:** Potential kernel crash or exploitation via the GDB stub interface.
+
+### 2. Network Resolver Thread-Safety Violations
+*   **File:** `src/system/libnetwork/netresolv/resolv/res_debug.c`
+*   **Bug:** Multiple functions (`sym_ntos`, `sym_ntop`, `p_option`, `p_time`, `p_secstodate`) use static buffers to return string results.
+*   **Details:** Comments like `/*%< XXX nonreentrant */` confirm this. In a multi-threaded environment, concurrent calls to these resolver functions will race and overwrite shared buffers, leading to garbled logs or logic errors.
+*   **Impact:** Data corruption in network diagnostics and logging.
+
+## Concurrency & Stability (Critical)
+
+### 3. Race Condition in Kernel Mutex Destruction
+*   **File:** `src/system/kernel/locks/lock.cpp`
+*   **Bug:** `mutex_destroy` has a race condition with `mutex_lock_with_timeout`.
+*   **Details:** Comment: `// TODO: There is still a race condition during mutex destruction`. If a thread resumes from a timeout just as the mutex is being destroyed, it may access invalid memory.
+*   **Impact:** Kernel panic or memory corruption during high-load concurrency scenarios.
+
+### 4. Missing Deadlock Detection in VFS
+*   **File:** `src/system/kernel/fs/vfs.cpp`
+*   **Bug:** No deadlock detection mechanism for VFS operations.
+*   **Details:** `// TODO: do deadlock detection!`. Complex file system operations (like renaming across directories) can lock multiple nodes. Without detection, cyclical locking dependencies will hang the affected threads indefinitely.
+*   **Impact:** System hangs requiring a reboot.
+
+## Data Integrity & Drivers
+
+### 5. GPT Partition Table Corruption Recovery Missing
+*   **File:** `src/add-ons/kernel/partitioning_systems/gpt/gpt.cpp`
+*   **Bug:** No validation or recovery for corrupt GPT headers.
+*   **Details:** `// TODO: implement, validate CRCs and restore from backup area if corrupt`. The driver does not verify checksums or attempt to restore the secondary GPT if the primary is corrupt.
+*   **Impact:** Potential data loss or unmountable drives if the primary GPT header is slightly damaged.
+
+### 6. Missing Packet Corruption Reporting in Modem Driver
+*   **File:** `src/add-ons/kernel/network/ppp/modem/ModemDevice.cpp`
+*   **Bug:** Corrupted packets are silently dropped or ignored without notifying the stack.
+*   **Details:** `// TODO: report corrupted packets to KPPPInterface`.
+*   **Impact:** poor network diagnostics and "silent" data loss.
+
+## POSIX Compliance (Critical / Major)
+
+### 7. Incorrect Return Values in POSIX Semaphore Implementation
 *   **File:** `src/system/libroot/posix/semaphore.cpp`
-*   **Bug:** `sem_trywait`, `sem_wait`, `sem_timedwait` functions incorrectly return positive POSIX error codes (e.g., `EAGAIN`, `ETIMEDOUT`) directly on failure, instead of returning -1 and setting `errno`.
-*   **Details:** The helper functions (e.g., `unnamed_sem_trywait`) return positive error codes. The macro `RETURN_AND_SET_ERRNO(err)` checks `if (err < 0)`. Since positive error codes are not `< 0`, the macro returns the error code directly as the function result.
-*   **Impact:** Applications checking for `return == -1` will fail to detect errors, potentially leading to race conditions or undefined behavior.
+*   **Bug:** `sem_trywait`, `sem_wait`, `sem_timedwait` return positive error codes directly.
+*   **Details:** `RETURN_AND_SET_ERRNO` is used incorrectly with positive error codes.
+*   **Impact:** API breakage; applications checking `return == -1` will fail.
 
-### 2. Incorrect `errno` Values in Environment Functions
+### 8. Incorrect `errno` Values in Environment Functions
 *   **File:** `src/system/libroot/posix/stdlib/env.cpp`
-*   **Bug:** `setenv`, `unsetenv`, `putenv` set `errno` to Haiku internal status codes (e.g., `B_BAD_VALUE`, `B_NO_MEMORY` which are negative) instead of POSIX error codes (e.g., `EINVAL`, `ENOMEM` which are positive).
-*   **Details:** `__set_errno(B_BAD_VALUE)` is used directly. `RETURN_AND_SET_ERRNO` is used with `B_NO_MEMORY`, which sets `errno` to the negative value.
-*   **Impact:** Applications checking `errno == EINVAL` or `errno == ENOMEM` will fail to handle errors correctly.
+*   **Bug:** `setenv`, `unsetenv` set `errno` to negative Haiku status codes.
+*   **Details:** `__set_errno(B_BAD_VALUE)` used instead of `EINVAL`.
+*   **Impact:** API breakage; standard error checks fail.
 
-### 3. Kernel Team Iteration Broken on ID Wrap
-*   **File:** `src/system/kernel/team.cpp`
-*   **Bug:** `_get_next_team_info` uses a loop from `slot` to `peek_next_thread_id()` to find teams. This logic is explicitly noted as broken in comments: `// TODO: This is broken, since the id can wrap around!`.
-*   **Details:** If team IDs wrap around (after 2^31), `peek_next_thread_id()` may return a small value, causing the loop to terminate early or miss teams with higher IDs.
-*   **Impact:** System monitoring tools (like ProcessController) may fail to list all running teams, or show incomplete lists after long system uptime.
-
-### 4. Incorrect Return Values in Pthread Barrier Implementation
+### 9. Incorrect Return Values in Pthread Barrier
 *   **File:** `src/system/libroot/posix/pthread/pthread_barrier.cpp`
-*   **Bug:** Functions like `pthread_barrier_init`, `pthread_barrier_wait` return Haiku status codes (e.g., `B_BAD_VALUE` which is negative) instead of positive POSIX error codes (`EINVAL`).
-*   **Details:** Pthread functions are specified to return the error code directly (positive). Returning negative Haiku codes is non-compliant.
-*   **Impact:** Applications checking against `EINVAL` or `> 0` for errors will misinterpret the return value.
+*   **Bug:** Returns Haiku status codes (negative) instead of POSIX error codes (positive).
+*   **Impact:** API breakage.
 
-## Moderate Bugs / Missing Features
+## Kernel Logic (Major)
 
-### 5. `posix_fallocate` Returns Raw Kernel Status
+### 10. Kernel Team Iteration Broken on ID Wrap
+*   **File:** `src/system/kernel/team.cpp`
+*   **Bug:** `_get_next_team_info` unsafe loop logic.
+*   **Details:** Iterates up to `peek_next_thread_id()`. If IDs wrap, this loop terminates early.
+*   **Impact:** Process listing tools fail on long-running systems.
+
+## Moderate / Minor Bugs
+
+### 11. `posix_fallocate` Returns Raw Kernel Status
 *   **File:** `src/system/libroot/posix/fcntl.cpp`
-*   **Bug:** `posix_fallocate` returns the raw return value of `_kern_preallocate`.
-*   **Details:** If the kernel call returns a negative status (e.g., `B_NO_MEMORY`), `posix_fallocate` returns it directly. It should map it to a positive POSIX error code (e.g., `ENOMEM`).
 *   **Impact:** Non-compliant return value.
 
-### 6. Potential Precision Loss in `log2l`
+### 12. Potential Precision Loss in `log2l`
 *   **File:** `src/system/libroot/posix/musl/math/log2l.c`
-*   **Bug:** Stubbed implementation for 128-bit `long double`.
-*   **Details:** `#elif LDBL_MANT_DIG == 113 ... // TODO: broken implementation ... return log2(x);`.
-*   **Impact:** If compiled for an architecture with 128-bit `long double`, `log2l` will have reduced precision (double), leading to calculation errors.
+*   **Impact:** Reduced precision on systems supporting 128-bit `long double`.
 
-## Minor Bugs / Optimizations
-
-### 7. Inefficient `remove` Implementation
+### 13. Inefficient `remove` Implementation
 *   **File:** `src/system/libroot/posix/stdio/remove.c`
-*   **Bug:** `remove()` attempts `unlink()` first, then checks for `B_IS_A_DIRECTORY` to try `rmdir()`.
-*   **Details:** `// TODO: find a better way that does not require two syscalls for directories`. This causes two system calls for every directory removal.
-*   **Impact:** Minor performance overhead when deleting directories.
+*   **Bug:** Two syscalls used for every removal.
 
-### 8. Unoptimized Bitmap Operations
+### 14. Unoptimized Bitmap Operations
 *   **File:** `src/system/kernel/util/Bitmap.cpp`
-*   **Bug:** `SetRange`, `ClearRange`, `GetLowestClear`, and `GetLowestContiguousClear` iterate bit-by-bit.
-*   **Details:** Multiple `// TODO: optimize` comments. These functions could perform bulk operations (word-at-a-time) for significant performance gains on large bitmaps.
-*   **Impact:** Performance degradation in kernel subsystems utilizing large bitmaps (e.g., potentially slab allocator or resource managers).
-
-## Analysis Notes
-*   **POSIX Compliance:** There is a recurring pattern of mixing Haiku `status_t` (negative) and POSIX `errno` (positive) values in `libroot/posix`. The `RETURN_AND_SET_ERRNO` macro is dangerous when used with functions that might return positive values (like helper functions using `E*` codes) or when passed raw `B_*` codes without conversion.
-*   **Kernel:** The team ID wrapping issue is a significant logic flaw for long-running systems.
+*   **Bug:** Bit-by-bit iteration instead of word-at-a-time.
