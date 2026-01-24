@@ -83,10 +83,9 @@ Based on the [os-test](https://sortix.org/os-test/include/) results, the followi
     *   `pthread_rwlock_rdlock`, `pthread_rwlock_wrlock`, `pthread_rwlock_timedrdlock`, `pthread_rwlock_timedwrlock`
 
 ### 14. `fcntl.h` (File Control)
-*   **Missing:**
-    *   `F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK` (Open File Description Locks).
-*   **Difficulty: Hard**
-    *   Requires updating `src/system/kernel/fs/vfs.cpp` (specifically `common_fcntl` and the advisory lock implementation) to support locks associated with the file description rather than the process/thread context. This involves changing the kernel's `advisory_lock` structure and logic to handle the new lock types and their ownership semantics (persisting across `fork`, not closing on `close` unless all references are gone, etc.).
+*   **Status: Implemented**
+    *   `F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK` (Open File Description Locks) are now supported.
+    *   Correct logic implemented in `src/system/kernel/fs/vfs.cpp` to handle mixed POSIX and OFD locks conflict resolution and proper cleanup on FD destruction.
 
 ## Files Needing Updates
 

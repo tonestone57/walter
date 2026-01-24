@@ -1626,9 +1626,9 @@ test_advisory_lock(struct vnode* vnode, struct file_descriptor* descriptor,
 
 		bool isOwnLock = false;
 		if ((descriptor != NULL) != lock->is_ofd) {
-			// One is OFD, the other POSIX: they only conflict if they are
-			// from different teams.
-			isOwnLock = (lock->team == team);
+			// One is OFD, the other POSIX: they always conflict, even if
+			// from the same team.
+			isOwnLock = false;
 		} else if (descriptor != NULL) {
 			// OFD locks conflict with anything that is not the same file
 			// description.
@@ -1810,9 +1810,9 @@ acquire_advisory_lock(struct vnode* vnode, io_context* context,
 
 			bool isOwnLock = false;
 			if (isOFD != lock->is_ofd) {
-				// One is OFD, the other POSIX: they only conflict if they are
-				// from different teams.
-				isOwnLock = (lock->team == team);
+				// One is OFD, the other POSIX: they always conflict, even if
+				// from the same team.
+				isOwnLock = false;
 			} else if (isOFD) {
 				// OFD locks conflict with anything that is not the same file
 				// description.
@@ -5736,6 +5736,9 @@ file_free_fd(struct file_descriptor* descriptor)
 	struct vnode* vnode = descriptor->u.vnode;
 
 	if (vnode != NULL) {
+		// Release OFD locks
+		release_advisory_lock(vnode, NULL, descriptor, NULL);
+
 		FS_CALL(vnode, free_cookie, descriptor->cookie);
 		put_vnode(vnode);
 	}

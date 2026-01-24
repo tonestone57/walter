@@ -2945,7 +2945,7 @@ vm_clone_address_space(team_id sourceTeam, team_id targetTeam,
 
 		nextAddress = source->Base() + source->Size();
 
-		if (source->id == areaToSkip || source->cache_type == CACHE_TYPE_NULL)
+		if (source->id == areaToSkip)
 			continue;
 
 		// Try to handle simple case
