@@ -36,7 +36,7 @@ __pselect_beos(int numBits, struct fd_set *readBits, struct fd_set *writeBits,
 	sigset_t signalMask;
 	bigtime_t timeout = -1LL;
 	if (tv != NULL && !timespec_to_bigtime(*tv, timeout))
-		RETURN_AND_SET_ERRNO_TEST_CANCEL(EINVAL);
+		RETURN_AND_SET_ERRNO(EINVAL);
 
 	if (beosSignalMask != NULL)
 		signalMask = from_beos_sigset(*beosSignalMask);
@@ -44,7 +44,7 @@ __pselect_beos(int numBits, struct fd_set *readBits, struct fd_set *writeBits,
 	status = _kern_select(numBits, readBits, writeBits, errorBits, timeout,
 		beosSignalMask != NULL ? &signalMask : NULL);
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(status);
+	RETURN_AND_SET_ERRNO(status);
 }
 
 
@@ -56,12 +56,12 @@ __pselect(int numBits, struct fd_set *readBits, struct fd_set *writeBits,
 	int status;
 	bigtime_t timeout = -1LL;
 	if (tv != NULL && !timespec_to_bigtime(*tv, timeout))
-		RETURN_AND_SET_ERRNO_TEST_CANCEL(EINVAL);
+		RETURN_AND_SET_ERRNO(EINVAL);
 
 	status = _kern_select(numBits, readBits, writeBits, errorBits, timeout,
 		sigMask);
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(status);
+	RETURN_AND_SET_ERRNO(status);
 }
 
 
@@ -72,12 +72,12 @@ select(int numBits, struct fd_set *readBits, struct fd_set *writeBits,
 	int status;
 	bigtime_t timeout = -1LL;
 	if (tv != NULL && !timeval_to_bigtime(*tv, timeout))
-		RETURN_AND_SET_ERRNO_TEST_CANCEL(EINVAL);
+		RETURN_AND_SET_ERRNO(EINVAL);
 
 	status = _kern_select(numBits, readBits, writeBits, errorBits, timeout,
 		NULL);
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(status);
+	RETURN_AND_SET_ERRNO(status);
 }
 
 

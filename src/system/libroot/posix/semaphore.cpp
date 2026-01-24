@@ -269,7 +269,7 @@ sem_wait(sem_t* semaphore)
 	else
 		error = unnamed_sem_timedwait(semaphore, CLOCK_REALTIME, NULL);
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(error);
+	RETURN_AND_SET_ERRNO(error);
 }
 
 
@@ -282,7 +282,7 @@ sem_clockwait(sem_t* semaphore, clockid_t clock_id, const struct timespec* absti
 	else
 		error = unnamed_sem_timedwait(semaphore, clock_id, abstime);
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(error);
+	RETURN_AND_SET_ERRNO(error);
 }
 
 

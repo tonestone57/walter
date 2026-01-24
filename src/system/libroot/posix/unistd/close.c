@@ -18,5 +18,5 @@
 int
 close(int fd)
 {
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_close(fd));
+	RETURN_AND_SET_ERRNO(_kern_close(fd));
 }

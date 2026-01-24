@@ -27,7 +27,7 @@ system(const char *command)
 
 	thread_id thread = load_image(argc, argv, (const char **)environ);
 	if (thread < 0)
-		RETURN_AND_SET_ERRNO_TEST_CANCEL(thread);
+		RETURN_AND_SET_ERRNO(thread);
 
 	// block SIGCHLD ...
 	sigset_t mask, oldMask;

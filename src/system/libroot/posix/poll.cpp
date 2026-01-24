@@ -22,7 +22,7 @@ extern "C" int __ppoll(struct pollfd *fds, nfds_t numfds, const struct timespec 
 int
 poll(struct pollfd *fds, nfds_t numfds, int timeout)
 {
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_poll(fds, numfds, timeout * 1000LL,
+	RETURN_AND_SET_ERRNO(_kern_poll(fds, numfds, timeout * 1000LL,
 		NULL));
 }
 
@@ -34,11 +34,11 @@ __ppoll(struct pollfd *fds, nfds_t numfds, const struct timespec *tv,
 	int status;
 	bigtime_t timeout = -1LL;
 	if (tv != NULL && !timespec_to_bigtime(*tv, timeout))
-		RETURN_AND_SET_ERRNO_TEST_CANCEL(EINVAL);
+		RETURN_AND_SET_ERRNO(EINVAL);
 
 	status = _kern_poll(fds, numfds, timeout, sigMask);
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(status);
+	RETURN_AND_SET_ERRNO(status);
 }
 
 
