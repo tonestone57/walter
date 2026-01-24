@@ -486,11 +486,11 @@ rebalance_irqs(bool idle)
 scheduler_mode_operations gSchedulerLowLatencyMode = {
 	"low latency",
 
-	1000,
-	100,
+	1600,
+	1200,
 	{ 2, 5 },
 
-	5000,
+	3200,
 
 	switch_to_mode,
 	set_cpu_enabled,
