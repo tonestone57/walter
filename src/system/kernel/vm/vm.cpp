@@ -3059,6 +3059,135 @@ vm_copy_area(team_id team, const char* name, void** _address,
 
 
 status_t
+vm_clone_address_space(team_id sourceTeam, team_id targetTeam,
+	area_id ignoredAreaID, area_id* _stackAreaID)
+{
+	// Pre-pass: Count and reserve wired pages to avoid deadlocks/restarts
+	page_num_t totalWiredPages = 0;
+	{
+		AddressSpaceReadLocker locker;
+		status_t status = locker.SetTo(sourceTeam);
+		if (status != B_OK)
+			return status;
+
+		VMAddressSpace* sourceAddressSpace = locker.AddressSpace();
+		VMAddressSpace::AreaIterator iterator = sourceAddressSpace->GetAreaIterator();
+		while (VMArea* source = iterator.Next()) {
+			if (source->id == ignoredAreaID)
+				continue;
+			if ((source->protection & (B_KERNEL_AREA | B_SHARED_AREA)) != 0)
+				continue;
+			if ((source->protection & (B_WRITE_AREA | B_KERNEL_WRITE_AREA)) == 0)
+				continue;
+
+			VMCache* cache = vm_area_get_locked_cache(source);
+			totalWiredPages += cache->WiredPagesCount();
+			vm_area_put_locked_cache(cache);
+		}
+	}
+
+	vm_page_reservation wiredPagesReservation;
+	if (totalWiredPages > 0)
+		vm_page_reserve_pages(&wiredPagesReservation, totalWiredPages, VM_PRIORITY_USER);
+
+	CObjectDeleter<vm_page_reservation, void, vm_page_unreserve_pages>
+		pagesUnreserver(totalWiredPages > 0 ? &wiredPagesReservation : NULL);
+
+	// Lock both address spaces
+	MultiAddressSpaceLocker locker;
+	VMAddressSpace* sourceAddressSpace;
+	VMAddressSpace* targetAddressSpace;
+	status_t status;
+
+	locker.AddTeam(sourceTeam, true, &sourceAddressSpace);
+	locker.AddTeam(targetTeam, true, &targetAddressSpace);
+	status = locker.Lock();
+	if (status != B_OK)
+		return status;
+
+	// iterate over all areas
+	VMAddressSpace::AreaIterator iterator = sourceAddressSpace->GetAreaIterator();
+	while (VMArea* source = iterator.Next()) {
+		if (source->id == ignoredAreaID)
+			continue;
+
+		// check whether the area is cloneable
+		if ((source->protection & B_KERNEL_AREA) != 0)
+			continue;
+
+		// mark source as shared
+		source->protection |= B_SHARED_AREA;
+
+		VMCache* cache = vm_area_get_locked_cache(source);
+		AreaCacheLocker cacheLocker(cache, true);
+
+		bool sharedArea = (source->protection & B_SHARED_AREA) != 0;
+		bool writableCopy = (source->protection & (B_WRITE_AREA | B_KERNEL_WRITE_AREA)) != 0;
+
+		void* address = (void*)source->Base();
+		uint32 addressSpec = B_EXACT_ADDRESS;
+
+		uint8* targetPageProtections = NULL;
+		if (source->page_protections != NULL) {
+			const size_t bytes = area_page_protections_size(source->Size());
+			targetPageProtections = (uint8*)malloc_etc(bytes, HEAP_DONT_LOCK_KERNEL_SPACE);
+			if (targetPageProtections == NULL)
+				return B_NO_MEMORY;
+
+			memcpy(targetPageProtections, source->page_protections, bytes);
+		}
+
+		VMArea* target;
+		virtual_address_restrictions addressRestrictions = {};
+		addressRestrictions.address = address;
+		addressRestrictions.address_specification = addressSpec;
+
+		status = map_backing_store(targetAddressSpace, cache, source->cache_offset,
+			source->name, source->Size(), source->wiring, source->protection,
+			source->protection_max,
+			sharedArea ? REGION_NO_PRIVATE_MAP : REGION_PRIVATE_MAP,
+			writableCopy ? 0 : CREATE_AREA_DONT_COMMIT_MEMORY,
+			&addressRestrictions, true, &target, &address);
+
+		if (status < B_OK) {
+			free_etc(targetPageProtections, HEAP_DONT_LOCK_KERNEL_SPACE);
+			return status;
+		}
+
+		if (targetPageProtections != NULL) {
+			target->page_protections = targetPageProtections;
+			if (!sharedArea) {
+				AreaCacheLocker targetLocker(target);
+				const size_t newPageCommitment = compute_area_page_commitment(target);
+				target->cache->Commit(newPageCommitment * B_PAGE_SIZE, VM_PRIORITY_USER);
+			}
+		}
+
+		if (sharedArea)
+			cache->AcquireRefLocked();
+
+		if (!sharedArea && writableCopy) {
+			status = vm_copy_on_write_area(cache,
+				totalWiredPages > 0 ? &wiredPagesReservation : NULL);
+			if (status != B_OK) {
+				cacheLocker.Unlock();
+				delete_area(targetAddressSpace, target, false);
+				return status;
+			}
+		}
+
+		// Copy cache type
+		target->cache_type = source->cache_type;
+
+		if (_stackAreaID != NULL && source->id == *_stackAreaID)
+			*_stackAreaID = target->id;
+	}
+
+	return B_OK;
+}
+
+
+status_t
 vm_set_area_protection(team_id team, area_id areaID, uint32 newProtection,
 	bool kernel)
 {
