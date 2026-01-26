@@ -7,6 +7,8 @@
 
 #include <algorithm>
 
+#include <util/atomic.h>
+
 
 using namespace Scheduler;
 
@@ -414,7 +416,7 @@ ThreadData::_ComputeEffectivePriority() const
 			int32(B_FIRST_REAL_TIME_PRIORITY - 1));
 	}
 
-	fBaseQuantum = sQuantumLengths[GetEffectivePriority()];
+	fBaseQuantum = atomic_get64(&sQuantumLengths[GetEffectivePriority()]);
 }
 
 
