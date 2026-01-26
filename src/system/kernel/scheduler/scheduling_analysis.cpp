@@ -841,6 +841,12 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 	if (error != B_OK)
 		return error;
 
+	error = user_memset(buffer, 0, size);
+	if (error != B_OK) {
+		unlock_memory(buffer, size, B_READ_DEVICE);
+		return error;
+	}
+
 	SchedulingAnalysisManager manager(buffer, size);
 
 	InterruptsLocker locker;
