@@ -103,6 +103,8 @@ private:
 											ThreadData* threadData);
 						ThreadData*		_TryStealWork();
 
+						uint32			GetRandom();
+
 	static				int32			_RescheduleEvent(timer* /* unused */);
 	static				int32			_UpdateLoadEvent(timer* /* unused */);
 
@@ -120,6 +122,7 @@ private:
 						bigtime_t		fMeasureTime;
 
 						bool			fUpdateLoadEvent;
+						uint32			fRandomState;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;

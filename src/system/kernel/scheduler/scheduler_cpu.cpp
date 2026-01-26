@@ -80,7 +80,8 @@ CPUEntry::CPUEntry()
 	fLoad(0),
 	fMeasureActiveTime(0),
 	fMeasureTime(0),
-	fUpdateLoadEvent(false)
+	fUpdateLoadEvent(false),
+	fRandomState(0x12345678)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -92,6 +93,9 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 {
 	fCPUNumber = id;
 	fCore = core;
+	fRandomState = (uint32)system_time() + id * 31337 + 1;
+	if (fRandomState == 0)
+		fRandomState = 0x12345678;
 }
 
 
@@ -331,6 +335,18 @@ CPUEntry::TrackActivity(ThreadData* oldThreadData, ThreadData* nextThreadData)
 }
 
 
+uint32
+CPUEntry::GetRandom()
+{
+	uint32 x = fRandomState;
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+	fRandomState = x;
+	return x;
+}
+
+
 ThreadData*
 CPUEntry::_TryStealWork()
 {
@@ -345,7 +361,7 @@ CPUEntry::_TryStealWork()
 
 	// Pick a random starting point to avoid convoys
 	// We modulo by registeredCores to avoid wasting iterations on unassigned array slots.
-	int32 startIndex = fast_get_random<uint32>() % registeredCores;
+	int32 startIndex = GetRandom() % registeredCores;
 
 	for (int32 i = 0; i < registeredCores; i++) {
 		int32 index = (startIndex + i) % registeredCores;
@@ -393,7 +409,7 @@ CPUEntry::_TryStealWork()
 
 	for (int i = 0; i < kMaxPackageStealAttempts; i++) {
 		// Pick a random package index within this node
-		int32 bit = fast_get_random<uint32>() % packagesInNode;
+		int32 bit = GetRandom() % packagesInNode;
 
 		// Check if the random package is busy (bit is set in mask)
 		// Note: busyPackageMask is ~IdlePackageMask. If a package is idle, bit is 0.
@@ -418,7 +434,7 @@ CPUEntry::_TryStealWork()
 		const int kMaxStealAttempts = 4;
 		int32 attempts = 0;
 		while (attempts++ < kMaxStealAttempts) {
-			int32 coreIndex = fast_get_random<uint32>() % victimCoreCount;
+			int32 coreIndex = GetRandom() % victimCoreCount;
 			CoreEntry* victim = victimPackage->GetCore(coreIndex);
 
 			// Skip invalid cores
