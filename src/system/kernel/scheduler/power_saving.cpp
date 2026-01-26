@@ -260,8 +260,22 @@ search_local_node(SchedulerNode* node, Action action)
 	if (node == NULL)
 		return;
 
-	// SchedulerNode represents a 64-package block in the dense gPackageEntries array.
+	// Invert IdlePackageMask to find valid packages (assuming all valid packages are tracked there)
+	// Actually, IdlePackageMask only tracks idle ones. We need a way to find all packages in a node.
+	// Unfortunately, the current data structures don't strictly list "all packages in node".
+	// However, gPackageEntries is initialized such that packages are contiguous per node?
+	// The init() function loops i from 0 to packageCount, and assigns nodeIndex = i / 64.
+	// This confirms that gPackageEntries IS dense and chunked by node!
+	// Node 0 -> Packages 0-63
+	// Node 1 -> Packages 64-127
+	// So the original math was actually correct given the initialization logic in scheduler.cpp.
+
 	int32 nodeBaseIndex = node->NodeIndex() * 64;
+
+	// Ensure we don't go out of bounds of gPackageEntries
+	if (nodeBaseIndex >= gPackageCount)
+		return;
+
 	int32 packagesInNode = min_c(64, gPackageCount - nodeBaseIndex);
 	if (packagesInNode <= 0)
 		return;

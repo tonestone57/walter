@@ -94,6 +94,62 @@ check_masked_packages(const CPUSet& mask, CoreEntry*& bestCore, int32& bestLoad)
 }
 
 
+template <typename Action>
+static void
+search_local_node(SchedulerNode* node, Action action)
+{
+	if (node == NULL)
+		return;
+
+	int32 nodeBaseIndex = node->NodeIndex() * 64;
+
+	if (nodeBaseIndex >= gPackageCount)
+		return;
+
+	int32 packagesInNode = min_c(64, gPackageCount - nodeBaseIndex);
+	if (packagesInNode <= 0)
+		return;
+
+	const int kMaxLocalAttempts = 4;
+	for (int i = 0; i < kMaxLocalAttempts; i++) {
+		int32 index = nodeBaseIndex
+			+ (fast_get_random<uint32>() % packagesInNode);
+		action(&gPackageEntries[index]);
+	}
+}
+
+
+template <typename Action>
+static void
+search_global_random(Action action)
+{
+	const int32 kMaxRandomSamples = 256;
+	int32 visited[kMaxRandomSamples];
+	int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
+	int32 samplesTaken = 0;
+	int32 attempts = 0;
+	const int32 kMaxAttempts = samplesToTake * 2;
+
+	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
+		int32 i = fast_get_random<uint32>() % gPackageCount;
+
+		// Avoid checking the same package twice
+		bool collision = false;
+		for (int32 j = 0; j < samplesTaken; j++) {
+			if (visited[j] == i) {
+				collision = true;
+				break;
+			}
+		}
+		if (collision)
+			continue;
+		visited[samplesTaken++] = i;
+
+		action(&gPackageEntries[i]);
+	}
+}
+
+
 static CoreEntry*
 choose_core(const ThreadData* threadData)
 {
@@ -235,31 +291,22 @@ choose_core(const ThreadData* threadData)
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 		if (tryRandom && !useMask) {
-			// Dynamic sampling: use gRandomSamples instead of kRandomSamples
-			const int32 kMaxRandomSamples = 256;
-			int32 visited[kMaxRandomSamples];
-			int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
-			int32 samplesTaken = 0;
-			int32 attempts = 0;
-			const int32 kMaxAttempts = samplesToTake * 2;
+			// Phase 2: Local Node
+			SchedulerNode* node = NULL;
+			if (previousCore != NULL)
+				node = previousCore->Package()->Node();
+			else if (homePackageID >= 0 && homePackageID < gPackageCount)
+				node = gPackageEntries[homePackageID].Node();
 
-			while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-				int32 i = fast_get_random<uint32>() % gPackageCount;
+			search_local_node(node, [&](PackageEntry* entry) {
+				check_package(entry, NULL, bestCore, bestLoad);
+			});
 
-				// Avoid checking the same package twice
-				bool collision = false;
-				for (int32 j = 0; j < samplesTaken; j++) {
-					if (visited[j] == i) {
-						collision = true;
-						break;
-					}
-				}
-				if (collision)
-					continue;
-				visited[samplesTaken++] = i;
+			// Phase 3: Global Random
+			search_global_random([&](PackageEntry* entry) {
+				check_package(entry, NULL, bestCore, bestLoad);
+			});
 
-				check_package(&gPackageEntries[i], NULL, bestCore, bestLoad);
-			}
 		} else if (useMask) {
 			check_masked_packages(mask, bestCore, bestLoad);
 		}
@@ -316,31 +363,17 @@ rebalance(const ThreadData* threadData)
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 	if (tryRandom && !useMask) {
-		// Dynamic sampling: use gRandomSamples instead of kRandomSamples
-		const int32 kMaxRandomSamples = 256;
-		int32 visited[kMaxRandomSamples];
-		int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
-		int32 samplesTaken = 0;
-		int32 attempts = 0;
-		const int32 kMaxAttempts = samplesToTake * 2;
+		// Phase 2: Local Node
+		SchedulerNode* node = core->Package()->Node();
+		search_local_node(node, [&](PackageEntry* entry) {
+			check_package(entry, NULL, other, bestLoad);
+		});
 
-		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-			int32 i = fast_get_random<uint32>() % gPackageCount;
+		// Phase 3: Global Random
+		search_global_random([&](PackageEntry* entry) {
+			check_package(entry, NULL, other, bestLoad);
+		});
 
-			// Avoid checking the same package twice
-			bool collision = false;
-			for (int32 j = 0; j < samplesTaken; j++) {
-				if (visited[j] == i) {
-					collision = true;
-					break;
-				}
-			}
-			if (collision)
-				continue;
-			visited[samplesTaken++] = i;
-
-			check_package(&gPackageEntries[i], NULL, other, bestLoad);
-		}
 	} else if (useMask) {
 		check_masked_packages(mask, other, bestLoad);
 	}
@@ -435,31 +468,19 @@ rebalance_irqs(bool idle)
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 	if (tryRandom) {
-		// Dynamic sampling: use gRandomSamples instead of kRandomSamples
-		const int32 kMaxRandomSamples = 256;
-		int32 visited[kMaxRandomSamples];
-		int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
-		int32 samplesTaken = 0;
-		int32 attempts = 0;
-		const int32 kMaxAttempts = samplesToTake * 2;
-
-		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-			int32 i = fast_get_random<uint32>() % gPackageCount;
-
-			// Avoid checking the same package twice
-			bool collision = false;
-			for (int32 j = 0; j < samplesTaken; j++) {
-				if (visited[j] == i) {
-					collision = true;
-					break;
-				}
-			}
-			if (collision)
-				continue;
-			visited[samplesTaken++] = i;
-
-			check_package(&gPackageEntries[i], NULL, other, bestLoad);
+		// Phase 2: Local Node
+		CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
+		if (currentCore != NULL) {
+			SchedulerNode* node = currentCore->Package()->Node();
+			search_local_node(node, [&](PackageEntry* entry) {
+				check_package(entry, NULL, other, bestLoad);
+			});
 		}
+
+		// Phase 3: Global Random
+		search_global_random([&](PackageEntry* entry) {
+			check_package(entry, NULL, other, bestLoad);
+		});
 	}
 
 	// Use empty mask (NULL), as we don't care about affinity here
