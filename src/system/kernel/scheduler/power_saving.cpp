@@ -6,6 +6,7 @@
 
 #include <util/atomic.h>
 #include <util/AutoLock.h>
+#include <util/Random.h>
 
 #include "scheduler_common.h"
 #include "scheduler_cpu.h"
@@ -165,62 +166,6 @@ check_masked_packages_min_load(const CPUSet& mask, CoreEntry*& bestCore, int32& 
 }
 
 
-static CoreEntry*
-choose_core(const ThreadData* threadData)
-{
-	SCHEDULER_ENTER_FUNCTION();
-
-	CoreEntry* core = NULL;
-
-	CPUSet mask = threadData->GetCPUMask();
-	bool useMask = !mask.IsEmpty();
-
-	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
-	if (useMask) {
-		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
-		bool allEnabled = true;
-		for (int32 i = 0; i < kCPUSetArraySize; i++) {
-			if (mask.Bits(i) != gCPUEnabled.Bits(i)) {
-				allEnabled = false;
-				break;
-			}
-		}
-		if (allEnabled)
-			useMask = false;
-	}
-
-	// try to pack all threads on one core
-	core = choose_small_task_core();
-	if (core != NULL && (useMask && !core->CPUMask().Matches(mask)))
-		core = NULL;
-
-	if (core == NULL || core->GetLoad() + threadData->GetLoad() >= kHighLoad) {
-		// run immediately on already woken core
-		CoreEntry* bestCore = NULL;
-		int32 bestLoad = -1;
-
-		if (useMask) {
-			check_masked_packages_min_load(mask, bestCore, bestLoad);
-		} else {
-			for (int32 i = 0; i < gPackageCount; i++) {
-				check_package_min_load(&gPackageEntries[i], NULL, bestCore, bestLoad);
-			}
-		}
-
-		core = bestCore;
-
-		if (core == NULL) {
-			core = choose_idle_core();
-			if (useMask && !core->CPUMask().Matches(mask))
-				core = NULL;
-		}
-	}
-
-	ASSERT(core != NULL);
-	return core;
-}
-
-
 static void
 check_package_packing(PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& other, int32& bestLoad, bool& foundNonOverloaded)
@@ -308,6 +253,149 @@ check_masked_packages_packing(const CPUSet& mask, CoreEntry*& other,
 }
 
 
+template <typename Action>
+static void
+search_local_node(SchedulerNode* node, Action action)
+{
+	if (node == NULL)
+		return;
+
+	// SchedulerNode represents a 64-package block in the dense gPackageEntries array.
+	int32 nodeBaseIndex = node->NodeIndex() * 64;
+	int32 packagesInNode = min_c(64, gPackageCount - nodeBaseIndex);
+	if (packagesInNode <= 0)
+		return;
+
+	const int kMaxLocalAttempts = 4;
+	for (int i = 0; i < kMaxLocalAttempts; i++) {
+		int32 index = nodeBaseIndex
+			+ (fast_get_random<uint32>() % packagesInNode);
+		action(&gPackageEntries[index]);
+	}
+}
+
+
+template <typename Action>
+static void
+search_global_random(Action action)
+{
+	const int32 kMaxRandomSamples = 256;
+	int32 visited[kMaxRandomSamples];
+	int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
+	int32 samplesTaken = 0;
+	int32 attempts = 0;
+	const int32 kMaxAttempts = samplesToTake * 2;
+
+	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
+		int32 i = fast_get_random<uint32>() % gPackageCount;
+
+		// Avoid checking the same package twice
+		bool collision = false;
+		for (int32 j = 0; j < samplesTaken; j++) {
+			if (visited[j] == i) {
+				collision = true;
+				break;
+			}
+		}
+		if (collision)
+			continue;
+		visited[samplesTaken++] = i;
+
+		action(&gPackageEntries[i]);
+	}
+}
+
+
+static CoreEntry*
+choose_core(const ThreadData* threadData)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	CoreEntry* core = NULL;
+
+	CPUSet mask = threadData->GetCPUMask();
+	bool useMask = !mask.IsEmpty();
+
+	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
+	if (useMask) {
+		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+		bool allEnabled = true;
+		for (int32 i = 0; i < kCPUSetArraySize; i++) {
+			if (mask.Bits(i) != gCPUEnabled.Bits(i)) {
+				allEnabled = false;
+				break;
+			}
+		}
+		if (allEnabled)
+			useMask = false;
+	}
+
+	// try to pack all threads on one core
+	core = choose_small_task_core();
+	if (core != NULL && (useMask && !core->CPUMask().Matches(mask)))
+		core = NULL;
+
+	if (core == NULL || core->GetLoad() + threadData->GetLoad() >= kHighLoad) {
+		// run immediately on already woken core
+		CoreEntry* bestCore = NULL;
+		int32 bestLoad = -1;
+
+		bool tryRandom = gPackageCount > kRandomSearchThreshold;
+
+		if (tryRandom && !useMask) {
+			CoreEntry* previousCore = threadData->PreviousCore();
+
+			// Phase 1: L3 Domain (Sibling in previous package)
+			if (previousCore != NULL && !has_cache_expired(threadData)) {
+				PackageEntry* package = previousCore->Package();
+				if (package != NULL) {
+					check_package_min_load(package, NULL, bestCore, bestLoad);
+				}
+			}
+
+			// Phase 2: Local Node
+			SchedulerNode* node = NULL;
+			if (previousCore != NULL)
+				node = previousCore->Package()->Node();
+			else if (threadData->HomePackage() >= 0
+				&& threadData->HomePackage() < gPackageCount) {
+				node = gPackageEntries[threadData->HomePackage()].Node();
+			}
+
+			search_local_node(node, [&](PackageEntry* entry) {
+				check_package_min_load(entry, NULL, bestCore, bestLoad);
+			});
+
+			// Phase 3: Global Random
+			search_global_random([&](PackageEntry* entry) {
+				check_package_min_load(entry, NULL, bestCore, bestLoad);
+			});
+
+		} else if (useMask) {
+			check_masked_packages_min_load(mask, bestCore, bestLoad);
+		}
+
+		// Fallback to full scan
+		if (bestCore == NULL && !useMask) {
+			for (int32 i = 0; i < gPackageCount; i++) {
+				check_package_min_load(&gPackageEntries[i], NULL, bestCore, bestLoad);
+			}
+		}
+
+		core = bestCore;
+
+		if (core == NULL) {
+			core = choose_idle_core();
+			if (useMask && !core->CPUMask().Matches(mask))
+				core = NULL;
+		}
+	}
+
+	ASSERT(core != NULL);
+	return core;
+}
+
+
 static CoreEntry*
 rebalance(const ThreadData* threadData)
 {
@@ -345,9 +433,28 @@ rebalance(const ThreadData* threadData)
 		int32 bestLoad = -1;
 		bool foundNonOverloaded = false;
 
-		if (useMask) {
+		// Use random sampling if possible
+		bool tryRandom = gPackageCount > kRandomSearchThreshold;
+
+		if (tryRandom && !useMask) {
+			// Phase 2: Local Node
+			SchedulerNode* node = core->Package()->Node();
+			search_local_node(node, [&](PackageEntry* entry) {
+				check_package_packing(entry, NULL, other, bestLoad,
+					foundNonOverloaded);
+			});
+
+			// Phase 3: Global Random
+			search_global_random([&](PackageEntry* entry) {
+				check_package_packing(entry, NULL, other, bestLoad,
+					foundNonOverloaded);
+			});
+
+		} else if (useMask) {
 			check_masked_packages_packing(mask, other, bestLoad, foundNonOverloaded);
-		} else {
+		}
+
+		if (other == NULL && !useMask) {
 			for (int32 i = 0; i < gPackageCount; i++) {
 				check_package_packing(&gPackageEntries[i], NULL, other, bestLoad, foundNonOverloaded);
 			}
@@ -438,30 +545,20 @@ rebalance_irqs(bool idle)
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 	if (tryRandom) {
-		const int32 kMaxRandomSamples = 256;
-		int32 visited[kMaxRandomSamples];
-		int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
-		int32 samplesTaken = 0;
-		int32 attempts = 0;
-		const int32 kMaxAttempts = samplesToTake * 2;
-
-		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-			int32 i = fast_get_random<uint32>() % gPackageCount;
-
-			// Avoid checking the same package twice
-			bool collision = false;
-			for (int32 j = 0; j < samplesTaken; j++) {
-				if (visited[j] == i) {
-					collision = true;
-					break;
-				}
-			}
-			if (collision)
-				continue;
-			visited[samplesTaken++] = i;
-
-			check_package_min_load(&gPackageEntries[i], NULL, other, bestLoad);
+		// Phase 2: Local Node
+		CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
+		if (currentCore != NULL) {
+			SchedulerNode* node = currentCore->Package()->Node();
+			search_local_node(node, [&](PackageEntry* entry) {
+				check_package_min_load(entry, NULL, other, bestLoad);
+			});
 		}
+
+		// Phase 3: Global Random
+		search_global_random([&](PackageEntry* entry) {
+			check_package_min_load(entry, NULL, other, bestLoad);
+		});
+
 	} else {
 		for (int32 i = 0; i < gPackageCount; i++) {
 			check_package_min_load(&gPackageEntries[i], NULL, other, bestLoad);
