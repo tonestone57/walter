@@ -379,14 +379,30 @@ CPUEntry::_TryStealWork()
 	// Limit our search to valid packages within this node
 	// (Node 0 covers packages 0-63, Node 1 covers 64-127, etc.)
 	int32 nodeBaseIndex = node->NodeIndex() * 64;
+	int32 packagesInNode = min_c(64, gPackageCount - nodeBaseIndex);
 
-	while (busyPackageMask != 0) {
-		int32 bit = __builtin_ctzll(busyPackageMask);
-		busyPackageMask &= ~(1ULL << bit);
+	if (packagesInNode <= 0)
+		return NULL;
+
+	// Use random sampling to find a victim package instead of iterating the mask.
+	// This ensures O(1) complexity for work stealing regardless of cluster size.
+	// We scale the number of attempts slightly to improve hit rate on larger clusters,
+	// using a logarithmic scale: attempts = 4 + log2(packagesInNode).
+	// For 64 packages, attempts = 10. For 1 package, attempts = 4.
+	const int kMaxPackageStealAttempts = 4 + (31 - __builtin_clz(packagesInNode));
+
+	for (int i = 0; i < kMaxPackageStealAttempts; i++) {
+		// Pick a random package index within this node
+		int32 bit = fast_get_random<uint32>() % packagesInNode;
+
+		// Check if the random package is busy (bit is set in mask)
+		// Note: busyPackageMask is ~IdlePackageMask. If a package is idle, bit is 0.
+		// If a package is busy, bit is 1. If package is invalid, bit is 1 (initially 0 in IdleMask).
+		// However, we bounded 'bit' by 'packagesInNode', so packageIndex is guaranteed valid.
+		if ((busyPackageMask & (1ULL << bit)) == 0)
+			continue;
 
 		int32 packageIndex = nodeBaseIndex + bit;
-		if (packageIndex >= gPackageCount)
-			continue;
 
 		// Skip our own package (already checked)
 		if (packageIndex == package->fPackageID)
