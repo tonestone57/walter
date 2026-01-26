@@ -10,10 +10,12 @@
 
 #include <cpu.h>
 #include <interrupts.h>
+#include <scheduler.h>
 #include <smp.h>
 #include <thread_types.h>
 
 
+struct loadavg;
 struct scheduling_analysis;
 struct SchedulerListener;
 
