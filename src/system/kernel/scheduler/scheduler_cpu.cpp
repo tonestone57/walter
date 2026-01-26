@@ -403,9 +403,9 @@ CPUEntry::_TryStealWork()
 	// Use random sampling to find a victim package instead of iterating the mask.
 	// This ensures O(1) complexity for work stealing regardless of cluster size.
 	// We scale the number of attempts slightly to improve hit rate on larger clusters,
-	// using a logarithmic scale: attempts = 4 + log2(packagesInNode).
-	// For 64 packages, attempts = 10. For 1 package, attempts = 4.
-	const int kMaxPackageStealAttempts = 4 + (31 - __builtin_clz(packagesInNode));
+	// using the formula: 4 + (3 * log2(N)) / 2.
+	// For 64 packages (log2=6), attempts = 4 + (18)/2 = 13.
+	const int kMaxPackageStealAttempts = 4 + (3 * (31 - __builtin_clz(packagesInNode))) / 2;
 
 	for (int i = 0; i < kMaxPackageStealAttempts; i++) {
 		// Pick a random package index within this node
@@ -430,8 +430,9 @@ CPUEntry::_TryStealWork()
 			continue;
 
 		// Try to steal from a random busy core in the victim package
-		// We make a few attempts to find a valid, busy, and unlocked core
-		const int kMaxStealAttempts = 4;
+		// We make a few attempts to find a valid, busy, and unlocked core.
+		// Use formula: 4 + (3 * log2(N)) / 2
+		const int kMaxStealAttempts = 4 + (3 * (31 - __builtin_clz(victimCoreCount))) / 2;
 		int32 attempts = 0;
 		while (attempts++ < kMaxStealAttempts) {
 			int32 coreIndex = GetRandom() % victimCoreCount;
@@ -480,7 +481,8 @@ CPUEntry::_TryStealWork()
 			if (victimCoreCount == 0)
 				continue;
 
-			const int kMaxStealAttempts = 2;
+			// Use formula: 4 + (3 * log2(N)) / 2 for global probe attempts too
+			const int kMaxStealAttempts = 4 + (3 * (31 - __builtin_clz(victimCoreCount))) / 2;
 			int32 attempts = 0;
 			while (attempts++ < kMaxStealAttempts) {
 				int32 coreIndex = GetRandom() % victimCoreCount;
@@ -940,8 +942,11 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 		int32 registeredCores = fRegisteredCoreCount;
 
 		// Try to pick two distinct random valid cores.
-		// We limit attempts to avoid infinite loops if the mask is sparse.
-		while (attempts++ < 4) {
+		// Use formula: 4 + (3 * log2(N)) / 2
+		// For 32 cores: 4 + 7.5 = 11 attempts.
+		const int kMaxAttempts = 4 + (3 * (31 - __builtin_clz(registeredCores))) / 2;
+
+		while (attempts++ < kMaxAttempts) {
 			// Select a random bit index based on registered cores to avoid sparse array slots
 			int32 i = fast_get_random<uint32>() % registeredCores;
 
