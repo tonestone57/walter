@@ -41,7 +41,7 @@ const int kVeryHighLoad = (kMaxLoad + kHighLoad) / 2;
 const int kLoadDifference = kMaxLoad * 20 / 100;
 
 const int32 kDefaultCapacity = 1024;
-const int32 kRandomSearchThreshold = 16;
+const int32 kRandomSearchThreshold = 8;
 
 extern bool gSingleCore;
 extern bool gTrackCoreLoad;
