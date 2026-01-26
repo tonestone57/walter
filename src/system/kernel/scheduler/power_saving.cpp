@@ -13,6 +13,7 @@
 #include "scheduler_modes.h"
 #include "scheduler_profiler.h"
 #include "scheduler_thread.h"
+#include "scheduler_topology.h"
 
 
 using namespace Scheduler;
