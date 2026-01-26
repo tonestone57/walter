@@ -3877,13 +3877,15 @@ _get_next_team_info(int32* cookie, team_info* info, size_t size)
 
 	InterruptsReadSpinLocker locker(sTeamHashLock);
 
-	team_id lastTeamID = peek_next_thread_id();
-		// TODO: This is broken, since the id can wrap around!
-
 	// get next valid team
 	Team* team = NULL;
-	while (slot < lastTeamID && !(team = team_get_team_struct_locked(slot)))
-		slot++;
+	for (TeamTable::Iterator it = sTeamHash.GetIterator(); it.HasNext();) {
+		Team* candidate = it.Next();
+		if (candidate->id >= slot && candidate->visible) {
+			if (team == NULL || candidate->id < team->id)
+				team = candidate;
+		}
+	}
 
 	if (team == NULL)
 		return B_BAD_TEAM_ID;
@@ -3893,7 +3895,7 @@ _get_next_team_info(int32* cookie, team_info* info, size_t size)
 	locker.Unlock();
 
 	// fill in the info
-	*cookie = ++slot;
+	*cookie = team->id + 1;
 	return fill_team_info(team, info, size);
 }
 

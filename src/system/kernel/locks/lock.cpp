@@ -1139,10 +1139,10 @@ _mutex_lock_with_timeout(mutex* lock, uint32 timeoutFlags, bigtime_t timeout)
 		if (waiter.thread == NULL)
 			return B_ERROR;
 
-		// TODO: There is still a race condition during mutex destruction,
-		// if we resume due to a timeout before our thread is set to NULL.
-
 		locker.Lock();
+
+		if (waiter.thread == NULL)
+			return B_ERROR;
 
 		// If the timeout occurred, we must remove our waiter structure from
 		// the queue.
