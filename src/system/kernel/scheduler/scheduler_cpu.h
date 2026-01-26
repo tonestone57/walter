@@ -272,6 +272,7 @@ public:
 
 						CoreEntry*			GetIdleCore(int32 index = 0) const;
 	inline				uint32				IdleCoreMask() const;
+	inline				int32				IdleCoreCount() const { return fIdleCoreCount; }
 	inline				CoreEntry*			GetCore(int32 index) const;
 	inline				SchedulerNode*		Node() const { return fNode; }
 	inline				int32				NodeIndex() const { return fNodeIndex; }

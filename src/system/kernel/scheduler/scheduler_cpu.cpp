@@ -457,6 +457,54 @@ CPUEntry::_TryStealWork()
 		}
 	}
 
+	// Phase 3: Global Probe (Multi-Node Fallback)
+	// If the local node didn't yield work, try a few random packages globally.
+	// This helps load balance across NUMA nodes if the local node is idle but others are busy.
+	if (gPackageCount > packagesInNode) {
+		const int kMaxGlobalStealAttempts = 2;
+
+		for (int i = 0; i < kMaxGlobalStealAttempts; i++) {
+			int32 packageIndex = GetRandom() % gPackageCount;
+
+			// Skip our own package (already checked)
+			if (packageIndex == package->fPackageID)
+				continue;
+
+			// We don't have a global busy mask, so we check the package's idle core count.
+			// If all cores are idle, skip it.
+			PackageEntry* victimPackage = &gPackageEntries[packageIndex];
+			if (victimPackage->IdleCoreCount() == victimPackage->CoreCount())
+				continue;
+
+			int32 victimCoreCount = victimPackage->RegisteredCoreCount();
+			if (victimCoreCount == 0)
+				continue;
+
+			const int kMaxStealAttempts = 2;
+			int32 attempts = 0;
+			while (attempts++ < kMaxStealAttempts) {
+				int32 coreIndex = GetRandom() % victimCoreCount;
+				CoreEntry* victim = victimPackage->GetCore(coreIndex);
+
+				if (victim == NULL)
+					continue;
+
+				// Skip idle cores
+				if ((victimPackage->IdleCoreMask() & (1U << victim->PackageIndex())) != 0)
+					continue;
+
+				if (victim->TryLockRunQueue()) {
+					int32 stolenPriority = -1;
+					ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
+					victim->UnlockRunQueue();
+
+					if (stolen != NULL)
+						return stolen;
+				}
+			}
+		}
+	}
+
 	return NULL;
 }
 
