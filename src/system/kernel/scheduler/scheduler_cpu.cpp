@@ -381,9 +381,11 @@ CPUEntry::_TryStealWork()
 		}
 	}
 
-	// Topology-Aware Extension: Try to steal from sibling packages in the same
-	// NUMA/Cluster node. This allows load balancing across the local interconnect
-	// without incurring the high cost of a global search or remote node access.
+	// Phase 2: The Local NUMA Node (Random)
+	// Target: Cores on the same physical socket/die (e.g., 64-128 cores).
+	// Method: Fixed Random (e.g., 4-8 probes).
+	// Why: Stealing here is fast (local RAM). You want to exhaust reasonable options here
+	// before going across the expensive interconnect.
 
 	SchedulerNode* node = package->Node();
 	if (node == NULL)
@@ -400,27 +402,20 @@ CPUEntry::_TryStealWork()
 	if (packagesInNode <= 0)
 		return NULL;
 
-	// Use random sampling to find a victim package instead of iterating the mask.
-	// This ensures O(1) complexity for work stealing regardless of cluster size.
-	// We scale the number of attempts slightly to improve hit rate on larger clusters,
-	// using the formula: 4 + (3 * log2(N)) / 2.
-	// For 64 packages (log2=6), attempts = 4 + (18)/2 = 13.
-	const int kMaxPackageStealAttempts = 4 + (3 * (31 - __builtin_clz(packagesInNode))) / 2;
+	const int kMaxLocalStealAttempts = 8;
 
-	for (int i = 0; i < kMaxPackageStealAttempts; i++) {
+	for (int i = 0; i < kMaxLocalStealAttempts; i++) {
 		// Pick a random package index within this node
 		int32 bit = GetRandom() % packagesInNode;
 
 		// Check if the random package is busy (bit is set in mask)
-		// Note: busyPackageMask is ~IdlePackageMask. If a package is idle, bit is 0.
-		// If a package is busy, bit is 1. If package is invalid, bit is 1 (initially 0 in IdleMask).
-		// However, we bounded 'bit' by 'packagesInNode', so packageIndex is guaranteed valid.
+		// Note: busyPackageMask is ~IdlePackageMask.
 		if ((busyPackageMask & (1ULL << bit)) == 0)
 			continue;
 
 		int32 packageIndex = nodeBaseIndex + bit;
 
-		// Skip our own package (already checked)
+		// Skip our own package (already checked in Phase 1)
 		if (packageIndex == package->fPackageID)
 			continue;
 
@@ -429,81 +424,71 @@ CPUEntry::_TryStealWork()
 		if (victimCoreCount == 0)
 			continue;
 
-		// Try to steal from a random busy core in the victim package
-		// We make a few attempts to find a valid, busy, and unlocked core.
-		// Use formula: 4 + (3 * log2(N)) / 2
-		const int kMaxStealAttempts = 4 + (3 * (31 - __builtin_clz(victimCoreCount))) / 2;
-		int32 attempts = 0;
-		while (attempts++ < kMaxStealAttempts) {
-			int32 coreIndex = GetRandom() % victimCoreCount;
-			CoreEntry* victim = victimPackage->GetCore(coreIndex);
+		// Pick a random core in the victim package
+		int32 coreIndex = GetRandom() % victimCoreCount;
+		CoreEntry* victim = victimPackage->GetCore(coreIndex);
 
-			// Skip invalid cores
-			if (victim == NULL)
-				continue;
+		if (victim == NULL)
+			continue;
 
-			// Skip idle cores (check IdleCoreMask directly to avoid locking)
-			uint32 idleMask = victimPackage->IdleCoreMask();
-			if ((idleMask & (1U << victim->PackageIndex())) != 0)
-				continue;
+		// Skip idle cores
+		if ((victimPackage->IdleCoreMask() & (1U << victim->PackageIndex())) != 0)
+			continue;
 
-			if (victim->TryLockRunQueue()) {
-				int32 stolenPriority = -1;
-				ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
-				victim->UnlockRunQueue();
+		if (victim->TryLockRunQueue()) {
+			int32 stolenPriority = -1;
+			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
+			victim->UnlockRunQueue();
 
-				if (stolen != NULL)
-					return stolen;
-			}
+			if (stolen != NULL)
+				return stolen;
 		}
 	}
 
-	// Phase 3: Global Probe (Multi-Node Fallback)
-	// If the local node didn't yield work, try a few random packages globally.
-	// This helps load balance across NUMA nodes if the local node is idle but others are busy.
-	if (gPackageCount > packagesInNode) {
-		const int kMaxGlobalStealAttempts = 2;
+	// Phase 3: The Global Hail Mary (Random)
+	// Target: Any core in the system (4096 cores).
+	// Method: Logarithmic Formula
+	// Why: This is the last resort. If the local node is empty, you are willing to pay
+	// the high cost to steal from a remote socket to avoid sleeping.
 
-		for (int i = 0; i < kMaxGlobalStealAttempts; i++) {
-			int32 packageIndex = GetRandom() % gPackageCount;
+	// Use formula: 4 + (3 * log2(N)) / 2
+	const int kMaxGlobalStealAttempts = 4 + (3 * (31 - __builtin_clz(gCoreCount))) / 2;
 
-			// Skip our own package (already checked)
-			if (packageIndex == package->fPackageID)
-				continue;
+	for (int i = 0; i < kMaxGlobalStealAttempts; i++) {
+		int32 packageIndex = GetRandom() % gPackageCount;
 
-			// We don't have a global busy mask, so we check the package's idle core count.
-			// If all cores are idle, skip it.
-			PackageEntry* victimPackage = &gPackageEntries[packageIndex];
-			if (victimPackage->IdleCoreCount() == victimPackage->CoreCount())
-				continue;
+		// Skip our own package (already checked)
+		if (packageIndex == package->fPackageID)
+			continue;
 
-			int32 victimCoreCount = victimPackage->RegisteredCoreCount();
-			if (victimCoreCount == 0)
-				continue;
+		PackageEntry* victimPackage = &gPackageEntries[packageIndex];
 
-			// Use formula: 4 + (3 * log2(N)) / 2 for global probe attempts too
-			const int kMaxStealAttempts = 4 + (3 * (31 - __builtin_clz(victimCoreCount))) / 2;
-			int32 attempts = 0;
-			while (attempts++ < kMaxStealAttempts) {
-				int32 coreIndex = GetRandom() % victimCoreCount;
-				CoreEntry* victim = victimPackage->GetCore(coreIndex);
+		// Quick check: if all cores are idle, skip this package
+		if (victimPackage->IdleCoreCount() == victimPackage->CoreCount())
+			continue;
 
-				if (victim == NULL)
-					continue;
+		int32 victimCoreCount = victimPackage->RegisteredCoreCount();
+		if (victimCoreCount == 0)
+			continue;
 
-				// Skip idle cores
-				if ((victimPackage->IdleCoreMask() & (1U << victim->PackageIndex())) != 0)
-					continue;
+		// Pick a random core in the victim package
+		int32 coreIndex = GetRandom() % victimCoreCount;
+		CoreEntry* victim = victimPackage->GetCore(coreIndex);
 
-				if (victim->TryLockRunQueue()) {
-					int32 stolenPriority = -1;
-					ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
-					victim->UnlockRunQueue();
+		if (victim == NULL)
+			continue;
 
-					if (stolen != NULL)
-						return stolen;
-				}
-			}
+		// Skip idle cores
+		if ((victimPackage->IdleCoreMask() & (1U << victim->PackageIndex())) != 0)
+			continue;
+
+		if (victim->TryLockRunQueue()) {
+			int32 stolenPriority = -1;
+			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
+			victim->UnlockRunQueue();
+
+			if (stolen != NULL)
+				return stolen;
 		}
 	}
 
