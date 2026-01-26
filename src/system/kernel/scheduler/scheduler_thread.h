@@ -467,7 +467,10 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 			if (!wasReady && !IsRealTime()) {
 				bigtime_t minVirtualRuntime = cpu->GetMinVirtualRuntime();
 				if (minVirtualRuntime > 0) {
-					bigtime_t target = minVirtualRuntime - 2000;
+					// Latency Bonus: Give waking threads a significant head start
+					// (5ms) to ensure they preempt batch tasks immediately.
+					// This replicates the "snappy" feel of strict priority.
+					bigtime_t target = minVirtualRuntime - 5000;
 					if (fVirtualRuntime < target)
 						fVirtualRuntime = target;
 				}
@@ -494,7 +497,10 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		if (!wasReady && !IsRealTime()) {
 			bigtime_t minVirtualRuntime = fCore->GetMinVirtualRuntime();
 			if (minVirtualRuntime > 0) {
-				bigtime_t target = minVirtualRuntime - 2000;
+				// Latency Bonus: Give waking threads a significant head start
+				// (5ms) to ensure they preempt batch tasks immediately.
+				// This replicates the "snappy" feel of strict priority.
+				bigtime_t target = minVirtualRuntime - 5000;
 				if (fVirtualRuntime < target)
 					fVirtualRuntime = target;
 			}

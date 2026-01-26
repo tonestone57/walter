@@ -46,6 +46,12 @@ This document outlines technical proposals to address the weaknesses identified 
 
 ## 3. Recommended Roadmap
 
-1.  **Immediate Term (Fix Deadlocks):** Implement basic **Priority Inheritance** for kernel mutexes. The stability gain outweighs the slight overhead.
-2.  **Short Term (Responsiveness):** Refine the **Priority Boosting** in the current scheduler to be more aggressive for interactive threads (identifying them by wake-up source).
-3.  **Long Term (The Hybrid):** Transition to the **Hybrid Scheduler** (RB-Tree + Latency Bonus). It solves the fundamental starvation and convoy problems architecturally, which is cleaner than patching the strict priority model indefinitely.
+1.  **Implemented (Responsiveness & Starvation):**
+    *   **Proactive Boosting:** Updated `_ComputeEffectivePriority` to start boosting threads slightly earlier (75% of interval) to prevent edge-case starvation.
+    *   **Latency Bonus:** Increased the vruntime "head start" for waking threads (from 2ms to 5ms) to improve interactive responsiveness (Hybrid Feature).
+
+2.  **Future Work (Deadlock Mitigation):**
+    *   **Priority Inheritance:** Requires modifying the `mutex` structure (ABI change) to store the owner thread ID. This is critical for preventing priority inversion but requires a synchronized kernel/driver rebuild.
+
+3.  **Long Term (The Hybrid):**
+    *   Transition to the full **Hybrid Scheduler** (RB-Tree + Latency Bonus) once the architectural prerequisites (like O(1) Min-Node caching) are ready.

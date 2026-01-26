@@ -407,7 +407,11 @@ ThreadData::_ComputeEffectivePriority() const
 	else if (IsRealTime())
 		fEffectivePriority = GetPriority();
 	else {
-		fPriorityBoost = (system_time() - fEntryTime) / kPriorityBoostInterval;
+		// Proactive Boosting: Start boosting slightly earlier (at 75% of interval)
+		// to prevent edge-case starvation and improve responsiveness for
+		// waiting threads.
+		fPriorityBoost = (system_time() - fEntryTime + kPriorityBoostInterval / 4)
+			/ kPriorityBoostInterval;
 		fEffectivePriority = GetPriority() + fPriorityBoost;
 
 		fEffectivePriority = std::max(fEffectivePriority,
