@@ -62,10 +62,11 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 		return;
 	atomic_add((int32*)&function->fCalled, 1);
 
-	int32 stackDepth = fFunctionStackPointers[cpu]++;
+	int32 stackDepth = fFunctionStackPointers[cpu];
 	if (stackDepth >= (int32)kMaxFunctionStackEntries)
 		return;
 
+	fFunctionStackPointers[cpu]++;
 	FunctionEntry* stackEntry = &fFunctionStacks[cpu][stackDepth];
 
 	stackEntry->fFunction = function;
@@ -82,8 +83,11 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 {
 	nanotime_t start = system_time_nsecs();
 
-	ASSERT(fFunctionStackPointers[cpu] > 0);
-	int32 stackDepth = --fFunctionStackPointers[cpu];
+	int32 stackDepth = fFunctionStackPointers[cpu];
+	if (stackDepth <= 0)
+		return;
+
+	stackDepth = --fFunctionStackPointers[cpu];
 	if (stackDepth >= (int32)kMaxFunctionStackEntries)
 		return;
 
