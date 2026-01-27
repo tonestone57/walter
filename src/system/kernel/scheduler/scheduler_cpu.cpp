@@ -216,7 +216,7 @@ CPUEntry::UpdatePriority(int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	ASSERT(!gCPU[fCPUNumber].disabled);
+	ASSERT(!gCPU[fCPUNumber].disabled || priority == B_IDLE_PRIORITY);
 
 	int32 oldPriority = CPUPriorityHeap::GetKey(this);
 	if (oldPriority == priority)

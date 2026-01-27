@@ -256,7 +256,8 @@ ThreadData::ComputeQuantum() const
 	const int32 kLoadScaleShift = 10;
 	// kRangeReciprocal = kLoadScale / (kMaxLoad - kLowLoad) * kLoadScale
 	// 1024 / 800 * 1024 = 1310.72 ~= 1311
-	const int32 kRangeReciprocal = 1311;
+	const int32 kRangeReciprocal = (int32)(((int64)kLoadScale * kLoadScale
+		+ (kMaxLoad - kLowLoad) / 2) / (kMaxLoad - kLowLoad));
 
 	int32 load = fCore->GetLoad();
 	int32 threadCount = fCore->ThreadCount();
