@@ -13,6 +13,7 @@
 using namespace Scheduler;
 
 
+static const bigtime_t kDeadlineBucketSize = 5000;
 static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1];
 
 
@@ -31,8 +32,6 @@ ThreadData::_InitBase()
 	fReady = false;
 	fQuickStartCredit = false;
 
-	fPriorityBoost = 0;
-	fEntryTime = 0;
 	fHomePackage = -1;
 
 	fEffectivePriority = GetPriority();
@@ -45,6 +44,7 @@ ThreadData::_InitBase()
 	fMeasureAvailableTime = 0;
 
 	fVirtualRuntime = 0;
+	fVirtualDeadline = 0;
 }
 
 
@@ -145,11 +145,8 @@ ThreadData::Init()
 	fVirtualRuntime = currentThreadData->fVirtualRuntime;
 	fHomePackage = currentThreadData->fHomePackage;
 
-	if (!IsRealTime()) {
-		fEntryTime = currentThreadData->fEntryTime;
-
+	if (!IsRealTime())
 		_ComputeEffectivePriority();
-	}
 }
 
 
@@ -168,8 +165,6 @@ ThreadData::Init(CoreEntry* core)
 void
 ThreadData::Dump() const
 {
-	kprintf("\tentry_time:\t\t%" B_PRId64 "\n", fEntryTime);
-	kprintf("\tpriority_boost:\t\t%" B_PRId32 "\n", fPriorityBoost);
 	kprintf("\thome_package:\t\t%" B_PRId32 "\n", fHomePackage);
 
 	kprintf("\teffective_priority:\t%" B_PRId32 "\n", GetEffectivePriority());
@@ -398,6 +393,29 @@ ThreadData::_ComputeNeededLoad()
 
 
 void
+ThreadData::_UpdateDeadline()
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	if (IsIdle() || IsRealTime())
+		return;
+
+	// Virtual Deadline Calculation:
+	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)
+	const bigtime_t kBaseSlice = kDeadlineBucketSize;
+	const int32 kBaseWeight = 10;
+
+	// TaskWeight is derived from priority (max_c prevents divide by zero)
+	int32 taskWeight = max_c(1, GetPriority());
+
+	bigtime_t slice = kBaseSlice * kBaseWeight / taskWeight;
+	fVirtualDeadline = system_time() + slice;
+
+	_ComputeEffectivePriority();
+}
+
+
+void
 ThreadData::_ComputeEffectivePriority() const
 {
 	SCHEDULER_ENTER_FUNCTION();
@@ -407,17 +425,16 @@ ThreadData::_ComputeEffectivePriority() const
 	else if (IsRealTime())
 		fEffectivePriority = GetPriority();
 	else {
-		// Proactive Boosting: Start boosting slightly earlier (at 75% of interval)
-		// to prevent edge-case starvation and improve responsiveness for
-		// waiting threads.
-		fPriorityBoost = (system_time() - fEntryTime + kPriorityBoostInterval / 4)
-			/ kPriorityBoostInterval;
-		fEffectivePriority = GetPriority() + fPriorityBoost;
+		// Map Virtual Deadline to Dynamic Priority (Urgency).
+		// Urgency = 99 - (Deadline - Now) / 5ms
+		// If Deadline is Now (or passed), Urgency is Max (99).
+		// If Deadline is far, Urgency is 0.
 
-		fEffectivePriority = std::max(fEffectivePriority,
-			_GetMinimalPriority());
-		fEffectivePriority = std::min(fEffectivePriority,
-			int32(B_FIRST_REAL_TIME_PRIORITY - 1));
+		bigtime_t urgency = 99 - (fVirtualDeadline - system_time()) / kDeadlineBucketSize;
+		if (urgency < 0) urgency = 0;
+		if (urgency > 99) urgency = 99;
+
+		fEffectivePriority = (int32)urgency;
 	}
 
 	fBaseQuantum = atomic_get64(&sQuantumLengths[GetEffectivePriority()]);

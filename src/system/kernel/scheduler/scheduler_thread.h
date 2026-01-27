@@ -104,6 +104,7 @@ private:
 	inline	void		_UpdatePriorityBoost();
 
 			void		_ComputeNeededLoad();
+			void		_UpdateDeadline();
 
 			void		_ComputeEffectivePriority() const;
 
@@ -125,8 +126,6 @@ private:
 
 			Thread*		fThread;
 
-	mutable	int32		fPriorityBoost;
-			bigtime_t	fEntryTime;
 			int32		fHomePackage;
 
 	mutable	int32		fEffectivePriority;
@@ -142,6 +141,7 @@ private:
 			uint32		fLoadMeasurementEpoch;
 
 			bigtime_t	fVirtualRuntime;
+			bigtime_t	fVirtualDeadline;
 
 			CoreEntry*	fCore;
 };
@@ -222,9 +222,6 @@ ThreadData::_UpdatePriorityBoost()
 	int32 newPriority = GetEffectivePriority();
 
 	if (oldPriority != newPriority) {
-		TRACE("increasing thread %ld priority boost to %" B_PRId32 "\n",
-			fThread->id, fPriorityBoost);
-
 		if (fEnqueuedInCPURunQueue) {
 			ASSERT(fThread->pinned_to_cpu > 0);
 			CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
@@ -278,8 +275,6 @@ ThreadData::ResetPriorityBoost()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	fEntryTime = system_time();
-	fPriorityBoost = 0;
 	_ComputeEffectivePriority();
 }
 
@@ -339,6 +334,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 
 	if (timeLeft == 0) {
 		fTimeUsed = 0;
+		_UpdateDeadline();
 		return true;
 	}
 
@@ -395,8 +391,7 @@ ThreadData::PutBack()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	fEntryTime = system_time();
-
+	_ComputeEffectivePriority();
 	int32 priority = GetEffectivePriority();
 
 	if (fThread->pinned_to_cpu > 0) {
@@ -431,8 +426,6 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	fEntryTime = system_time();
-
 	bool wasReady = fReady;
 	if (!fReady) {
 		if (gTrackCoreLoad) {
@@ -464,17 +457,8 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		} else {
 			CPURunQueueLocker _(cpu);
 
-			if (!wasReady && !IsRealTime()) {
-				bigtime_t minVirtualRuntime = cpu->GetMinVirtualRuntime();
-				if (minVirtualRuntime > 0) {
-					// Latency Bonus: Give waking threads a significant head start
-					// (5ms) to ensure they preempt batch tasks immediately.
-					// This replicates the "snappy" feel of strict priority.
-					bigtime_t target = minVirtualRuntime - 5000;
-					if (fVirtualRuntime < target)
-						fVirtualRuntime = target;
-				}
-			}
+			if (!wasReady && !IsRealTime())
+				_UpdateDeadline();
 
 			ASSERT(!fEnqueued);
 			fEnqueued = true;
@@ -494,17 +478,8 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 	if (!pinned) {
 		CoreRunQueueLocker _(fCore);
 
-		if (!wasReady && !IsRealTime()) {
-			bigtime_t minVirtualRuntime = fCore->GetMinVirtualRuntime();
-			if (minVirtualRuntime > 0) {
-				// Latency Bonus: Give waking threads a significant head start
-				// (5ms) to ensure they preempt batch tasks immediately.
-				// This replicates the "snappy" feel of strict priority.
-				bigtime_t target = minVirtualRuntime - 5000;
-				if (fVirtualRuntime < target)
-					fVirtualRuntime = target;
-			}
-		}
+		if (!wasReady && !IsRealTime())
+			_UpdateDeadline();
 
 		ASSERT(!fEnqueued);
 		fEnqueued = true;

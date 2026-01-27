@@ -1,43 +1,44 @@
-# Scheduler Comparison: Current Method vs. Hybrid (Weighted Vruntime + Latency Bonus)
+# Scheduler Comparison: Current Method vs. Virtual Deadline (O(1) Deadlines)
 
-This document analyzes the proposed "Hybrid" scheduler design against the current Haiku scheduler implementation.
+This document analyzes the "Virtual Deadline" scheduler design against the original Haiku scheduler implementation.
 
-## The Hybrid Design Concept
-**Weighted Vruntime with Latency Bonus**
-*   **Structure:** A single Red-Black Tree for all threads (Priority 1–99).
-*   **Sorting Key:** `vruntime` (Virtual Runtime). Smallest runs next.
+## The Virtual Deadline Design
+**Deadline-Based Round Robin**
+*   **Structure:** Uses the existing Priority Bitmap/RunQueue structure but re-interprets "Priority" as "Deadline Urgency".
+*   **Sorting Key:** `Urgency` (derived from Virtual Deadline). Highest Urgency (Earliest Deadline) runs next.
 *   **Mechanism:**
-    *   **Weighted Growth:** `vruntime` grows slower for high-priority tasks.
-    *   **Latency Bonus:** On wake-up, interactive tasks receive a "bonus" (deduction from `vruntime` or placement optimization) to effectively "jump the queue" and run immediately, replicating the snappy feel of strict priority systems.
+    *   **Deadline Calculation:** `Deadline = Now + (TimeSlice * BaseWeight / TaskWeight)`.
+    *   **Urgency Mapping:** `Urgency = MaxPriority - (Deadline - Now) / BucketSize`.
+    *   **Latency Bonus:** Interactive tasks (Wakeup) get a deadline relative to *Now*, effectively jumping ahead of batch tasks.
 
 ## Comparison Table
 
-| Metric | Current Method (Haiku O(1)) | Hybrid Design (Weighted Vruntime + Latency Bonus) |
+| Metric | Original Method (Strict Priority) | Virtual Deadline Design |
 | :--- | :--- | :--- |
-| **Starvation** | **Possible.** Strict priority means low-priority threads never run if high-priority is busy (mitigated by boosting). | **Eliminated.** Weighted Fair Queuing guarantees all threads get CPU time proportional to their weight. |
-| **Latency (Scheduling)** | **O(1) Constant.** Bitmap scan + Priority Queue is extremely fast and deterministic. | **O(log N).** Red-Black Tree operations have logarithmic overhead. Slightly slower dispatch. |
-| **Throughput** | **High.** Minimal scheduling overhead. Strict priority can cause "convoy effects" where low-prio tasks holding resources stall the system. | **Balanced.** Slightly higher scheduling overhead, but better overall system utilization by avoiding convoys and starvation. |
-| **Responsiveness** | **Excellent (Strict).** High-priority interactive apps *always* preempt lower tasks immediately. | **Excellent (Bonus).** "Latency Bonus" ensures interactive tasks jump to the front of the tree, mimicking strict priority responsiveness. |
-| **Deadlock Risk** | **High (Priority Inversion).** Strict priority makes it easy for a high-prio task to starve while waiting for a low-prio lock holder. | **Low.** Even low-priority lock holders get *some* CPU time, allowing them to progress and release locks. |
+| **Starvation** | **Possible.** Strict priority means low-priority threads never run if high-priority is busy (mitigated by reactive boosting). | **Eliminated.** Every task gets a deadline. As time passes, even low-priority tasks become "Urgent" and eventually preempt high-priority tasks. |
+| **Latency (Scheduling)** | **O(1) Constant.** Bitmap scan + Priority Queue is extremely fast and deterministic. | **O(1) Constant.** Uses the same Bitmap structure! Deadlines are mapped to buckets, preserving O(1) performance without complex trees. |
+| **Throughput** | **High.** Minimal scheduling overhead. Strict priority can cause "convoy effects". | **Balanced.** Ensures progress for all tasks (Batch & UI), preventing convoys while maintaining high utilization. |
+| **Responsiveness** | **Excellent (Strict).** High-priority interactive apps *always* preempt lower tasks immediately. | **Excellent (Bonus).** "Latency Bonus" ensures waking interactive tasks get an immediate "Urgent" deadline, replicating the snappy feel. |
+| **Deadlock Risk** | **High (Priority Inversion).** Strict priority makes it easy for a high-prio task to starve while waiting for a low-prio lock holder. | **Low.** Even low-priority lock holders get guaranteed CPU time via their deadline, allowing them to progress and release locks. |
 
 ## Detailed Analysis
 
 ### 1. Starvation
-*   **Current:** Uses 100 separate queues. If a thread at Priority 20 is running, a thread at Priority 10 *cannot* run. This is "Strict Priority." Haiku uses an "aging" mechanism (Priority Boosting) to eventually boost starving threads, but it is a reactive patch.
-*   **Hybrid:** Uses a single tree. A low-priority thread has a "heavy" vruntime weight, meaning it moves to the right of the tree faster, but it is *in the tree*. It will eventually be the leftmost node. Starvation is mathematically impossible in a fair queuing model.
+*   **Original:** Uses 100 separate queues. A thread at Priority 20 blocks Priority 10 indefinitely.
+*   **Virtual Deadline:** Uses a single timeline. A low-weight task has a deadline far in the future, but it *has* a deadline. As time advances, `(Deadline - Now)` decreases, increasing its Urgency. It will eventually reach the highest urgency bucket and run.
 
 ### 2. Latency (Scheduling Overhead)
-*   **Current:** Finding the next task is finding the first set bit in a bitmap (`fls`) and picking the head of a linked list. This is effectively instantaneous and constant time regardless of thread count.
-*   **Hybrid:** Requires tree insertion and deletion, which are `O(log N)`. For 1000 threads, this is ~10 operations. While slower than O(1), on modern CPUs this difference is often negligible compared to the benefits of better decision making.
+*   **Original:** `fls` (Find Last Set) on a bitmap.
+*   **Virtual Deadline:** Same `fls` on the same bitmap. We simply map "Time" to "Bit Index". This avoids the `O(log N)` overhead of Red-Black Trees (CFS) while providing similar fairness guarantees.
 
 ### 3. Throughput
-*   **Current:** Extremely low overhead maximizes theoretical CPU cycles available for work. However, strict priority can hurt *system* throughput if a low-priority I/O thread is starved, preventing it from fetching data for a high-priority calculation.
-*   **Hybrid:** The overhead is higher, but the "Fairness" ensures that helper threads and background workers make steady progress, potentially improving the throughput of complex, multi-stage pipelines.
+*   **Original:** Strict priority optimizes for the highest priority task but can starve helper threads (e.g., an audio loader thread).
+*   **Virtual Deadline:** Weighted Fair Queuing ensures the audio loader gets *some* bandwidth (e.g., 5%) even if the audio engine (95%) is busy, preventing buffer underruns due to starvation.
 
 ### 4. Responsiveness
-*   **Current:** The defining characteristic of BeOS/Haiku. The mouse cursor (high priority) never stutters because it *strictly* overrides compilation (low priority).
-*   **Hybrid:** Standard CFS can feel "sluggish" because it waits for the interactive task to "earn" its place. The **Latency Bonus** is the critical "Turbocharger": it artificially places waking interactive tasks at the far left of the tree, forcing an immediate preemption. This aims to replicate the "snappy" feel within a fair framework.
+*   **Original:** Mouse cursor (Prio 15) strictly beats Compiler (Prio 5).
+*   **Virtual Deadline:** Mouse cursor gets a tiny deadline (Now + 1ms). Compiler gets a huge deadline (Now + 100ms). The scheduler sees 1ms < 100ms and runs the cursor immediately. The "Latency Bonus" on wakeup ensures this happens instantly.
 
-### 5. Deadlock Risk (Priority Inversion)
-*   **Current:** A classic problem in strict priority systems. If a Low Priority task holds a mutex required by a High Priority task, but a Medium Priority task is running, the Low task never runs to release the lock. The High task hangs forever. Haiku employs Priority Inheritance to fix this, but it adds complexity to the locking primitives.
-*   **Hybrid:** Naturally resilient. The Medium task runs, but the Low task also gets a small slice of time. It eventually releases the lock. Priority Inheritance is still good, but the system is less brittle without it.
+### 5. Deadlock Risk
+*   **Original:** Classic Priority Inversion.
+*   **Virtual Deadline:** Naturally resilient. The low-priority lock holder accumulates urgency as time passes, eventually running and releasing the lock.
