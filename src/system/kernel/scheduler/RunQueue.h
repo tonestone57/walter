@@ -103,6 +103,9 @@ public:
 	template<typename Compare, typename IsOptimal>
 	Element*	PeekBest(const Compare& compare, const IsOptimal& isOptimal) const;
 
+	template<typename Predicate>
+	Element*	PeekOption(const Predicate& predicate) const;
+
 private:
 			status_t	fInitStatus;
 
@@ -458,6 +461,37 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare, const IsOptimal& isOptima
 				current = sGetLink(current)->fNext;
 			}
 			return best;
+		}
+	}
+	return NULL;
+}
+
+
+RUN_QUEUE_TEMPLATE_LIST
+template<typename Predicate>
+Element*
+RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	for (int i = kBitmapSize - 1; i >= 0; i--) {
+		uint32 val = fBitmap[i];
+		while (val != 0) {
+			int bit = fls(val) - 1;
+			val &= ~(1UL << bit);
+
+			unsigned int priority = i * 32 + bit;
+			Element* current = fHeads[priority];
+
+			const int kSearchDepth = 16;
+			int count = 0;
+
+			while (current != NULL && count++ < kSearchDepth) {
+				if (predicate(current))
+					return current;
+
+				current = sGetLink(current)->fNext;
+			}
 		}
 	}
 	return NULL;

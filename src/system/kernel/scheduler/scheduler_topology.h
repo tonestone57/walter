@@ -33,9 +33,10 @@ search_local_node(SchedulerNode* node, Action action)
 		return;
 
 	const int kMaxLocalAttempts = 4;
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
 		int32 index = nodeBaseIndex
-			+ (fast_get_random<uint32>() % packagesInNode);
+			+ (cpu->GetRandom() % packagesInNode);
 		action(&gPackageEntries[index]);
 	}
 }
@@ -52,8 +53,10 @@ search_global_random(Action action)
 	int32 attempts = 0;
 	const int32 kMaxAttempts = samplesToTake * 2;
 
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-		int32 i = fast_get_random<uint32>() % gPackageCount;
+		int32 i = cpu->GetRandom() % gPackageCount;
 
 		// Avoid checking the same package twice
 		bool collision = false;

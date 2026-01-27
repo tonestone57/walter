@@ -96,14 +96,14 @@ public:
 						void			StartQuantumTimer(ThreadData* thread,
 											bool wasPreempted);
 
+						uint32			GetRandom();
+
 	static inline		CPUEntry*		GetCPU(int32 cpu);
 
 private:
 						void			_RequestPerformanceLevel(
 											ThreadData* threadData);
 						ThreadData*		_TryStealWork();
-
-						uint32			GetRandom();
 
 	static				int32			_RescheduleEvent(timer* /* unused */);
 	static				int32			_UpdateLoadEvent(timer* /* unused */);

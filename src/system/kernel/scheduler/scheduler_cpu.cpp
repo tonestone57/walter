@@ -10,6 +10,7 @@
 #include <util/Random.h>
 
 #include "scheduler_thread.h"
+#include "scheduler_topology.h"
 
 
 namespace Scheduler {
@@ -634,12 +635,12 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	ThreadData* thread = fRunQueue.PeekMaximum();
-	if (thread != NULL) {
+	ThreadData* thread = fRunQueue.PeekOption([&](ThreadData* thread) {
 		CPUSet mask = thread->GetCPUMask();
-		if (!mask.IsEmpty() && !mask.GetBit(thiefCPU))
-			return NULL;
+		return mask.IsEmpty() || mask.GetBit(thiefCPU);
+	});
 
+	if (thread != NULL) {
 		stolenPriority = thread->GetEffectivePriority();
 		Remove(thread);
 	}
