@@ -252,12 +252,9 @@ ThreadData::ComputeQuantum() const
 	const bigtime_t kDisplayQuantum = std::max(gCurrentMode->minimal_quantum,
 		kMinGranularity);
 
-	// Define constants locally to ensure availability
-	const int32 kLocalMaxLoad = 1000;
-	const int32 kLocalLowLoad = kLocalMaxLoad * 20 / 100;
 	const int32 kLoadScale = 1024;
 	const int32 kLoadScaleShift = 10;
-	// kRangeReciprocal = kLoadScale / (kLocalMaxLoad - kLocalLowLoad) * kLoadScale
+	// kRangeReciprocal = kLoadScale / (kMaxLoad - kLowLoad) * kLoadScale
 	// 1024 / 800 * 1024 = 1310.72 ~= 1311
 	const int32 kRangeReciprocal = 1311;
 
@@ -290,9 +287,9 @@ ThreadData::ComputeQuantum() const
 
 	bigtime_t targetQuantum = maxAllowed;
 
-	if (load > kLocalLowLoad) {
+	if (load > kLowLoad) {
 		// Scale from maxAllowed down to floorQuantum
-		int64 ratio = (int64)(load - kLocalLowLoad) * kRangeReciprocal
+		int64 ratio = (int64)(load - kLowLoad) * kRangeReciprocal
 			>> kLoadScaleShift;
 		if (ratio > kLoadScale)
 			ratio = kLoadScale;
