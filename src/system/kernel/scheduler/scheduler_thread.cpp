@@ -267,7 +267,7 @@ ThreadData::ComputeQuantum() const
 	bool overload = threadCount > (cpuCount << 1);
 	bool displayReady = false;
 
-	ThreadData* next = fCore->PeekThread();
+	ThreadData* next = fCore->PeekHead();
 	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
 		displayReady = true;
 

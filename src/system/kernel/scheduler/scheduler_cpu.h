@@ -172,6 +172,8 @@ public:
 											int32 priority);
 						void			Remove(ThreadData* thread);
 						ThreadData*		PeekThread() const;
+	inline				ThreadData*		PeekHead() const
+											{ return fRunQueue.PeekMaximum(); }
 
 	inline				ThreadRunQueue::ConstIterator
 										GetConstIterator() const
