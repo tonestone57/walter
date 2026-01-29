@@ -473,6 +473,11 @@ CoreEntry::GetLoad() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(fCPUCount > 0);
+
+	// Optimization: Avoid division and multiplication in the common case.
+	if (fCPUCount == 1 && fCapacity == kDefaultCapacity)
+		return min_c(fLoad, kMaxLoad);
+
 	int32 load = fLoad / fCPUCount;
 	load = (int64)load * kDefaultCapacity / fCapacity;
 	return min_c(load, kMaxLoad);

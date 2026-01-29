@@ -364,11 +364,15 @@ CPUEntry::_TryStealWork()
 		return NULL;
 
 	// Pick a random starting point to avoid convoys
-	// We modulo by registeredCores to avoid wasting iterations on unassigned array slots.
-	int32 startIndex = GetRandom() % registeredCores;
+	// We use multiplicative mapping to avoid modulo.
+	int32 startIndex = (int32)(((uint64)GetRandom() * registeredCores) >> 32);
 
 	for (int32 i = 0; i < registeredCores; i++) {
-		int32 index = (startIndex + i) % registeredCores;
+		// Optimization: Use subtraction for wrapping instead of modulo
+		int32 index = startIndex + i;
+		if (index >= registeredCores)
+			index -= registeredCores;
+
 		CoreEntry* victim = package->GetCore(index);
 
 		if (victim == NULL || victim == fCore || victim->CPUCount() == 0)
@@ -405,7 +409,7 @@ CPUEntry::_TryStealWork()
 		if (victimCoreCount == 0)
 			return;
 
-		int32 coreIndex = GetRandom() % victimCoreCount;
+		int32 coreIndex = (int32)(((uint64)GetRandom() * victimCoreCount) >> 32);
 		CoreEntry* victim = entry->GetCore(coreIndex);
 
 		if (victim == NULL)
@@ -444,7 +448,7 @@ CPUEntry::_TryStealWork()
 		if (victimCoreCount == 0)
 			return;
 
-		int32 coreIndex = GetRandom() % victimCoreCount;
+		int32 coreIndex = (int32)(((uint64)GetRandom() * victimCoreCount) >> 32);
 		CoreEntry* victim = entry->GetCore(coreIndex);
 
 		if (victim == NULL)
