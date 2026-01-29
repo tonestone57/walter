@@ -428,9 +428,10 @@ ThreadData::_ComputeEffectivePriority() const
 		// If Deadline is Now (or passed), Urgency is Max (99).
 		// If Deadline is far, Urgency is 0.
 
-		bigtime_t urgency = 99 - (fVirtualDeadline - system_time()) / kDeadlineBucketSize;
+		bigtime_t urgency = THREAD_MAX_SET_PRIORITY
+			- (fVirtualDeadline - system_time()) / kDeadlineBucketSize;
 		if (urgency < 0) urgency = 0;
-		if (urgency > 99) urgency = 99;
+		if (urgency > THREAD_MAX_SET_PRIORITY) urgency = THREAD_MAX_SET_PRIORITY;
 
 		fEffectivePriority = (int32)urgency;
 	}

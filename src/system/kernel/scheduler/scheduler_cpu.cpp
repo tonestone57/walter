@@ -180,6 +180,9 @@ struct ThreadDataOptimal {
 		//
 		// To ensure we actually scan the run queue (up to kSearchDepth in RunQueue::PeekBest)
 		// to find the thread with the strictly lowest virtual runtime, we must return false here.
+		//
+		// Note: This tradeoff prioritizes fairness (strictly lowest virtual runtime) over
+		// absolute minimum scheduling latency (picking the first available).
 		return false;
 	}
 };

@@ -88,6 +88,11 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 		return;
 
 	stackDepth = --fFunctionStackPointers[cpu];
+	// Warning: If EnterFunction reached the stack limit (kMaxFunctionStackEntries),
+	// it returned early without incrementing the pointer or writing the entry.
+	// In that case, ExitFunction here might be processing an entry it shouldn't,
+	// potentially misattributing time or underflowing if the logic isn't strictly robust.
+	// However, a stack depth of 512 in the scheduler is extremely unlikely.
 	if (stackDepth >= (int32)kMaxFunctionStackEntries)
 		return;
 

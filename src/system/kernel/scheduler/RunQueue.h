@@ -100,6 +100,11 @@ public:
 
 	inline	ConstIterator	GetConstIterator() const;
 
+	/*!
+		Finds the best element in the highest priority non-empty queue.
+		\param compare Functor returning true if the first argument is "better" than the second.
+		\param isOptimal Functor returning true if the element is "good enough" to return immediately (early exit).
+	*/
 	template<typename Compare, typename IsOptimal>
 	Element*	PeekBest(const Compare& compare, const IsOptimal& isOptimal) const;
 
