@@ -424,14 +424,15 @@ ThreadData::_ComputeEffectivePriority() const
 		fEffectivePriority = GetPriority();
 	else {
 		// Map Virtual Deadline to Dynamic Priority (Urgency).
-		// Urgency = 99 - (Deadline - Now) / 5ms
-		// If Deadline is Now (or passed), Urgency is Max (99).
+		// Urgency = MaxDynamic - (Deadline - Now) / 5ms
+		// If Deadline is Now (or passed), Urgency is Max.
 		// If Deadline is far, Urgency is 0.
 
-		bigtime_t urgency = THREAD_MAX_SET_PRIORITY
+		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
+		bigtime_t urgency = kMaxDynamicPriority
 			- (fVirtualDeadline - system_time()) / kDeadlineBucketSize;
 		if (urgency < 0) urgency = 0;
-		if (urgency > THREAD_MAX_SET_PRIORITY) urgency = THREAD_MAX_SET_PRIORITY;
+		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
 
 		fEffectivePriority = (int32)urgency;
 	}
