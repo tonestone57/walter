@@ -26,6 +26,9 @@
 #endif
 
 
+#define SCHEDULER_INLINE inline __attribute__((always_inline))
+
+
 namespace Scheduler {
 
 

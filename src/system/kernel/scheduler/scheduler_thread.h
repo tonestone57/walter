@@ -26,10 +26,10 @@ struct CACHE_LINE_ALIGN ThreadData : public DoublyLinkedListLinkImpl<ThreadData>
 private:
 	inline	void		_InitBase();
 
-	inline	int32		_GetMinimalPriority() const;
+	SCHEDULER_INLINE	int32		_GetMinimalPriority() const;
 
-	inline	CoreEntry*	_ChooseCore() const;
-	inline	CPUEntry*	_ChooseCPU(CoreEntry* core,
+	SCHEDULER_INLINE	CoreEntry*	_ChooseCore() const;
+	SCHEDULER_INLINE	CPUEntry*	_ChooseCPU(CoreEntry* core,
 							bool& rescheduleNeeded) const;
 
 public:
@@ -40,68 +40,68 @@ public:
 
 			void		Dump() const;
 
-	inline	int32		GetPriority() const	{ return fThread->priority; }
-	inline	Thread*		GetThread() const	{ return fThread; }
-	inline	CPUSet		GetCPUMask() const	{ return fThread->cpumask.And(gCPUEnabled); }
+	SCHEDULER_INLINE	int32		GetPriority() const	{ return fThread->priority; }
+	SCHEDULER_INLINE	Thread*		GetThread() const	{ return fThread; }
+	SCHEDULER_INLINE	CPUSet		GetCPUMask() const	{ return fThread->cpumask.And(gCPUEnabled); }
 
-	inline	bool		IsRealTime() const;
-	inline	bool		IsIdle() const;
+	SCHEDULER_INLINE	bool		IsRealTime() const;
+	SCHEDULER_INLINE	bool		IsIdle() const;
 
-	inline	bool		HasCacheExpired() const;
-	inline	int32		HomePackage() const { return fHomePackage; }
-	inline	CoreEntry*	Rebalance() const;
+	SCHEDULER_INLINE	bool		HasCacheExpired() const;
+	SCHEDULER_INLINE	int32		HomePackage() const { return fHomePackage; }
+	SCHEDULER_INLINE	CoreEntry*	Rebalance() const;
 
-	inline	int32		GetEffectivePriority() const;
+	SCHEDULER_INLINE	int32		GetEffectivePriority() const;
 
-	inline	void		StartCPUTime();
-	inline	void		StopCPUTime();
+	SCHEDULER_INLINE	void		StartCPUTime();
+	SCHEDULER_INLINE	void		StopCPUTime();
 
-	inline	void		ResetPriorityBoost();
+	SCHEDULER_INLINE	void		ResetPriorityBoost();
 
 			bool		ChooseCoreAndCPU(CoreEntry*& targetCore,
 							CPUEntry*& targetCPU);
 
-	inline	void		SetLastInterruptTime(bigtime_t interruptTime)
+	SCHEDULER_INLINE	void		SetLastInterruptTime(bigtime_t interruptTime)
 							{ fLastInterruptTime = interruptTime; }
-	inline	void		SetStolenInterruptTime(bigtime_t interruptTime);
+	SCHEDULER_INLINE	void		SetStolenInterruptTime(bigtime_t interruptTime);
 
 			bigtime_t	ComputeQuantum() const;
-	inline	bigtime_t	GetQuantumLeft();
-	inline	void		StartQuantum();
-	inline	bool		HasQuantumEnded(bool wasPreempted, bool hasYielded);
+	SCHEDULER_INLINE	bigtime_t	GetQuantumLeft();
+	SCHEDULER_INLINE	void		StartQuantum();
+	SCHEDULER_INLINE	bool		HasQuantumEnded(bool wasPreempted, bool hasYielded);
 			void		DonateTimesliceTo(Thread* beneficiary);
 
-	inline	void		Continues();
-	inline	void		GoesAway();
-	inline	void		Dies();
+	SCHEDULER_INLINE	void		Continues();
+	SCHEDULER_INLINE	void		GoesAway();
+	SCHEDULER_INLINE	void		Dies();
 
-	inline	bigtime_t	WentSleep() const	{ return fWentSleep; }
-	inline	bigtime_t	WentSleepActive() const	{ return fWentSleepActive; }
+	SCHEDULER_INLINE	bigtime_t	WentSleep() const	{ return fWentSleep; }
+	SCHEDULER_INLINE	bigtime_t	WentSleepActive() const	{ return fWentSleepActive; }
 
-	inline	void		PutBack();
-	inline	void		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption);
-	inline	bool		Dequeue();
+	SCHEDULER_INLINE	void		PutBack();
+	SCHEDULER_INLINE	void		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption);
+	SCHEDULER_INLINE	bool		Dequeue();
 
-	inline	void		UpdateActivity(bigtime_t active);
+	SCHEDULER_INLINE	void		UpdateActivity(bigtime_t active);
 
-	inline	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
+	SCHEDULER_INLINE	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
 
-	inline	bool		IsEnqueued() const	{ return fEnqueued; }
-	inline	void		SetDequeued()
+	SCHEDULER_INLINE	bool		IsEnqueued() const	{ return fEnqueued; }
+	SCHEDULER_INLINE	void		SetDequeued()
 	{
 		fEnqueued = false;
 		fEnqueuedInCPURunQueue = false;
 	}
 
-	inline	int32		GetLoad() const	{ return fNeededLoad; }
+	SCHEDULER_INLINE	int32		GetLoad() const	{ return fNeededLoad; }
 
-	inline	CoreEntry*	Core() const	{ return fCore; }
+	SCHEDULER_INLINE	CoreEntry*	Core() const	{ return fCore; }
 			void		UnassignCore(bool running = false);
 
 	static	void		ComputeQuantumLengths();
 
 private:
-	inline	void		_UpdatePriorityBoost();
+	SCHEDULER_INLINE	void		_UpdatePriorityBoost();
 
 			void		_ComputeNeededLoad();
 			void		_UpdateDeadline();
