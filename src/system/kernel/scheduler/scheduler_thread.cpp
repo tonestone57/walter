@@ -265,11 +265,7 @@ ThreadData::ComputeQuantum() const
 
 	bool contention = threadCount > cpuCount;
 	bool overload = threadCount > (cpuCount << 1);
-	bool displayReady = false;
-
-	ThreadData* next = fCore->PeekHead();
-	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
-		displayReady = true;
+	bool displayReady = fCore->HasHighPriorityThreads();
 
 	// Determine target quantum floor and max allowed based on contention and display
 	bigtime_t floorQuantum = kMediumQuantum;

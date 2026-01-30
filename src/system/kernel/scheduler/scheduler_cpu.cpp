@@ -583,6 +583,7 @@ CoreEntry::CoreEntry()
 	fCapacity(kDefaultCapacity),
 	fIdleCPUCount(0),
 	fThreadCount(0),
+	fHighPriorityThreadCount(0),
 	fActiveTime(0),
 	fLoad(0),
 	fCurrentLoad(0),
@@ -609,6 +610,8 @@ CoreEntry::PushFront(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushFront(thread, priority);
 	atomic_add(&fThreadCount, 1);
+	if (priority >= B_DISPLAY_PRIORITY)
+		atomic_add(&fHighPriorityThreadCount, 1);
 }
 
 
@@ -619,6 +622,8 @@ CoreEntry::PushBack(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushBack(thread, priority);
 	atomic_add(&fThreadCount, 1);
+	if (priority >= B_DISPLAY_PRIORITY)
+		atomic_add(&fHighPriorityThreadCount, 1);
 }
 
 
@@ -631,6 +636,9 @@ CoreEntry::Remove(ThreadData* thread)
 
 	ASSERT(thread->IsEnqueued());
 	thread->SetDequeued();
+
+	if (thread->GetRunQueueLink()->fPriority >= B_DISPLAY_PRIORITY)
+		atomic_add(&fHighPriorityThreadCount, -1);
 
 	fRunQueue.Remove(thread);
 	atomic_add(&fThreadCount, -1);
@@ -712,6 +720,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		}
 
 		atomic_set(&fThreadCount, 0);
+		atomic_set(&fHighPriorityThreadCount, 0);
 	}
 
 	fCPUHeap.ModifyKey(cpu, -1);
