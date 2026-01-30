@@ -161,7 +161,6 @@ public:
 	inline				CPUPriorityHeap*	CPUHeap();
 
 	inline				int32			ThreadCount() const;
-	inline				bool			HasHighPriorityThreads() const;
 
 	inline				void			LockRunQueue();
 	inline				bool			TryLockRunQueue();
@@ -226,7 +225,6 @@ private:
 						spinlock		fCPULock;
 
 						int32			fThreadCount;
-						int32			fHighPriorityThreadCount;
 						ThreadRunQueue	fRunQueue;
 						spinlock		fQueueLock;
 
@@ -431,14 +429,6 @@ CoreEntry::ThreadCount() const
 	SCHEDULER_ENTER_FUNCTION();
 	return atomic_get(const_cast<int32*>(&fThreadCount)) + fCPUCount
 		- atomic_get(const_cast<int32*>(&fIdleCPUCount));
-}
-
-
-inline bool
-CoreEntry::HasHighPriorityThreads() const
-{
-	SCHEDULER_ENTER_FUNCTION();
-	return atomic_get(const_cast<int32*>(&fHighPriorityThreadCount)) > 0;
 }
 
 

@@ -15,6 +15,7 @@ using namespace Scheduler;
 
 static const bigtime_t kDeadlineBucketSize = 5000;
 static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1];
+static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1];
 
 
 void
@@ -265,7 +266,11 @@ ThreadData::ComputeQuantum() const
 
 	bool contention = threadCount > cpuCount;
 	bool overload = threadCount > (cpuCount << 1);
-	bool displayReady = fCore->HasHighPriorityThreads();
+	bool displayReady = false;
+
+	ThreadData* next = fCore->PeekHead();
+	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+		displayReady = true;
 
 	// Determine target quantum floor and max allowed based on contention and display
 	bigtime_t floorQuantum = kMediumQuantum;
@@ -321,6 +326,14 @@ ThreadData::UnassignCore(bool running)
 ThreadData::ComputeQuantumLengths()
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	for (int32 priority = 0; priority < B_FIRST_REAL_TIME_PRIORITY; priority++) {
+		const bigtime_t kBaseSlice = kDeadlineBucketSize;
+		const int32 kBaseWeight = 10;
+		int32 taskWeight = max_c(1, priority);
+
+		sVirtualDeadlineSlices[priority] = kBaseSlice * kBaseWeight / taskWeight;
+	}
 
 	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
 		const bigtime_t kQuantum0 = gCurrentMode->base_quantum;
@@ -396,14 +409,7 @@ ThreadData::_UpdateDeadline()
 
 	// Virtual Deadline Calculation:
 	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)
-	const bigtime_t kBaseSlice = kDeadlineBucketSize;
-	const int32 kBaseWeight = 10;
-
-	// TaskWeight is derived from priority (max_c prevents divide by zero)
-	int32 taskWeight = max_c(1, GetPriority());
-
-	bigtime_t slice = kBaseSlice * kBaseWeight / taskWeight;
-	fVirtualDeadline = system_time() + slice;
+	fVirtualDeadline = system_time() + sVirtualDeadlineSlices[GetPriority()];
 
 	_ComputeEffectivePriority();
 }
