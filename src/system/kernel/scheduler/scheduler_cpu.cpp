@@ -643,8 +643,13 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 	SCHEDULER_ENTER_FUNCTION();
 
 	ThreadData* thread = fRunQueue.PeekOption([&](ThreadData* thread) {
-		CPUSet mask = thread->GetCPUMask();
-		return mask.IsEmpty() || mask.GetBit(thiefCPU);
+		const CPUSet& rawMask = thread->GetThread()->cpumask;
+		if (rawMask.GetBit(thiefCPU))
+			return true;
+		if (rawMask.IsEmpty())
+			return true;
+
+		return rawMask.And(gCPUEnabled).IsEmpty();
 	});
 
 	if (thread != NULL) {

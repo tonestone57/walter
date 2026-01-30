@@ -327,7 +327,7 @@ ThreadData::ComputeQuantumLengths()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	for (int32 priority = 0; priority < B_FIRST_REAL_TIME_PRIORITY; priority++) {
+	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
 		const bigtime_t kBaseSlice = kDeadlineBucketSize;
 		const int32 kBaseWeight = 10;
 		int32 taskWeight = max_c(1, priority);
