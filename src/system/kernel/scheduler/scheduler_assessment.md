@@ -92,6 +92,22 @@ Based on the architectural changes (Virtual Deadlines, O(1) Scalability, Active 
     *   **Level:** **Linear Scaling**.
     *   **Reasoning:** The new topology-aware stealing (Phase 1/2) keeps threads local to their L2/L3 cache domains, significantly improving Instruction Per Cycle (IPC) by reducing cache misses. Furthermore, eliminating the global scheduler lock removes the primary serialization point, allowing throughput to scale linearly with core count (tested effectively up to 64+ cores).
 
+## 9. Recommendations for Improved Fairness
+
+While the updated scheduler is highly responsive, its "Statistical Fairness" (bucketized priority) can theoretically lag behind Linux EEVDF's precise fairness by 5-10% in specific workloads. The following strategies could close this gap without sacrificing the O(1) architecture:
+
+1.  **Increase Priority Resolution:**
+    *   **Proposal:** Expand `THREAD_MAX_SET_PRIORITY` from 99 to 256 or 512.
+    *   **Impact:** Reduces the "width" of each priority bucket from ~5ms to ~1ms. This drastically reduces the likelihood of threads colliding in the same bucket, making the deadline sorting finer-grained (closer to "Precise Fairness").
+
+2.  **Intra-Bucket Heuristics (Stochastic Head Selection):**
+    *   **Proposal:** Instead of a strict FIFO for threads in the same priority bucket, use a lightweight heuristic. For example, check the first 4 threads in the queue and pick the one with the `lowest` virtual runtime.
+    *   **Impact:** Reduces "Head-of-Line Blocking" where a slightly less deserving thread blocks a more deserving one just because it arrived earlier in the same 5ms window.
+
+3.  **Simplified Lag Tracking:**
+    *   **Proposal:** Add a `fLag` counter to `ThreadData`. If a thread is skipped (e.g., during a TryLock failure), increment its lag. If `fLag` exceeds a threshold, temporarily boost its priority bucket index by 1.
+    *   **Impact:** Provides a safety net against starvation in pathological cases, mimicking the "Eligible" deadline logic of EEVDF.
+
 ## Conclusion
 
 The audited scheduler is a modern, high-performance implementation suitable for systems ranging from embedded devices (via Power Saving mode) to large servers (via Topology Awareness). The hybrid approach of Virtual Deadlines within O(1) structures provides an excellent balance of latency guarantees and raw throughput.
