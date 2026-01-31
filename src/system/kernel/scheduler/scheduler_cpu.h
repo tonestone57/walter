@@ -36,10 +36,10 @@ class CPUEntry;
 class CoreEntry;
 class PackageEntry;
 
-// Increased from 16 to 24 to support modern AMD CCX (Core Complex) layouts which
-// have moved from 8 cores per L3 to 12+ cores per L3.
-// The scheduler attempts to cluster cores by L3 cache domains (PackageEntry).
-const int32 kMaxCoresPerPackage = 24;
+// Adjusted to 8 to support finer-grained clustering (clusters of 4 cores).
+// This reduces lock contention and allows L3 domains to be represented as
+// groups of packages (SchedulerNode).
+const int32 kMaxCoresPerPackage = 8;
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each

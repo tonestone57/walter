@@ -77,6 +77,7 @@ static object_cache* sThreadDataCache;
 // and the package that CPU in question belongs to.
 static int32* sCPUToCore;
 static int32* sCPUToPackage;
+static int32* sPackageToNode;
 
 
 static void
@@ -752,7 +753,8 @@ get_topology_id(int32 cpuID)
 
 
 static status_t
-build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
+build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
+	int32& nodeCount)
 {
 	cpuCount = smp_get_num_cpus();
 
@@ -766,6 +768,12 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 		return B_NO_MEMORY;
 	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
 
+	// Safe upper bound allocation for mapping packages to nodes
+	sPackageToNode = new(std::nothrow) int32[cpuCount];
+	if (sPackageToNode == NULL)
+		return B_NO_MEMORY;
+	// No deleter for sPackageToNode as it persists like sCPUToPackage
+
 	// First pass: logical topology from ACPI/Device Tree
 	const cpu_topology_node* root = get_cpu_topology();
 	traverse_topology_tree(root, 0, 0);
@@ -776,84 +784,89 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 			coreCount++;
 	}
 
-	// Second pass: Topology-Aware Clustering (L3 Cache / LLC)
-	// We want to group CPUs by their LLC (Last Level Cache) to optimize
-	// lock granularity and cache locality.
-	// We also split groups larger than 8 to reduce contention.
-	// This only applies to systems with more than 8 cores.
+	// Second pass: Topology-Aware Clustering
+	// Cluster Strategy:
+	// 1. Group CPUs by L3 Cache ID (Topology Domain).
+	// 2. Map each L3 domain to a unique SchedulerNode.
+	// 3. Within each L3 domain, split cores into Packages (Clusters) of target size 4.
+	// 4. Balance "runt" clusters (5-7 cores) evenly (e.g., 6 -> 3+3, not 4+2).
 
-	if (cpuCount > 8) {
-		int32* cpuList = new(std::nothrow) int32[cpuCount];
-		if (cpuList == NULL)
-			return B_NO_MEMORY;
-		ArrayDeleter<int32> cpuListDeleter(cpuList);
+	int32* cpuList = new(std::nothrow) int32[cpuCount];
+	if (cpuList == NULL)
+		return B_NO_MEMORY;
+	ArrayDeleter<int32> cpuListDeleter(cpuList);
 
-		for (int32 i = 0; i < cpuCount; i++)
-			cpuList[i] = i;
+	for (int32 i = 0; i < cpuCount; i++)
+		cpuList[i] = i;
 
-		// Insertion Sort (stable, simple for small N)
-		for (int32 i = 1; i < cpuCount; i++) {
-			int32 key = cpuList[i];
-			int32 topoKey = get_topology_id(key);
-			int32 j = i - 1;
+	// Sort by L3 Topology ID
+	for (int32 i = 1; i < cpuCount; i++) {
+		int32 key = cpuList[i];
+		int32 topoKey = get_topology_id(key);
+		int32 j = i - 1;
 
-			while (j >= 0) {
-				int32 compare = cpuList[j];
-				int32 compareTopo = get_topology_id(compare);
+		while (j >= 0) {
+			int32 compare = cpuList[j];
+			int32 compareTopo = get_topology_id(compare);
 
-				if (compareTopo > topoKey
-					|| (compareTopo == topoKey && compare > key)) {
-					cpuList[j + 1] = cpuList[j];
-					j--;
-				} else {
-					break;
-				}
+			if (compareTopo > topoKey
+				|| (compareTopo == topoKey && compare > key)) {
+				cpuList[j + 1] = cpuList[j];
+				j--;
+			} else {
+				break;
 			}
-			cpuList[j + 1] = key;
 		}
+		cpuList[j + 1] = key;
+	}
 
-		// Assign new Package (Cluster) IDs
-		packageCount = 0;
+	packageCount = 0;
+	nodeCount = 0;
+
+	int32 l3Start = 0;
+	while (l3Start < cpuCount) {
+		int32 topologyID = get_topology_id(cpuList[l3Start]);
+		int32 l3End = l3Start + 1;
+
+		// Find end of current L3 domain
+		while (l3End < cpuCount && get_topology_id(cpuList[l3End]) == topologyID)
+			l3End++;
+
+		int32 coresInL3 = l3End - l3Start;
+		int32 targetClusterSize = 4;
+
+		// Calculate balanced cluster sizes
+		// Formula: (N + target - 1) / target gives minimal number of clusters
+		// to satisfy max size <= target.
+		// However, we want to balance.
+		// Example: 6 cores. (6+3)/4 = 2 clusters. 6/2 = 3 cores each.
+		int32 numClusters = (coresInL3 + targetClusterSize - 1) / targetClusterSize;
+		int32 baseSize = coresInL3 / numClusters;
+		int32 remainder = coresInL3 % numClusters;
+
 		int32 currentPackageSize = 0;
-		int32 lastTopologyID = -1;
+		int32 assignedInL3 = 0;
+		int32 clusterIndex = 0;
 
-		// Adaptive cluster size:
-		// We align with modern L3 cache domains (e.g., AMD Zen 5 has 12-16 cores per CCX).
-		// Ideally, we want 1 Package = 1 L3 Domain.
-		// However, we clamp at kMaxCoresPerPackage (24) to avoid excessive lock contention on the PackageEntry lock.
-		int32 targetPackageSize = 12;
-		if (cpuCount > 4096 * 12)
-			targetPackageSize = (cpuCount + 4095) / 4096;
-		if (targetPackageSize > kMaxCoresPerPackage)
-			targetPackageSize = kMaxCoresPerPackage;
+		// Create a SchedulerNode for this L3 domain
+		int32 currentNodeID = nodeCount++;
 
-		for (int32 i = 0; i < cpuCount; i++) {
-			int32 cpuID = cpuList[i];
-			int32 topologyID = get_topology_id(cpuID);
+		for (int32 i = 0; i < coresInL3; i++) {
+			int32 cpuID = cpuList[l3Start + i];
+			int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 
-			if (i == 0) {
-				lastTopologyID = topologyID;
-			} else if (topologyID != lastTopologyID
-					|| currentPackageSize >= targetPackageSize) {
+			if (currentPackageSize >= clusterSize) {
 				packageCount++;
 				currentPackageSize = 0;
-				lastTopologyID = topologyID;
+				clusterIndex++;
 			}
 
 			sCPUToPackage[cpuID] = packageCount;
+			sPackageToNode[packageCount] = currentNodeID;
 			currentPackageSize++;
 		}
-		packageCount++; // Count is index + 1
-	} else {
-		// Legacy behavior for small systems:
-		// No clustering, just use physical topology (already set by traverse_topology_tree).
-		packageCount = 0;
-		for (int32 i = 0; i < cpuCount; i++) {
-			if (gCPU[i].topology_id[CPU_TOPOLOGY_SMT] == 0
-				&& gCPU[i].topology_id[CPU_TOPOLOGY_CORE] == 0) {
-				packageCount++;
-			}
-		}
+		packageCount++; // Finish last package in L3
+		l3Start = l3End;
 	}
 
 	cpuToCoreDeleter.Detach();
@@ -866,9 +879,9 @@ static status_t
 init()
 {
 	// create logical processor to core and package mappings
-	int32 cpuCount, coreCount, packageCount;
+	int32 cpuCount, coreCount, packageCount, nodeCount;
 	status_t result = build_topology_mappings(cpuCount, coreCount,
-		packageCount);
+		packageCount, nodeCount);
 	if (result != B_OK)
 		return result;
 
@@ -886,11 +899,8 @@ init()
 	gCoreCount = coreCount;
 	gPackageCount = packageCount;
 
-	// Initialize Scheduler Nodes (Hierarchical Bitmask Root)
-	// We need 1 node for every 64 packages.
-	int32 nodeCount = (packageCount + 63) / 64;
+	// Use topology-aware nodes detected by build_topology_mappings
 	if (nodeCount > 64) {
-		// Should be impossible given 64-package clamping, but future-proof.
 		dprintf("scheduler: limiting nodes to 64 (was %" B_PRId32 ")\n", nodeCount);
 		nodeCount = 64;
 	}
@@ -920,7 +930,9 @@ init()
 	ArrayDeleter<PackageEntry> packageEntriesDeleter(gPackageEntries);
 
 	for (int32 i = 0; i < packageCount; i++) {
-		int32 nodeIndex = i / 64;
+		int32 nodeIndex = sPackageToNode[i];
+		if (nodeIndex >= nodeCount)
+			nodeIndex = 0; // Fallback for edge cases
 		gPackageEntries[i].Init(i, &gSchedulerNodes[nodeIndex]);
 	}
 
