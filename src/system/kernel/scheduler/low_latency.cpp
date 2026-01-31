@@ -262,8 +262,19 @@ choose_core(const ThreadData* threadData)
 		// AND we didn't use mask iteration (handled above).
 		// OR if random sampling failed completely to find *any* candidate (unlikely unless all broken).
 		if (bestCore == NULL && !useMask) {
-			for (int32 i = 0; i < gPackageCount; i++) {
-				check_package(&gPackageEntries[i], NULL, bestCore, bestLoad);
+			// Limit fallback attempts to avoid O(N) scan on massive systems.
+			// Start from a random index to ensure fairness over time.
+			// 64 attempts cover small systems entirely and provide a reasonable
+			// search depth for large ones.
+			const int32 kMaxFallbackAttempts = 64;
+			int32 startIndex = tryRandom ? fast_get_random<uint32>() % gPackageCount : 0;
+			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+
+			for (int32 i = 0; i < attempts; i++) {
+				int32 index = startIndex + i;
+				if (index >= gPackageCount)
+					index -= gPackageCount;
+				check_package(&gPackageEntries[index], NULL, bestCore, bestLoad);
 			}
 		}
 

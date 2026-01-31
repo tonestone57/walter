@@ -12,6 +12,7 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 ### 2. Random Number Generation (RNG) Contention
 *   **Issue:** Topology-aware search functions (`search_local_node`, `search_global_random`) used the global `fast_get_random()` function. In a high-throughput scheduler environment, this could lead to cache contention or serialization on the RNG state.
 *   **Fix:** Exposed the per-CPU Xorshift32 RNG (`CPUEntry::GetRandom`) and updated `scheduler_topology.h` to use it. This localizes RNG state to the CPU, improving scalability.
+*   **Additional Fix:** Updated `PackageEntry::PeekMinimumLoadCore` (in `scheduler_cpu.cpp`) to use `CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()` instead of `fast_get_random()`, resolving residual contention during `choose_core` load balancing.
 
 ### 3. CPU Disable Panic
 *   **Issue:** `CPUEntry::UpdatePriority` asserted `!disabled`. However, during CPU shutdown (`scheduler_set_cpu_enabled(false)`), the CPU is marked disabled *before* its priority is set to `B_IDLE_PRIORITY` to flush tasks. This caused a kernel panic during hot-unplug operations.
@@ -25,19 +26,15 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Issue:** The logic for partitioning cores into L3 cache clusters used a "Ceiling" division (`(N + T - 1) / T`). For certain core counts (e.g., 13), this resulted in highly uneven clusters (e.g., 4, 3, 3, 3), creating "runt" clusters with suboptimal load balancing.
 *   **Fix:** Updated `build_topology_mappings` to use "Balanced Partitioning" (Round-to-Nearest: `(N + T / 2) / T`). This ensures 13 cores are split into 3 clusters of 5, 4, 4, which minimizes variance and improves utilization.
 
+### 6. Unbounded Linear Fallback
+*   **Issue:** `choose_core` fell back to a linear scan of all packages if random sampling phases failed. On massive systems (e.g., 4096 packages), this O(N) scan could cause significant latency spikes and lock contention.
+*   **Fix:** Limited the fallback scan to a maximum of 64 attempts (`kMaxFallbackAttempts`). The scan now starts from a randomized index to ensure statistical fairness over time while strictly bounding worst-case latency to O(1).
+
 ## Further Recommendations (Pending)
 
-### 1. Residual RNG Contention
-*   **Issue:** While `scheduler_topology.h` was updated, `PackageEntry::PeekMinimumLoadCore` (in `scheduler_cpu.cpp`) still calls the global `fast_get_random()`. This remains a contention point during `choose_core` operations.
-*   **Recommendation:** Update `PackageEntry::PeekMinimumLoadCore` to use `CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()`.
-
-### 2. Redundant System Time Calls
+### 1. Redundant System Time Calls
 *   **Issue:** `ThreadData::_UpdateDeadline` calls `system_time()` twice (once for deadline, once for urgency).
 *   **Recommendation:** Cache `system_time()` in a local variable to reduce overhead.
-
-### 3. Unbounded Linear Fallback
-*   **Issue:** `choose_core` falls back to a linear scan of all packages if random sampling fails. On massive systems, this could be expensive.
-*   **Recommendation:** Limit the fallback scan to a fixed number of attempts.
 
 ## Verifications Performed
 
@@ -47,4 +44,4 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Clustering:** Verified logic with simulation scripts for various core counts (1, 4, 6, 9, 13, 14, 15).
 
 ## Conclusion
-The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage. The new clustering logic ensures better topology balance.
+The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage and bounded search algorithms. The new clustering logic ensures better topology balance.
