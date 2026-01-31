@@ -27,23 +27,25 @@ Load transfer was performed after releasing the victim's lock.
 
 ### 4. Inefficient Topology Search
 **Severity:** Medium
-**Location:** `src/system/kernel/scheduler/scheduler_topology.h`
+**Fixed In:** `scheduler-audit-optimizations` branch
 **Description:**
-`search_global_random` and `search_local_node` continue iterating and generating random numbers even after a target has been found, relying on the caller to check a flag.
-**Proposed Fix:** Update these templates to accept a predicate returning `bool` (stop/continue) to allow early exit.
+`search_global_random` and `search_local_node` continue iterating and generating random numbers even after a target has been found.
+**Fix:** Updated templates to accept a predicate returning `bool` (stop/continue) to allow early exit.
 
 ### 5. Profiler Stack Safety
 **Severity:** Low
-**Location:** `src/system/kernel/scheduler/scheduler_profiler.cpp`
+**Fixed In:** `scheduler-audit-optimizations` branch
 **Description:**
 If `EnterFunction` hits the stack limit, it returns without pushing. `ExitFunction` blindly pops, potentially corrupting the stack tracking (underflow/mismatch).
-**Proposed Fix:** Add logic to `ExitFunction` or `EnterFunction` to handle saturation gracefully (e.g., check depth before pop).
+**Fix:** Added logic to `ExitFunction` to prevent underflow.
 
 ## Minor Issues & Observations
 
 ### 6. `sPackageToNode` Memory Management
 **Severity:** Minor / Style
-**Description:** `new` without `ArrayDeleter`. Manual cleanup on failure.
+**Fixed In:** `scheduler-audit-fixes-cleanup` branch
+**Description:** `new` without `ArrayDeleter` created potential memory leak on partial failure.
+**Fix:** Added `ArrayDeleter` for `sPackageToNode`.
 
 ### 7. Stack-Based Collision Detection Limit
 **Severity:** Low

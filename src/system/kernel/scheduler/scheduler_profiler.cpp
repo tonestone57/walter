@@ -84,9 +84,6 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 	nanotime_t start = system_time_nsecs();
 
 	int32 stackDepth = fFunctionStackPointers[cpu];
-	if (stackDepth <= 0)
-		return;
-
 	// If EnterFunction failed due to stack overflow, it returned early.
 	// In that case, we should not decrement the pointer.
 	// However, we don't track failure state.

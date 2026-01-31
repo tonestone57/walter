@@ -772,7 +772,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	sPackageToNode = new(std::nothrow) int32[cpuCount];
 	if (sPackageToNode == NULL)
 		return B_NO_MEMORY;
-	// No deleter for sPackageToNode as it persists like sCPUToPackage
+	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
 
 	// First pass: logical topology from ACPI/Device Tree
 	const cpu_topology_node* root = get_cpu_topology();
@@ -792,10 +792,8 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	// 4. Balance "runt" clusters (5-7 cores) evenly (e.g., 6 -> 3+3, not 4+2).
 
 	int32* cpuList = new(std::nothrow) int32[cpuCount];
-	if (cpuList == NULL) {
-		delete[] sPackageToNode;
+	if (cpuList == NULL)
 		return B_NO_MEMORY;
-	}
 	ArrayDeleter<int32> cpuListDeleter(cpuList);
 
 	for (int32 i = 0; i < cpuCount; i++)
@@ -899,6 +897,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 	cpuToCoreDeleter.Detach();
 	cpuToPackageDeleter.Detach();
+	packageToNodeDeleter.Detach();
 	return B_OK;
 }
 
