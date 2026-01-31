@@ -36,10 +36,10 @@ class CPUEntry;
 class CoreEntry;
 class PackageEntry;
 
-// Reduced from 32 to 16 to improve cache locality.
-// The scheduler artificially clusters cores into packages of size 8 (targetPackageSize)
-// for large systems, so 16 is plenty of headroom while saving ~200 bytes per PackageEntry.
-const int32 kMaxCoresPerPackage = 16;
+// Increased from 16 to 24 to support modern AMD CCX (Core Complex) layouts which
+// have moved from 8 cores per L3 to 12+ cores per L3.
+// The scheduler attempts to cluster cores by L3 cache domains (PackageEntry).
+const int32 kMaxCoresPerPackage = 24;
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each

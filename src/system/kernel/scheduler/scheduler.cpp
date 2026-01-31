@@ -818,11 +818,11 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 		int32 lastTopologyID = -1;
 
 		// Adaptive cluster size:
-		// We use 8 cores/package as the baseline for minimal lock contention.
-		// With 4096 packages (64 nodes * 64 packages), we can support 32k cores.
-		// We only increase package size if we exceed this massive limit.
-		int32 targetPackageSize = 8;
-		if (cpuCount > 4096 * 8)
+		// We align with modern L3 cache domains (e.g., AMD Zen 5 has 12-16 cores per CCX).
+		// Ideally, we want 1 Package = 1 L3 Domain.
+		// However, we clamp at 16 to avoid excessive lock contention on the PackageEntry lock.
+		int32 targetPackageSize = 12;
+		if (cpuCount > 4096 * 12)
 			targetPackageSize = (cpuCount + 4095) / 4096;
 		if (targetPackageSize > kMaxCoresPerPackage)
 			targetPackageSize = kMaxCoresPerPackage;
