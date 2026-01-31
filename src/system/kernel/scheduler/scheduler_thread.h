@@ -106,7 +106,7 @@ private:
 			void		_ComputeNeededLoad();
 			void		_UpdateDeadline();
 
-			void		_ComputeEffectivePriority() const;
+			void		_ComputeEffectivePriority(bigtime_t now) const;
 
 	static	bigtime_t	_ScaleQuantum(bigtime_t maxQuantum,
 							bigtime_t minQuantum, int32 maxPriority,
@@ -218,7 +218,7 @@ ThreadData::_UpdatePriorityBoost()
 		return;
 
 	int32 oldPriority = GetEffectivePriority();
-	_ComputeEffectivePriority();
+	_ComputeEffectivePriority(system_time());
 	int32 newPriority = GetEffectivePriority();
 
 	if (oldPriority != newPriority) {
@@ -275,7 +275,7 @@ ThreadData::ResetPriorityBoost()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	_ComputeEffectivePriority();
+	_ComputeEffectivePriority(system_time());
 }
 
 
@@ -391,7 +391,7 @@ ThreadData::PutBack()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	_ComputeEffectivePriority();
+	_ComputeEffectivePriority(system_time());
 	int32 priority = GetEffectivePriority();
 
 	if (fThread->pinned_to_cpu > 0) {

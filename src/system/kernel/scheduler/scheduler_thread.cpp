@@ -147,7 +147,7 @@ ThreadData::Init()
 	fHomePackage = currentThreadData->fHomePackage;
 
 	if (!IsRealTime())
-		_ComputeEffectivePriority();
+		_ComputeEffectivePriority(system_time());
 }
 
 
@@ -409,14 +409,15 @@ ThreadData::_UpdateDeadline()
 
 	// Virtual Deadline Calculation:
 	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)
-	fVirtualDeadline = system_time() + sVirtualDeadlineSlices[GetPriority()];
+	bigtime_t now = system_time();
+	fVirtualDeadline = now + sVirtualDeadlineSlices[GetPriority()];
 
-	_ComputeEffectivePriority();
+	_ComputeEffectivePriority(now);
 }
 
 
 void
-ThreadData::_ComputeEffectivePriority() const
+ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -432,7 +433,7 @@ ThreadData::_ComputeEffectivePriority() const
 
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
 		bigtime_t urgency = kMaxDynamicPriority
-			- (fVirtualDeadline - system_time()) / kDeadlineBucketSize;
+			- (fVirtualDeadline - now) / kDeadlineBucketSize;
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
 
