@@ -384,11 +384,13 @@ choose_core(const ThreadData* threadData)
 
 			search_local_node(node, [&](PackageEntry* entry) {
 				check_package_min_load(entry, NULL, bestCore, bestLoad);
+				return false;
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
 				check_package_min_load(entry, NULL, bestCore, bestLoad);
+				return false;
 			});
 
 		} else if (useMask) {
@@ -469,12 +471,14 @@ rebalance(const ThreadData* threadData)
 			search_local_node(node, [&](PackageEntry* entry) {
 				check_package_packing(entry, NULL, other, bestLoad,
 					foundNonOverloaded);
+				return false;
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
 				check_package_packing(entry, NULL, other, bestLoad,
 					foundNonOverloaded);
+				return false;
 			});
 
 		} else if (useMask) {
@@ -585,12 +589,14 @@ rebalance_irqs(bool idle)
 			SchedulerNode* node = currentCore->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {
 				check_package_min_load(entry, NULL, other, bestLoad);
+				return false;
 			});
 		}
 
 		// Phase 3: Global Random
 		search_global_random([&](PackageEntry* entry) {
 			check_package_min_load(entry, NULL, other, bestLoad);
+			return false;
 		});
 
 	} else {

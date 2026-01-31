@@ -87,12 +87,14 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 	if (stackDepth <= 0)
 		return;
 
+	// If EnterFunction failed due to stack overflow, it returned early.
+	// In that case, we should not decrement the pointer.
+	// However, we don't track failure state.
+	// But if stackDepth is already 0, we certainly shouldn't decrement.
+	if (stackDepth <= 0)
+		return;
+
 	stackDepth = --fFunctionStackPointers[cpu];
-	// Warning: If EnterFunction reached the stack limit (kMaxFunctionStackEntries),
-	// it returned early without incrementing the pointer or writing the entry.
-	// In that case, ExitFunction here might be processing an entry it shouldn't,
-	// potentially misattributing time or underflowing if the logic isn't strictly robust.
-	// However, a stack depth of 512 in the scheduler is extremely unlikely.
 	if (stackDepth >= (int32)kMaxFunctionStackEntries)
 		return;
 

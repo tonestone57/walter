@@ -40,7 +40,8 @@ search_local_node(SchedulerNode* node, Action action)
 		// Multiplicative random mapping to avoid expensive modulo
 		int32 index = nodeBaseIndex
 			+ (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
-		action(&gPackageEntries[index]);
+		if (action(&gPackageEntries[index]))
+			break;
 	}
 }
 
@@ -83,7 +84,8 @@ search_global_random(Action action)
 		}
 
 		samplesTaken++;
-		action(&gPackageEntries[i]);
+		if (action(&gPackageEntries[i]))
+			break;
 	}
 }
 

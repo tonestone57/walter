@@ -420,23 +420,23 @@ CPUEntry::_TryStealWork()
 
 	search_local_node(node, [&](PackageEntry* entry) {
 		if (stolen != NULL)
-			return;
+			return true;
 
 		if (entry == package)
-			return;
+			return false;
 
 		int32 victimCoreCount = entry->RegisteredCoreCount();
 		if (victimCoreCount == 0)
-			return;
+			return false;
 
 		int32 coreIndex = (int32)(((uint64)GetRandom() * victimCoreCount) >> 32);
 		CoreEntry* victim = entry->GetCore(coreIndex);
 
 		if (victim == NULL)
-			return;
+			return false;
 
 		if ((entry->IdleCoreMask() & (1U << victim->PackageIndex())) != 0)
-			return;
+			return false;
 
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
@@ -447,6 +447,8 @@ CPUEntry::_TryStealWork()
 
 			victim->UnlockRunQueue();
 		}
+
+		return stolen != NULL;
 	});
 
 	if (stolen != NULL)
@@ -460,26 +462,26 @@ CPUEntry::_TryStealWork()
 
 	search_global_random([&](PackageEntry* entry) {
 		if (stolen != NULL)
-			return;
+			return true;
 
 		if (entry == package)
-			return;
+			return false;
 
 		if (entry->IdleCoreCount() == entry->CoreCount())
-			return;
+			return false;
 
 		int32 victimCoreCount = entry->RegisteredCoreCount();
 		if (victimCoreCount == 0)
-			return;
+			return false;
 
 		int32 coreIndex = (int32)(((uint64)GetRandom() * victimCoreCount) >> 32);
 		CoreEntry* victim = entry->GetCore(coreIndex);
 
 		if (victim == NULL)
-			return;
+			return false;
 
 		if ((entry->IdleCoreMask() & (1U << victim->PackageIndex())) != 0)
-			return;
+			return false;
 
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
@@ -490,6 +492,8 @@ CPUEntry::_TryStealWork()
 
 			victim->UnlockRunQueue();
 		}
+
+		return stolen != NULL;
 	});
 
 	if (stolen != NULL)

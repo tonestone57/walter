@@ -1,57 +1,58 @@
 # Scheduler Audit Findings
 
-## Critical Bugs
+## Critical Bugs (Fixed)
 
 ### 1. Work Stealing Core Mismatch
 **Severity:** Critical
-**Location:** `src/system/kernel/scheduler/scheduler_cpu.cpp` (`CPUEntry::ChooseNextThread`) and `src/system/kernel/scheduler/scheduler.cpp` (`reschedule`)
-
+**Fixed In:** `scheduler-audit-fixes` branch
 **Description:**
-When a thread is stolen via `CPUEntry::_TryStealWork`, it is removed from the victim core's run queue but its `ThreadData::fCore` pointer is not updated to point to the new core.
+Stolen threads retained their old `fCore` pointer, causing assertion failures and incorrect load tracking.
+**Fix:** Introduced `ThreadData::MigrateTo` to atomically update core affinity and transfer load.
 
-**Consequences:**
-1.  **Assertion Failure:** In `scheduler.cpp:reschedule`, the assertion `ASSERT(nextThreadData->Core() == core)` will fail for stolen threads, causing a kernel panic in debug builds.
-2.  **Incorrect Load Tracking:** The stolen thread continues to contribute to the victim core's `fCurrentLoad` (until it sleeps/dies), while the new core processes the thread without accounting for its load. This leads to imbalanced load distribution decisions.
-3.  **Potential Corruption:** `ThreadData::UnassignCore` accesses `fCore` to remove load. If the thread runs on Core A but thinks it is on Core B, it will corrupt Core B's load statistics and potentially cause race conditions if Core B is being reconfigured.
+### 2. Thread Leak in `ChooseNextThread`
+**Severity:** Critical
+**Fixed In:** `scheduler-audit-fixes` branch
+**Description:**
+Threads stolen but not immediately scheduled (due to priority) were not added to the new core's run queue, effectively disappearing from the scheduler.
+**Fix:** Added logic to re-enqueue "floating" threads.
 
-**Proposed Fix:**
-In `CPUEntry::ChooseNextThread` (or `_TryStealWork`), explicitly migrate the stolen thread to the current core. This involves:
-- Updating `ThreadData::fCore`.
-- Updating load tracking (moving `fNeededLoad` from victim core to thief core).
+### 3. Race Condition in `_TryStealWork`
+**Severity:** Critical
+**Fixed In:** `scheduler-audit-fixes` branch
+**Description:**
+Load transfer was performed after releasing the victim's lock.
+**Fix:** Moved `MigrateTo` call inside the critical section.
+
+## Performance Improvements
+
+### 4. Inefficient Topology Search
+**Severity:** Medium
+**Location:** `src/system/kernel/scheduler/scheduler_topology.h`
+**Description:**
+`search_global_random` and `search_local_node` continue iterating and generating random numbers even after a target has been found, relying on the caller to check a flag.
+**Proposed Fix:** Update these templates to accept a predicate returning `bool` (stop/continue) to allow early exit.
+
+### 5. Profiler Stack Safety
+**Severity:** Low
+**Location:** `src/system/kernel/scheduler/scheduler_profiler.cpp`
+**Description:**
+If `EnterFunction` hits the stack limit, it returns without pushing. `ExitFunction` blindly pops, potentially corrupting the stack tracking (underflow/mismatch).
+**Proposed Fix:** Add logic to `ExitFunction` or `EnterFunction` to handle saturation gracefully (e.g., check depth before pop).
 
 ## Minor Issues & Observations
 
-### 2. `sPackageToNode` Memory Management
+### 6. `sPackageToNode` Memory Management
 **Severity:** Minor / Style
-**Location:** `src/system/kernel/scheduler/scheduler.cpp`
+**Description:** `new` without `ArrayDeleter`. Manual cleanup on failure.
 
-**Description:**
-`sPackageToNode` is allocated using `new` without an associated `ArrayDeleter` (unlike `sCPUToCore` and `sCPUToPackage`), relying on the fact that it persists. However, if allocation fails later in `build_topology_mappings`, it is manually deleted. While correct, this inconsistency makes the code slightly more brittle.
+### 7. Stack-Based Collision Detection Limit
+**Severity:** Low
+**Description:** `search_global_random` limited to 1024 packages for collision detection. Acceptable tradeoff.
 
-### 3. Stack-Based Collision Detection Limit
-**Severity:** Low (Documented Limitation)
-**Location:** `src/system/kernel/scheduler/scheduler_topology.h`
+### 8. Mode-Specific Logic
+**Status:** Verified.
+`low_latency` and `power_saving` modes use consistent logic for core selection and rebalancing. `power_saving` aggressively packs small tasks.
 
-**Description:**
-`search_global_random` uses a fixed 128-byte stack bitmask to track visited packages. This limits collision detection to the first 1024 packages.
-**Observation:** For systems with >1024 packages, duplicate probes may occur. This is an acceptable tradeoff for stack safety and performance.
-
-### 4. Load Tracking Constants
-**Severity:** Info
-**Location:** `src/system/kernel/scheduler/scheduler_thread.cpp`
-
-**Description:**
-`kRangeReciprocal` is calculated dynamically in `ComputeQuantum`, ensuring correctness even if `kMaxLoad` changes. The calculation `1311` matches the standard 1000/200 load range.
-
-## Logic Review
-
-### Locking Strategy
-**Analysis:**
-- `ChooseNextThread` holds the local Core lock.
-- `_TryStealWork` attempts to acquire victim Core locks.
-- **Safety:** It uses `TryLockRunQueue` for victim cores. This prevents deadlocks where two cores try to steal from each other simultaneously.
-
-### Virtual Deadline
-**Analysis:**
-- The mapping from `fVirtualDeadline` to `fEffectivePriority` (0-99) is linear and clamped.
-- `sVirtualDeadlineSlices` pre-computation avoids expensive division in the hot path.
+### 9. Load Tracking Constants
+**Status:** Verified.
+Dynamic calculation of `kRangeReciprocal` is correct.
