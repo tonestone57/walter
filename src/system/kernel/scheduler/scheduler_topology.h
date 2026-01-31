@@ -57,17 +57,14 @@ search_global_random(Action action)
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	// Bitmask for tracking visited packages to avoid collisions.
-	// Cap at 4096 packages (512 bytes on stack).
-	const int32 kMaxPackages = 4096;
-	uint64 visitedBits[kMaxPackages / 64];
+	// Use a smaller fixed buffer on the stack (128 bytes = 1024 packages)
+	// which covers >99% of systems. For massive systems, we skip collision
+	// detection for indices beyond 1024 to save stack space.
+	const int32 kStackBitmaskSize = 1024;
+	uint64 visitedBits[kStackBitmaskSize / 64];
 
-	// Only clear the portion of the bitmask we actually need.
-	// This ensures minimal overhead for small systems.
-	int32 packages = gPackageCount;
-	if (packages > kMaxPackages)
-		packages = kMaxPackages;
-
-	int32 wordsToClear = (packages + 63) / 64;
+	int32 packagesToCheck = min_c(gPackageCount, kStackBitmaskSize);
+	int32 wordsToClear = (packagesToCheck + 63) / 64;
 	memset(visitedBits, 0, wordsToClear * sizeof(uint64));
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
@@ -78,15 +75,14 @@ search_global_random(Action action)
 		int32 word = i / 64;
 		int32 bit = i % 64;
 
-		if (word >= wordsToClear)
-			continue;
+		// Only check collision if within our stack bitmask range
+		if (i < kStackBitmaskSize) {
+			if ((visitedBits[word] & (1ULL << bit)) != 0)
+				continue;
+			visitedBits[word] |= (1ULL << bit);
+		}
 
-		if ((visitedBits[word] & (1ULL << bit)) != 0)
-			continue;
-
-		visitedBits[word] |= (1ULL << bit);
 		samplesTaken++;
-
 		action(&gPackageEntries[i]);
 	}
 }

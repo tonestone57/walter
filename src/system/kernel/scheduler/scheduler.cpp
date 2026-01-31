@@ -801,15 +801,26 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	for (int32 i = 0; i < cpuCount; i++)
 		cpuList[i] = i;
 
+	// Fallback check: If all CPUs report Topology ID 0 (detection failed),
+	// create virtual L3 domains of 16 cores to avoid putting everything in one massive Node.
+	bool distinctTopology = false;
+	int32 firstTopo = get_topology_id(0);
+	for (int32 i = 1; i < cpuCount; i++) {
+		if (get_topology_id(i) != firstTopo) {
+			distinctTopology = true;
+			break;
+		}
+	}
+
 	// Sort by L3 Topology ID
 	for (int32 i = 1; i < cpuCount; i++) {
 		int32 key = cpuList[i];
-		int32 topoKey = get_topology_id(key);
+		int32 topoKey = distinctTopology ? get_topology_id(key) : (key / 16); // Fake topology if missing
 		int32 j = i - 1;
 
 		while (j >= 0) {
 			int32 compare = cpuList[j];
-			int32 compareTopo = get_topology_id(compare);
+			int32 compareTopo = distinctTopology ? get_topology_id(compare) : (compare / 16);
 
 			if (compareTopo > topoKey
 				|| (compareTopo == topoKey && compare > key)) {
@@ -827,12 +838,16 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 	int32 l3Start = 0;
 	while (l3Start < cpuCount) {
-		int32 topologyID = get_topology_id(cpuList[l3Start]);
+		int32 topologyID = distinctTopology ? get_topology_id(cpuList[l3Start]) : (cpuList[l3Start] / 16);
 		int32 l3End = l3Start + 1;
 
 		// Find end of current L3 domain
-		while (l3End < cpuCount && get_topology_id(cpuList[l3End]) == topologyID)
+		while (l3End < cpuCount) {
+			int32 nextTopo = distinctTopology ? get_topology_id(cpuList[l3End]) : (cpuList[l3End] / 16);
+			if (nextTopo != topologyID)
+				break;
 			l3End++;
+		}
 
 		int32 coresInL3 = l3End - l3Start;
 		int32 targetClusterSize = 4;
