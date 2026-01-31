@@ -111,15 +111,7 @@ While the updated scheduler is highly responsive, its "Statistical Fairness" (bu
     *   **Fairness Improvement:** **Low (Rank 3)**. Only helps in pathological edge cases (high contention). Most useful for preventing worst-case starvation rather than improving average-case fairness.
     *   **Performance Impact:** **Very Low**. Simple integer increment/check.
 
-## 10. Miscellaneous Improvements
-
-Beyond the scheduler core, several other kernel improvements have been identified that contribute to overall system stability and performance:
-
-*   **Filesystem Stability:** A logic flaw in `Journal::ReplayLog` (`src/add-ons/kernel/file_systems/bfs/Journal.cpp`) was identified where log replay could fail if the transaction size exactly equaled the log size. This fix prevents potential data corruption after a crash.
-*   **Fork Optimization:** The `fork()` system call performance has been improved by optimizing `vm_clone_address_space` (`src/system/kernel/vm/vm.cpp`). It now correctly handles `CACHE_TYPE_NULL` areas (like guard pages) directly, ensuring faster and more reliable address space duplication for new processes.
-*   **Mutex Reliability:** A race condition in `_mutex_lock_with_timeout` (`src/system/kernel/locks/lock.cpp`) was fixed. The update re-checks `waiter.thread` for `NULL` after re-acquiring the lock during destruction, preventing kernel panics in high-concurrency scenarios.
-
-## 11. Additional Scheduler Refinements
+## 10. Additional Scheduler Refinements
 
 Further auditing revealed specific fixes implemented directly within the scheduler logic to improve robustness:
 
