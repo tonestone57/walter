@@ -459,6 +459,27 @@ ThreadData::_ScaleQuantum(bigtime_t maxQuantum, bigtime_t minQuantum,
 }
 
 
+void
+ThreadData::MigrateTo(CoreEntry* targetCore)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	if (fCore == targetCore)
+		return;
+
+	if (fReady) {
+		if (gTrackCoreLoad) {
+			if (fCore != NULL)
+				fCore->RemoveLoad(fNeededLoad, true);
+			targetCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, true);
+		}
+	}
+
+	fLoadMeasurementEpoch = targetCore->LoadMeasurementEpoch() - 1;
+	fCore = targetCore;
+}
+
+
 ThreadProcessing::~ThreadProcessing()
 {
 }

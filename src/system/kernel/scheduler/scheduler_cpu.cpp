@@ -276,6 +276,9 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		sharedThread = _TryStealWork();
 	}
 
+	bool sharedThreadIsFloating = sharedThread != NULL
+		&& !sharedThread->IsEnqueued();
+
 	if (sharedThread == NULL && pinnedThread == NULL && oldThread == NULL)
 		return NULL;
 
@@ -284,16 +287,29 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		sharedPriority = sharedThread->GetEffectivePriority();
 
 	int32 rest = max_c(pinnedPriority, sharedPriority);
-	if (oldPriority > rest || (!putAtBack && oldPriority == rest))
+	if (oldPriority > rest || (!putAtBack && oldPriority == rest)) {
+		if (sharedThreadIsFloating) {
+			coreLocker.Unlock();
+			bool wasRunQueueEmpty;
+			bool requestPreemption;
+			sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption);
+		}
 		return oldThread;
+	}
 
 	if (sharedPriority > pinnedPriority) {
-		if (sharedThread->Core() == fCore)
+		if (sharedThread->Core() == fCore && !sharedThreadIsFloating)
 			fCore->Remove(sharedThread);
 		return sharedThread;
 	}
 
 	coreLocker.Unlock();
+
+	if (sharedThreadIsFloating) {
+		bool wasRunQueueEmpty;
+		bool requestPreemption;
+		sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption);
+	}
 
 	Remove(pinnedThread);
 	return pinnedThread;
@@ -382,6 +398,10 @@ CPUEntry::_TryStealWork()
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
 			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
+
+			if (stolen != NULL)
+				stolen->MigrateTo(fCore);
+
 			victim->UnlockRunQueue();
 
 			if (stolen != NULL)
@@ -421,6 +441,10 @@ CPUEntry::_TryStealWork()
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
 			stolen = victim->StealThread(stolenPriority, fCPUNumber);
+
+			if (stolen != NULL)
+				stolen->MigrateTo(fCore);
+
 			victim->UnlockRunQueue();
 		}
 	});
@@ -460,6 +484,10 @@ CPUEntry::_TryStealWork()
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
 			stolen = victim->StealThread(stolenPriority, fCPUNumber);
+
+			if (stolen != NULL)
+				stolen->MigrateTo(fCore);
+
 			victim->UnlockRunQueue();
 		}
 	});

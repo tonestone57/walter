@@ -97,6 +97,7 @@ public:
 
 	SCHEDULER_INLINE	CoreEntry*	Core() const	{ return fCore; }
 			void		UnassignCore(bool running = false);
+			void		MigrateTo(CoreEntry* targetCore);
 
 	static	void		ComputeQuantumLengths();
 
