@@ -853,11 +853,13 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		int32 targetClusterSize = 4;
 
 		// Calculate balanced cluster sizes
-		// Formula: (N + target - 1) / target gives minimal number of clusters
-		// to satisfy max size <= target.
-		// However, we want to balance.
-		// Example: 6 cores. (6+3)/4 = 2 clusters. 6/2 = 3 cores each.
-		int32 numClusters = (coresInL3 + targetClusterSize - 1) / targetClusterSize;
+		// Formula: Round to nearest integer to find ideal cluster count.
+		// Example: 13 cores, target 4. 13/4 = 3.25 -> 3 clusters.
+		// Distribution: 5, 4, 4 (Low variance).
+		int32 numClusters = (coresInL3 + targetClusterSize / 2) / targetClusterSize;
+		if (numClusters < 1)
+			numClusters = 1;
+
 		int32 baseSize = coresInL3 / numClusters;
 		int32 remainder = coresInL3 % numClusters;
 
