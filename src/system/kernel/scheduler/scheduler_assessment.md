@@ -119,6 +119,14 @@ Beyond the scheduler core, several other kernel improvements have been identifie
 *   **Fork Optimization:** The `fork()` system call performance has been improved by optimizing `vm_clone_address_space` (`src/system/kernel/vm/vm.cpp`). It now correctly handles `CACHE_TYPE_NULL` areas (like guard pages) directly, ensuring faster and more reliable address space duplication for new processes.
 *   **Mutex Reliability:** A race condition in `_mutex_lock_with_timeout` (`src/system/kernel/locks/lock.cpp`) was fixed. The update re-checks `waiter.thread` for `NULL` after re-acquiring the lock during destruction, preventing kernel panics in high-concurrency scenarios.
 
+## 11. Additional Scheduler Refinements
+
+Further auditing revealed specific fixes implemented directly within the scheduler logic to improve robustness:
+
+*   **Hot-Unplug Safety:** `CPUEntry::UpdatePriority` (`src/system/kernel/scheduler/scheduler_cpu.cpp`) now explicitly handles updates to `B_IDLE_PRIORITY` even if the CPU is marked as disabled. This prevents kernel panics during CPU hot-unplug operations when a core is being taken offline.
+*   **Locking Correctness:** In `scheduler_set_cpu_enabled`, the methods `AddCPU` and `RemoveCPU` (in `CoreEntry`) are now called without holding `fCPULock`. This logic relies on the caller (`scheduler_set_cpu_enabled`) holding the global `InterruptsBigSchedulerLocker` for serialization, avoiding a potential deadlock or double-lock scenario.
+*   **Profiler Safety:** `Profiler::EnterFunction` (`src/system/kernel/scheduler/scheduler_profiler.cpp`) now enforces strict bounds checks on `fFunctionStackPointers`. This prevents buffer overflows and kernel crashes if the function call stack depth exceeds the profiler's pre-allocated storage.
+
 ## Conclusion
 
 The audited scheduler is a modern, high-performance implementation suitable for systems ranging from embedded devices (via Power Saving mode) to large servers (via Topology Awareness). The hybrid approach of Virtual Deadlines within O(1) structures provides an excellent balance of latency guarantees and raw throughput.
