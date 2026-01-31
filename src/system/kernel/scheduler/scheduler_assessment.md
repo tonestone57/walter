@@ -119,6 +119,14 @@ Further auditing revealed specific fixes implemented directly within the schedul
 *   **Locking Correctness:** In `scheduler_set_cpu_enabled`, the methods `AddCPU` and `RemoveCPU` (in `CoreEntry`) are now called without holding `fCPULock`. This logic relies on the caller (`scheduler_set_cpu_enabled`) holding the global `InterruptsBigSchedulerLocker` for serialization, avoiding a potential deadlock or double-lock scenario.
 *   **Profiler Safety:** `Profiler::EnterFunction` (`src/system/kernel/scheduler/scheduler_profiler.cpp`) now enforces strict bounds checks on `fFunctionStackPointers`. This prevents buffer overflows and kernel crashes if the function call stack depth exceeds the profiler's pre-allocated storage.
 
+## 11. Potential Issues & Future Risks
+
+While the scheduler is robust, the following areas should be monitored as hardware evolves:
+
+*   **L3 Topology Alignment:** The clustering logic assumes `get_topology_id` accurately reflects the L3 cache boundary. If the platform topology data (ACPI) is incorrect or provides a socket ID instead of an L3 ID (common on older BIOSes), a "Node" might become too large (e.g., entire socket), potentially increasing contention on the Node's idle mask if it spans 64+ packages.
+*   **Stack Usage:** `search_global_random` allocates a bitmask on the kernel stack. Although reduced to 128 bytes (supporting 1024 packages), this usage should be monitored. If `gPackageCount` explodes significantly beyond 1024 on massive future systems, the collision detection logic simply skips higher indices, which is safe but slightly less optimal.
+*   **Prime Number Core Counts:** Extremely unusual core counts (e.g., 13 cores in an L3 domain) might result in slightly uneven clusters (e.g., 4+4+3+2) despite the best-effort balancing logic. The performance impact is negligible, but it deviates from the perfect symmetry of 4-core clusters.
+
 ## Conclusion
 
 The audited scheduler is a modern, high-performance implementation suitable for systems ranging from embedded devices (via Power Saving mode) to large servers (via Topology Awareness). The hybrid approach of Virtual Deadlines within O(1) structures provides an excellent balance of latency guarantees and raw throughput.
