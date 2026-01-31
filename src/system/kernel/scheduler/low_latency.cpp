@@ -267,7 +267,7 @@ choose_core(const ThreadData* threadData)
 			// 64 attempts cover small systems entirely and provide a reasonable
 			// search depth for large ones.
 			const int32 kMaxFallbackAttempts = 64;
-			int32 startIndex = tryRandom ? fast_get_random<uint32>() % gPackageCount : 0;
+			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 			for (int32 i = 0; i < attempts; i++) {
