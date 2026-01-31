@@ -94,19 +94,22 @@ Based on the architectural changes (Virtual Deadlines, O(1) Scalability, Active 
 
 ## 9. Recommendations for Improved Fairness
 
-While the updated scheduler is highly responsive, its "Statistical Fairness" (bucketized priority) can theoretically lag behind Linux EEVDF's precise fairness by 5-10% in specific workloads. The following strategies could close this gap without sacrificing the O(1) architecture:
+While the updated scheduler is highly responsive, its "Statistical Fairness" (bucketized priority) can theoretically lag behind Linux EEVDF's precise fairness. The following recommendations are ranked by their ability to improve fairness:
 
-1.  **Increase Priority Resolution:**
-    *   **Proposal:** Expand `THREAD_MAX_SET_PRIORITY` from 99 to 256 or 512.
-    *   **Impact:** Reduces the "width" of each priority bucket from ~5ms to ~1ms. This drastically reduces the likelihood of threads colliding in the same bucket, making the deadline sorting finer-grained (closer to "Precise Fairness").
+1.  **Intra-Bucket Heuristics (Highest Fairness Impact)**
+    *   **Strategy:** Implement a "Best of 4" search within the highest priority bucket instead of taking the first thread (FIFO). The scheduler would peek at the first few threads and pick the one with the absolute lowest `virtual_runtime`.
+    *   **Fairness Improvement:** **High (Rank 1)**. This directly addresses the primary source of unfairness (collisions within the 5ms bucket). It approximates strict deadline sorting.
+    *   **Performance Impact:** **Low**. Requires scanning 3-4 additional pointers in the hot path. O(1) complexity is maintained (bounded scan).
 
-2.  **Intra-Bucket Heuristics (Stochastic Head Selection):**
-    *   **Proposal:** Instead of a strict FIFO for threads in the same priority bucket, use a lightweight heuristic. For example, check the first 4 threads in the queue and pick the one with the `lowest` virtual runtime.
-    *   **Impact:** Reduces "Head-of-Line Blocking" where a slightly less deserving thread blocks a more deserving one just because it arrived earlier in the same 5ms window.
+2.  **Increase Priority Resolution**
+    *   **Strategy:** Expand `THREAD_MAX_SET_PRIORITY` from 99 to 255 (matching one byte).
+    *   **Fairness Improvement:** **Moderate (Rank 2)**. Reduces bucket width from ~5ms to ~2ms, statistically reducing collisions by ~60%.
+    *   **Performance Impact:** **Negligible**. Bitmaps grow slightly (from 4 words to 8 words), but `__builtin_ctz` efficiency remains identical.
 
-3.  **Simplified Lag Tracking:**
-    *   **Proposal:** Add a `fLag` counter to `ThreadData`. If a thread is skipped (e.g., during a TryLock failure), increment its lag. If `fLag` exceeds a threshold, temporarily boost its priority bucket index by 1.
-    *   **Impact:** Provides a safety net against starvation in pathological cases, mimicking the "Eligible" deadline logic of EEVDF.
+3.  **Simplified Lag Tracking (Starvation Protection)**
+    *   **Strategy:** Add a `fLag` counter. If a thread is skipped during a "TryLock" failure (work stealing), increment `fLag`. If it exceeds a threshold, forcefully boost its urgency.
+    *   **Fairness Improvement:** **Low (Rank 3)**. Only helps in pathological edge cases (high contention). Most useful for preventing worst-case starvation rather than improving average-case fairness.
+    *   **Performance Impact:** **Very Low**. Simple integer increment/check.
 
 ## Conclusion
 
