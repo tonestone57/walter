@@ -792,8 +792,10 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	// 4. Balance "runt" clusters (5-7 cores) evenly (e.g., 6 -> 3+3, not 4+2).
 
 	int32* cpuList = new(std::nothrow) int32[cpuCount];
-	if (cpuList == NULL)
+	if (cpuList == NULL) {
+		delete[] sPackageToNode;
 		return B_NO_MEMORY;
+	}
 	ArrayDeleter<int32> cpuListDeleter(cpuList);
 
 	for (int32 i = 0; i < cpuCount; i++)
@@ -845,7 +847,6 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		int32 remainder = coresInL3 % numClusters;
 
 		int32 currentPackageSize = 0;
-		int32 assignedInL3 = 0;
 		int32 clusterIndex = 0;
 
 		// Create a SchedulerNode for this L3 domain
