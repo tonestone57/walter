@@ -820,7 +820,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount)
 		// Adaptive cluster size:
 		// We align with modern L3 cache domains (e.g., AMD Zen 5 has 12-16 cores per CCX).
 		// Ideally, we want 1 Package = 1 L3 Domain.
-		// However, we clamp at 16 to avoid excessive lock contention on the PackageEntry lock.
+		// However, we clamp at kMaxCoresPerPackage (24) to avoid excessive lock contention on the PackageEntry lock.
 		int32 targetPackageSize = 12;
 		if (cpuCount > 4096 * 12)
 			targetPackageSize = (cpuCount + 4095) / 4096;
