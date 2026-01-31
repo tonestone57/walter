@@ -34,13 +34,15 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Issue:** `ThreadData::_UpdateDeadline` calls `system_time()` twice (once for deadline, once for urgency).
 *   **Fix:** Cached `system_time()` in a local variable to reduce overhead.
 
+### 8. Power Saving Mode Parity
+*   **Issue:** `power_saving.cpp` exhibited similar issues to those fixed in `low_latency.cpp`: unbounded linear fallback scans and global RNG contention in internal search functions.
+*   **Fix:** Applied the same optimizations to `power_saving.cpp`:
+    *   Limited fallback scans in `choose_core`, `rebalance`, and `rebalance_irqs` to 64 attempts (randomized start).
+    *   Updated `search_local_node` and `search_global_random` to use per-CPU RNG and optimized collision detection.
+
 ## Pending Recommendations
 
-### 1. Power Saving Mode Issues
-*   **Issue:** `power_saving.cpp` exhibits similar issues to those fixed in `low_latency.cpp` and `scheduler_topology.h` but has not been updated:
-    *   **Unbounded Fallback:** `choose_core`, `rebalance`, and `rebalance_irqs` all contain unbounded linear loops over `gPackageEntries`.
-    *   **RNG Contention:** `search_local_node` and `search_global_random` (internal to `power_saving.cpp`) use `fast_get_random` instead of the per-CPU RNG.
-*   **Recommendation:** Apply similar fixes to `power_saving.cpp` (limit scan depth, switch to per-CPU RNG).
+(None)
 
 ## Verifications Performed
 

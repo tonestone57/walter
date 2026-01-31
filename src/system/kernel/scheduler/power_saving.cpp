@@ -261,16 +261,7 @@ search_local_node(SchedulerNode* node, Action action)
 	if (node == NULL)
 		return;
 
-	// Invert IdlePackageMask to find valid packages (assuming all valid packages are tracked there)
-	// Actually, IdlePackageMask only tracks idle ones. We need a way to find all packages in a node.
-	// Unfortunately, the current data structures don't strictly list "all packages in node".
-	// However, gPackageEntries is initialized such that packages are contiguous per node?
-	// The init() function loops i from 0 to packageCount, and assigns nodeIndex = i / 64.
-	// This confirms that gPackageEntries IS dense and chunked by node!
-	// Node 0 -> Packages 0-63
-	// Node 1 -> Packages 64-127
-	// So the original math was actually correct given the initialization logic in scheduler.cpp.
-
+	// SchedulerNode represents a 64-package block in the dense gPackageEntries array.
 	int32 nodeBaseIndex = node->NodeIndex() * 64;
 
 	// Ensure we don't go out of bounds of gPackageEntries
@@ -282,9 +273,11 @@ search_local_node(SchedulerNode* node, Action action)
 		return;
 
 	const int kMaxLocalAttempts = 4;
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
+		// Multiplicative random mapping to avoid expensive modulo
 		int32 index = nodeBaseIndex
-			+ (fast_get_random<uint32>() % packagesInNode);
+			+ (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
 		action(&gPackageEntries[index]);
 	}
 }
@@ -294,28 +287,40 @@ template <typename Action>
 static void
 search_global_random(Action action)
 {
-	const int32 kMaxRandomSamples = 256;
-	int32 visited[kMaxRandomSamples];
-	int32 samplesToTake = min_c(gRandomSamples, kMaxRandomSamples);
+	int32 samplesToTake = gRandomSamples;
 	int32 samplesTaken = 0;
 	int32 attempts = 0;
 	const int32 kMaxAttempts = samplesToTake * 2;
 
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+
+	// Bitmask for tracking visited packages to avoid collisions.
+	// Use a smaller fixed buffer on the stack (128 bytes = 1024 packages)
+	// which covers >99% of systems. For massive systems, we skip collision
+	// detection for indices beyond 1024 to save stack space.
+	const int32 kStackBitmaskSize = 1024;
+	uint64 visitedBits[kStackBitmaskSize / 64];
+
+	int32 packagesToCheck = min_c(gPackageCount, kStackBitmaskSize);
+	int32 wordsToClear = (packagesToCheck + 63) / 64;
+	memset(visitedBits, 0, wordsToClear * sizeof(uint64));
+
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-		int32 i = fast_get_random<uint32>() % gPackageCount;
+		// Multiplicative random mapping to avoid expensive modulo
+		int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 
-		// Avoid checking the same package twice
-		bool collision = false;
-		for (int32 j = 0; j < samplesTaken; j++) {
-			if (visited[j] == i) {
-				collision = true;
-				break;
-			}
+		// Avoid checking the same package twice using the bitmask
+		int32 word = i / 64;
+		int32 bit = i % 64;
+
+		// Only check collision if within our stack bitmask range
+		if (i < kStackBitmaskSize) {
+			if ((visitedBits[word] & (1ULL << bit)) != 0)
+				continue;
+			visitedBits[word] |= (1ULL << bit);
 		}
-		if (collision)
-			continue;
-		visited[samplesTaken++] = i;
 
+		samplesTaken++;
 		action(&gPackageEntries[i]);
 	}
 }
@@ -392,8 +397,15 @@ choose_core(const ThreadData* threadData)
 
 		// Fallback to full scan
 		if (bestCore == NULL && !useMask) {
-			for (int32 i = 0; i < gPackageCount; i++) {
-				check_package_min_load(&gPackageEntries[i], NULL, bestCore, bestLoad);
+			const int32 kMaxFallbackAttempts = 64;
+			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+
+			for (int32 i = 0; i < attempts; i++) {
+				int32 index = startIndex + i;
+				if (index >= gPackageCount)
+					index -= gPackageCount;
+				check_package_min_load(&gPackageEntries[index], NULL, bestCore, bestLoad);
 			}
 		}
 
@@ -470,8 +482,15 @@ rebalance(const ThreadData* threadData)
 		}
 
 		if (other == NULL && !useMask) {
-			for (int32 i = 0; i < gPackageCount; i++) {
-				check_package_packing(&gPackageEntries[i], NULL, other, bestLoad, foundNonOverloaded);
+			const int32 kMaxFallbackAttempts = 64;
+			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+
+			for (int32 i = 0; i < attempts; i++) {
+				int32 index = startIndex + i;
+				if (index >= gPackageCount)
+					index -= gPackageCount;
+				check_package_packing(&gPackageEntries[index], NULL, other, bestLoad, foundNonOverloaded);
 			}
 		}
 
@@ -575,7 +594,12 @@ rebalance_irqs(bool idle)
 		});
 
 	} else {
-		for (int32 i = 0; i < gPackageCount; i++) {
+		// Limit fallback attempts
+		const int32 kMaxFallbackAttempts = 64;
+		int32 startIndex = 0; // No random here as tryRandom was false (small system)
+		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+
+		for (int32 i = 0; i < attempts; i++) {
 			check_package_min_load(&gPackageEntries[i], NULL, other, bestLoad);
 		}
 	}
