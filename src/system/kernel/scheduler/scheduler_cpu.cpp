@@ -913,7 +913,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 
 		while (attempts++ < kMaxAttempts) {
 			// Select a random bit index based on registered cores to avoid sparse array slots
-			int32 i = fast_get_random<uint32>() % registeredCores;
+			int32 i = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % registeredCores;
 
 			// Check if this core is enabled
 			if (!((1U << i) & enabledMask))
