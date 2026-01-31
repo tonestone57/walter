@@ -26,15 +26,21 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Issue:** The logic for partitioning cores into L3 cache clusters used a "Ceiling" division (`(N + T - 1) / T`). For certain core counts (e.g., 13), this resulted in highly uneven clusters (e.g., 4, 3, 3, 3), creating "runt" clusters with suboptimal load balancing.
 *   **Fix:** Updated `build_topology_mappings` to use "Balanced Partitioning" (Round-to-Nearest: `(N + T / 2) / T`). This ensures 13 cores are split into 3 clusters of 5, 4, 4, which minimizes variance and improves utilization.
 
-### 6. Unbounded Linear Fallback
+### 6. Unbounded Linear Fallback (Low Latency Mode)
 *   **Issue:** `choose_core` fell back to a linear scan of all packages if random sampling phases failed. On massive systems (e.g., 4096 packages), this O(N) scan could cause significant latency spikes and lock contention.
 *   **Fix:** Limited the fallback scan to a maximum of 64 attempts (`kMaxFallbackAttempts`). The scan now starts from a randomized index to ensure statistical fairness over time while strictly bounding worst-case latency to O(1).
 
-## Further Recommendations (Pending)
-
-### 1. Redundant System Time Calls
+### 7. Redundant System Time Calls
 *   **Issue:** `ThreadData::_UpdateDeadline` calls `system_time()` twice (once for deadline, once for urgency).
-*   **Recommendation:** Cache `system_time()` in a local variable to reduce overhead.
+*   **Fix:** Cached `system_time()` in a local variable to reduce overhead.
+
+## Pending Recommendations
+
+### 1. Power Saving Mode Issues
+*   **Issue:** `power_saving.cpp` exhibits similar issues to those fixed in `low_latency.cpp` and `scheduler_topology.h` but has not been updated:
+    *   **Unbounded Fallback:** `choose_core`, `rebalance`, and `rebalance_irqs` all contain unbounded linear loops over `gPackageEntries`.
+    *   **RNG Contention:** `search_local_node` and `search_global_random` (internal to `power_saving.cpp`) use `fast_get_random` instead of the per-CPU RNG.
+*   **Recommendation:** Apply similar fixes to `power_saving.cpp` (limit scan depth, switch to per-CPU RNG).
 
 ## Verifications Performed
 
@@ -44,4 +50,4 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Clustering:** Verified logic with simulation scripts for various core counts (1, 4, 6, 9, 13, 14, 15).
 
 ## Conclusion
-The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage and bounded search algorithms. The new clustering logic ensures better topology balance.
+The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage and bounded search algorithms. The new clustering logic ensures better topology balance. Future work should focus on bringing `power_saving.cpp` up to parity with `low_latency.cpp`.
