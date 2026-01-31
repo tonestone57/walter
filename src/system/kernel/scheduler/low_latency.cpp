@@ -247,11 +247,13 @@ choose_core(const ThreadData* threadData)
 
 			search_local_node(node, [&](PackageEntry* entry) {
 				check_package(entry, NULL, bestCore, bestLoad);
+				return false;
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
 				check_package(entry, NULL, bestCore, bestLoad);
+				return false;
 			});
 
 		} else if (useMask) {

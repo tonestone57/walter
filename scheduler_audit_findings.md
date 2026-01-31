@@ -58,3 +58,7 @@ If `EnterFunction` hits the stack limit, it returns without pushing. `ExitFuncti
 ### 9. Load Tracking Constants
 **Status:** Verified.
 Dynamic calculation of `kRangeReciprocal` is correct.
+
+### 10. Load Tracking Overflow
+**Status:** Verified.
+`compute_load` logic in `load_tracking.h` guards against overflow for `n > 10`.
