@@ -70,3 +70,7 @@ Dynamic calculation of `kRangeReciprocal` is correct.
 ### 12. Locking Hierarchy
 **Status:** Verified.
 Locking order `Core -> CPU` is consistently respected. `TryLock` is used for cross-core stealing. Deadlocks are structurally prevented.
+
+### 13. State Transitions & Affinity
+**Status:** Verified.
+`CPUGoesIdle` / `WakesUp` transitions use atomic operations correctly. `ChooseCoreAndCPU` respects affinity masks and correctly panics on invalid configurations (which shouldn't occur due to upstream checks).
