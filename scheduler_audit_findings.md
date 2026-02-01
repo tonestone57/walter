@@ -62,3 +62,11 @@ Dynamic calculation of `kRangeReciprocal` is correct.
 ### 10. Load Tracking Overflow
 **Status:** Verified.
 `compute_load` logic in `load_tracking.h` guards against overflow for `n > 10`.
+
+### 11. RunQueue Fairness
+**Status:** Verified.
+`PeekBest` implements strictly priority-based selection with intra-priority O(1) scanning (depth 32) for fairness (vruntime). `ThreadDataOptimal` predicate correctly short-circuits for Real-Time threads.
+
+### 12. Locking Hierarchy
+**Status:** Verified.
+Locking order `Core -> CPU` is consistently respected. `TryLock` is used for cross-core stealing. Deadlocks are structurally prevented.
