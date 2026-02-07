@@ -96,7 +96,14 @@ public:
 			fPreviousPC = arch_debug_get_interrupt_pc(NULL);
 		else
 #endif
-			fPreviousWaitObject = previous->wait.object;
+		{
+			if (fPreviousWaitObjectType == THREAD_BLOCK_TYPE_OTHER) {
+				fPreviousWaitObject = alloc_tracing_buffer_strcpy(
+					(const char*)previous->wait.object, B_OS_NAME_LENGTH,
+					false);
+			} else
+				fPreviousWaitObject = previous->wait.object;
+		}
 
 		Initialized();
 	}

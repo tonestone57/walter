@@ -130,8 +130,12 @@ CPUEntry::Stop()
 		int32 irqVector = irq->irq;
 		locker.Unlock();
 
-		if (assign_io_interrupt_to_cpu(irqVector, -1) != B_OK)
-			panic("CPUEntry::Stop: failed to unassign interrupt %" B_PRId32, irqVector);
+		if (assign_io_interrupt_to_cpu(irqVector, -1) != B_OK) {
+			dprintf("CPUEntry::Stop: failed to unassign interrupt %" B_PRId32 "\n",
+				irqVector);
+			locker.Lock();
+			break;
+		}
 
 		locker.Lock();
 
@@ -176,7 +180,12 @@ CPUEntry::Remove(ThreadData* thread)
 struct ThreadDataVRuntimeCompare {
 	bool operator()(const ThreadData* a, const ThreadData* b) const
 	{
-		if (a->IsRealTime())
+		if (a->IsRealTime()) {
+			if (b->IsRealTime())
+				return false;
+			return true;
+		}
+		if (b->IsRealTime())
 			return false;
 		return a->GetVirtualRuntime() < b->GetVirtualRuntime();
 	}
@@ -1046,18 +1055,45 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask) const
 	int32 maxLoad = -1;
 
 	uint32 enabledMask = atomic_get((int32*)&fEnabledCoreMask);
-	while (enabledMask != 0) {
-		int32 i = __builtin_ctz(enabledMask);
-		enabledMask &= ~(1U << i);
+	if (enabledMask == 0)
+		return NULL;
 
-		CoreEntry* candidate = fCores[i];
-		if (mask != NULL && !mask->GetBit(candidate->ID()))
-			continue;
+	int32 count = __builtin_popcount(enabledMask);
+	int32 startBit = 0;
 
-		int32 load = atomic_get(&fCoreLoads[i]);
-		if (maxEntry == NULL || load > maxLoad) {
-			maxLoad = load;
-			maxEntry = candidate;
+	if (count > 1) {
+		int32 k = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % count;
+		// Find k-th set bit
+		uint32 tempMask = enabledMask;
+		for (int32 j = 0; j < k; j++) {
+			tempMask &= ~(1U << __builtin_ctz(tempMask));
+		}
+		startBit = __builtin_ctz(tempMask);
+	}
+
+	// Split mask into two parts to randomize start position
+	uint32 upperMask = enabledMask & (~0U << startBit);
+	uint32 lowerMask = enabledMask & ((1U << startBit) - 1);
+
+	// We iterate twice, but effectively just once over the set bits.
+	// The order of loops determines tie-breaking preference.
+
+	for (int pass = 0; pass < 2; pass++) {
+		uint32 currentMask = (pass == 0) ? upperMask : lowerMask;
+
+		while (currentMask != 0) {
+			int32 i = __builtin_ctz(currentMask);
+			currentMask &= ~(1U << i);
+
+			CoreEntry* candidate = fCores[i];
+			if (mask != NULL && !mask->GetBit(candidate->ID()))
+				continue;
+
+			int32 load = atomic_get(&fCoreLoads[i]);
+			if (maxEntry == NULL || load > maxLoad) {
+				maxLoad = load;
+				maxEntry = candidate;
+			}
 		}
 	}
 	return maxEntry;

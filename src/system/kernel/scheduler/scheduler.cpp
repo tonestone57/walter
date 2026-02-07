@@ -207,7 +207,8 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 			targetCPU = NULL;
 	} else if (gSingleCore) {
 		targetCore = &gCoreEntries[0];
-	} else if (waker != NULL && waker->scheduler_data->Core() != NULL) {
+	} else if (waker != NULL && waker->scheduler_data->Core() != NULL
+		&& waker->scheduler_data->Core()->GetLoad() < kHighLoad) {
 		targetCore = waker->scheduler_data->Core();
 	} else if (threadData->Core() != NULL
 		&& (!newOne || !threadData->HasCacheExpired())) {
@@ -699,7 +700,10 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	ASSERT(core->CPUCount() >= 0);
 
 	if (enabled) {
-		cpu->Start();
+		{
+			CoreCPUHeapLocker heapLocker(core);
+			cpu->Start();
+		}
 		gCPU[cpuID].disabled = false;
 		gCPUEnabled.SetBitAtomic(cpuID);
 	} else {
@@ -722,8 +726,11 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 			enqueuer(threadData);
 		}
 
-		cpu->UpdatePriority(B_IDLE_PRIORITY);
-		core->RemoveCPU(cpu, enqueuer);
+		{
+			CoreCPUHeapLocker heapLocker(core);
+			cpu->UpdatePriority(B_IDLE_PRIORITY);
+			core->RemoveCPU(cpu, enqueuer);
+		}
 
 		cpu->Stop();
 

@@ -300,6 +300,8 @@ ThreadData::GetQuantumLeft()
 	bigtime_t quantum = ComputeQuantum() - fTimeUsed;
 	quantum += stolenTime;
 	quantum = max_c(quantum, gCurrentMode->minimal_quantum);
+	if (quantum > gCurrentMode->maximum_latency)
+		quantum = gCurrentMode->maximum_latency;
 
 	return quantum;
 }
@@ -327,7 +329,9 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 
 	// too little time left, it's better make the next quantum a bit longer
 	bigtime_t skipTime = gCurrentMode->minimal_quantum / 2;
-	if (hasYielded || wasPreempted || timeLeft <= skipTime) {
+	if (hasYielded) {
+		timeLeft = 0;
+	} else if (wasPreempted || timeLeft <= skipTime) {
 		fStolenTime += timeLeft;
 		timeLeft = 0;
 	}
