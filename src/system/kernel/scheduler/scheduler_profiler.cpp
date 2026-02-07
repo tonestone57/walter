@@ -43,6 +43,9 @@ Profiler::Profiler()
 			= new(std::nothrow) FunctionEntry[kMaxFunctionStackEntries];
 		if (fFunctionStacks[i] == NULL) {
 			fStatus = B_NO_MEMORY;
+			delete[] fFunctionData;
+			for (int32 j = 0; j < i; j++)
+				delete[] fFunctionStacks[j];
 			return;
 		}
 		memset(fFunctionStacks[i], 0,

@@ -6,6 +6,8 @@
 
 #include "scheduler_cpu.h"
 
+#include <new>
+
 #include <util/AutoLock.h>
 #include <util/Random.h>
 
@@ -631,6 +633,9 @@ CoreEntry::Init(int32 id, PackageEntry* package)
 {
 	fCoreID = id;
 	fPackage = package;
+
+	fCPUHeap.~CPUPriorityHeap();
+	new(&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
 }
 
 
