@@ -61,6 +61,7 @@ Profiler::Profiler()
 bool
 Profiler::EnterFunction(int32 cpu, const char* functionName)
 {
+	InterruptsLocker _;
 	nanotime_t start = system_time_nsecs();
 
 	FunctionData* function = _FindFunction(functionName);
@@ -89,6 +90,7 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 void
 Profiler::ExitFunction(int32 cpu, const char* functionName)
 {
+	InterruptsLocker _;
 	nanotime_t start = system_time_nsecs();
 
 	int32 stackDepth = fFunctionStackPointers[cpu];
