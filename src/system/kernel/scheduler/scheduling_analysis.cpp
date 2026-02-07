@@ -320,14 +320,18 @@ public:
 	status_t AddWaitObject(uint32 type, void* object,
 		WaitObject** _waitObject = NULL)
 	{
-		if (WaitObjectFor(type, object) != NULL)
+		WaitObject* waitObject = WaitObjectFor(type, object);
+		if (waitObject != NULL) {
+			if (_waitObject != NULL)
+				*_waitObject = waitObject;
 			return B_OK;
+		}
 
 		void* memory = Allocate(sizeof(WaitObject));
 		if (memory == NULL)
 			return B_NO_MEMORY;
 
-		WaitObject* waitObject = new(memory) WaitObject(type, object);
+		waitObject = new(memory) WaitObject(type, object);
 		Insert(waitObject);
 		fAnalysis.wait_object_count++;
 

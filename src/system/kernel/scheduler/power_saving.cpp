@@ -426,8 +426,31 @@ choose_core(const ThreadData* threadData)
 		}
 	}
 
-	if (core == NULL)
+	if (core == NULL) {
 		core = CoreEntry::GetCore(smp_get_current_cpu());
+		if (useMask && !core->CPUMask().Matches(mask)) {
+			// fallback to the first valid core
+			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+			const int32 cpuCount = smp_get_num_cpus();
+			for (int32 i = 0; i < kCPUSetArraySize; i++) {
+				uint32 bits = mask.Bits(i);
+				while (bits != 0) {
+					int bit = __builtin_ctz(bits);
+					bits &= ~(1U << bit);
+					int32 cpuID = i * 32 + bit;
+
+					if (cpuID >= cpuCount)
+						continue;
+
+					core = CPUEntry::GetCPU(cpuID)->Core();
+					if (core != NULL)
+						break;
+				}
+				if (core != NULL && core->CPUMask().Matches(mask))
+					break;
+			}
+		}
+	}
 
 	ASSERT(core != NULL);
 	return core;
@@ -451,7 +474,8 @@ rebalance(const ThreadData* threadData)
 	CoreEntry* core = threadData->Core();
 
 	int32 coreLoad = core->GetLoad();
-	int32 threadLoad = threadData->GetLoad() / core->CPUCount();
+	int32 cpuCount = core->CPUCount();
+	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
 	if (coreLoad > kHighLoad) {
 		if (atomic_pointer_get(&sSmallTaskCore) == core) {
 			atomic_pointer_set(&sSmallTaskCore, (CoreEntry*)NULL);
@@ -468,7 +492,7 @@ rebalance(const ThreadData* threadData)
 			return core;
 
 		CoreEntry* other = NULL;
-		int32 bestLoad = -1;
+		int32 bestLoad = -2;
 		bool foundNonOverloaded = false;
 
 		// Use random sampling if possible
@@ -608,7 +632,7 @@ rebalance_irqs(bool idle)
 		return;
 
 	CoreEntry* other = NULL;
-	int32 bestLoad = -1;
+	int32 bestLoad = -2;
 
 	// Use random sampling if possible
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
@@ -633,11 +657,15 @@ rebalance_irqs(bool idle)
 	} else {
 		// Limit fallback attempts
 		const int32 kMaxFallbackAttempts = 64;
-		int32 startIndex = 0; // No random here as tryRandom was false (small system)
+		int32 startIndex = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+			% gPackageCount;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 		for (int32 i = 0; i < attempts; i++) {
-			check_package_min_load(&gPackageEntries[i], NULL, other, bestLoad);
+			int32 index = startIndex + i;
+			if (index >= gPackageCount)
+				index -= gPackageCount;
+			check_package_min_load(&gPackageEntries[index], NULL, other, bestLoad);
 		}
 	}
 

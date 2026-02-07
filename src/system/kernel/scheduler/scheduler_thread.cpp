@@ -201,8 +201,10 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	CPUSet mask = GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
-	if (targetCore != NULL && (useMask && !targetCore->CPUMask().Matches(mask)))
+	if (targetCore != NULL && (useMask
+			&& GetCPUMask().And(targetCore->CPUMask()).IsEmpty())) {
 		targetCore = NULL;
+	}
 	if (targetCPU != NULL && (useMask && !mask.GetBit(targetCPU->ID())))
 		targetCPU = NULL;
 

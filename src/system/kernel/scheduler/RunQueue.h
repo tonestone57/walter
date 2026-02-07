@@ -159,7 +159,9 @@ RunQueueMemberGetLink<Element, LinkMember>::operator()(Element* element) const
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::ConstIterator::ConstIterator()
 	:
-	fList(NULL)
+	fList(NULL),
+	fPriority(0),
+	fNext(NULL)
 {
 }
 

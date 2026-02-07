@@ -282,8 +282,31 @@ choose_core(const ThreadData* threadData)
 		core = bestCore;
 	}
 
-	if (core == NULL)
+	if (core == NULL) {
 		core = CoreEntry::GetCore(smp_get_current_cpu());
+		if (useMask && !core->CPUMask().Matches(mask)) {
+			// fallback to the first valid core
+			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+			const int32 cpuCount = smp_get_num_cpus();
+			for (int32 i = 0; i < kCPUSetArraySize; i++) {
+				uint32 bits = mask.Bits(i);
+				while (bits != 0) {
+					int bit = __builtin_ctz(bits);
+					bits &= ~(1U << bit);
+					int32 cpuID = i * 32 + bit;
+
+					if (cpuID >= cpuCount)
+						continue;
+
+					core = CPUEntry::GetCPU(cpuID)->Core();
+					if (core != NULL)
+						break;
+				}
+				if (core != NULL && core->CPUMask().Matches(mask))
+					break;
+			}
+		}
+	}
 
 	ASSERT(core != NULL);
 
@@ -391,7 +414,8 @@ rebalance(const ThreadData* threadData)
 	int32 difference = coreLoad - otherLoad - threshold;
 	ASSERT(difference > 0);
 
-	int32 threadLoad = threadData->GetLoad() / core->CPUCount();
+	int32 cpuCount = core->CPUCount();
+	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
 	return difference >= threadLoad ? other : core;
 }
 
@@ -451,8 +475,15 @@ rebalance_irqs(bool idle)
 
 	// Use empty mask (NULL), as we don't care about affinity here
 	if (other == NULL) {
-		for (int32 i = 0; i < gPackageCount; i++) {
-			check_package(&gPackageEntries[i], NULL, other, bestLoad);
+		const int32 kMaxFallbackAttempts = 64;
+		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+
+		for (int32 i = 0; i < attempts; i++) {
+			int32 index = startIndex + i;
+			if (index >= gPackageCount)
+				index -= gPackageCount;
+			check_package(&gPackageEntries[index], NULL, other, bestLoad);
 		}
 	}
 
