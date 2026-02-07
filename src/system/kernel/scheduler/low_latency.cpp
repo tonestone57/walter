@@ -452,9 +452,11 @@ rebalance_irqs(bool idle)
 		}
 	}
 
-	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
+	if (other == NULL)
+		return;
 
-	ASSERT(other != NULL);
+	CoreCPUHeapLocker _(other);
+	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
 
 	CoreEntry* core = CoreEntry::GetCore(cpu->cpu_num);
 	if (other == core)
