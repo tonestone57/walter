@@ -48,7 +48,7 @@ _LoadavgUpdate(void *data, int iteration)
 status_t
 scheduler_loadavg_init()
 {
-	register_kernel_daemon(_LoadavgUpdate, NULL, 5000);
+	register_kernel_daemon(_LoadavgUpdate, NULL, 5000000);
 		// run the daemon once five second
 
 	return B_OK;

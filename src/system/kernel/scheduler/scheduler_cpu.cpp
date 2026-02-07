@@ -1212,6 +1212,8 @@ dump_idle_cores(int /* argc */, char** /* argv */)
 void Scheduler::init_debug_commands()
 {
 	new(&sDebugCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
+	if (sDebugCPUHeap.InitCheck() != B_OK)
+		panic("Scheduler::init_debug_commands: failed to allocate CPU heap");
 
 	add_debugger_command_etc("run_queue", &dump_run_queue,
 		"List threads in run queue", "\nLists threads in run queue", 0);

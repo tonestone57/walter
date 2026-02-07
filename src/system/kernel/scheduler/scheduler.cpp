@@ -285,8 +285,10 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 			ASSERT(thread->cpu != NULL);
 			CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
 
-			CoreCPUHeapLocker _(threadData->Core());
-			cpu->UpdatePriority(priority);
+			if (!gCPU[cpu->ID()].disabled) {
+				CoreCPUHeapLocker _(threadData->Core());
+				cpu->UpdatePriority(priority);
+			}
 		}
 
 		return oldPriority;
@@ -869,7 +871,8 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		// Formula: Round to nearest integer to find ideal cluster count.
 		// Example: 13 cores, target 4. 13/4 = 3.25 -> 3 clusters.
 		// Distribution: 5, 4, 4 (Low variance).
-		int32 numClusters = (coresInL3 + targetClusterSize / 2) / targetClusterSize;
+		int32 numClusters = (coresInL3 + targetClusterSize / 2)
+			/ targetClusterSize;
 		if (numClusters < 1)
 			numClusters = 1;
 
@@ -1253,7 +1256,8 @@ _user_estimate_max_scheduling_latency(thread_id id)
 		const int kMaxCoreSelectionRetries = 100;
 		int retries = 0;
 		do {
-			core = &gCoreEntries[fast_get_random<uint32>() % gCoreCount];
+			core = &gCoreEntries[CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+				% gCoreCount];
 		} while (core->Package() == NULL && retries++ < kMaxCoreSelectionRetries);
 
 		// Fallback to the first core if random selection failed

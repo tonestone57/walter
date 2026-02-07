@@ -36,7 +36,8 @@ ThreadData::_InitBase()
 	fHomePackage = -1;
 
 	fEffectivePriority = GetPriority();
-	fBaseQuantum = sQuantumLengths[GetEffectivePriority()];
+	fBaseQuantum = sQuantumLengths[min_c(GetEffectivePriority(),
+		THREAD_MAX_SET_PRIORITY)];
 
 	fTimeUsed = 0;
 
@@ -332,28 +333,31 @@ ThreadData::ComputeQuantumLengths()
 		const int32 kBaseWeight = 10;
 		int32 taskWeight = max_c(1, priority);
 
-		sVirtualDeadlineSlices[priority] = kBaseSlice * kBaseWeight / taskWeight;
+		atomic_set64(&sVirtualDeadlineSlices[priority],
+			kBaseSlice * kBaseWeight / taskWeight);
 	}
 
 	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
 		const bigtime_t kQuantum0 = gCurrentMode->base_quantum;
 		if (priority >= B_URGENT_DISPLAY_PRIORITY) {
-			sQuantumLengths[priority] = kQuantum0;
+			atomic_set64(&sQuantumLengths[priority], kQuantum0);
 			continue;
 		}
 
 		const bigtime_t kQuantum1
 			= kQuantum0 * gCurrentMode->quantum_multipliers[0];
 		if (priority > B_NORMAL_PRIORITY) {
-			sQuantumLengths[priority] = _ScaleQuantum(kQuantum1, kQuantum0,
-				B_URGENT_DISPLAY_PRIORITY, B_NORMAL_PRIORITY, priority);
+			atomic_set64(&sQuantumLengths[priority],
+				_ScaleQuantum(kQuantum1, kQuantum0, B_URGENT_DISPLAY_PRIORITY,
+					B_NORMAL_PRIORITY, priority));
 			continue;
 		}
 
 		const bigtime_t kQuantum2
 			= kQuantum0 * gCurrentMode->quantum_multipliers[1];
-		sQuantumLengths[priority] = _ScaleQuantum(kQuantum2, kQuantum1,
-			B_NORMAL_PRIORITY, B_IDLE_PRIORITY, priority);
+		atomic_set64(&sQuantumLengths[priority],
+			_ScaleQuantum(kQuantum2, kQuantum1, B_NORMAL_PRIORITY,
+				B_IDLE_PRIORITY, priority));
 	}
 }
 

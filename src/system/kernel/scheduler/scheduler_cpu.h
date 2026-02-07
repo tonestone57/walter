@@ -304,7 +304,6 @@ public:
 	inline				int32				RegisteredCoreCount() const
 											{ return fRegisteredCoreCount; }
 
-	static inline		PackageEntry*		GetMostIdlePackage();
 	static inline		PackageEntry*		GetLeastIdlePackage();
 
 	inline				void				ReadLockCore();
@@ -679,24 +678,6 @@ PackageEntry::GetCore(int32 index) const
 }
 
 
-/* static */ inline PackageEntry*
-PackageEntry::GetMostIdlePackage()
-{
-	SCHEDULER_ENTER_FUNCTION();
-
-	PackageEntry* current = &gPackageEntries[0];
-	for (int32 i = 1; i < gPackageCount; i++) {
-		if (atomic_get((int32*)&gPackageEntries[i].fIdleCoreCount)
-			> atomic_get((int32*)&current->fIdleCoreCount)) {
-			current = &gPackageEntries[i];
-		}
-	}
-
-	if (atomic_get((int32*)&current->fIdleCoreCount) == 0)
-		return NULL;
-
-	return current;
-}
 
 
 /* static */ inline PackageEntry*
