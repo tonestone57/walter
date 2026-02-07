@@ -322,6 +322,11 @@ rebalance(const ThreadData* threadData)
 		}
 	}
 
+	if (other == NULL) {
+		if (core->CPUCount() == 0)
+			return NULL; // Force migration to *any* core by triggering full search
+		return core; // Fallback
+	}
 	ASSERT(other != NULL);
 
 	// Check if the least loaded core is significantly less loaded than

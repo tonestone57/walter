@@ -1295,9 +1295,14 @@ _user_estimate_max_scheduling_latency(thread_id id)
 				% gCoreCount];
 		} while (core->Package() == NULL && retries++ < kMaxCoreSelectionRetries);
 
-		// Fallback to the first core if random selection failed
+		// Fallback to linear search if random selection failed
 		if (core->Package() == NULL) {
-			core = &gCoreEntries[0];
+			for (int32 i = 0; i < gCoreCount; i++) {
+				core = &gCoreEntries[i];
+				if (core->Package() != NULL)
+					break;
+			}
+			// If still NULL (impossible if scheduler init succeeded), fallback to current CPU's core
 			if (core->Package() == NULL)
 				core = CoreEntry::GetCore(smp_get_current_cpu());
 		}

@@ -91,6 +91,9 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 			}
 		}
 	}
+
+	if (core == NULL)
+		core = CoreEntry::GetCore(smp_get_current_cpu());
 }
 
 
@@ -146,10 +149,21 @@ choose_idle_core()
 
 	if (package == NULL) {
 		// No partially idle packages. Check for any idle package using the mask.
-		uint64 idlePackageMask = atomic_get64((int64*)&gIdlePackageMask);
-		if (idlePackageMask != 0) {
-			int32 packageIndex = __builtin_ctzll(idlePackageMask);
-			package = &gPackageEntries[packageIndex];
+		uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
+		while (idleNodeMask != 0) {
+			int32 nodeIndex = __builtin_ctzll(idleNodeMask);
+			idleNodeMask &= ~(1ULL << nodeIndex);
+
+			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
+			uint64 idlePackageMask = node->IdlePackageMask();
+
+			if (idlePackageMask != 0) {
+				int32 packageIndex = __builtin_ctzll(idlePackageMask);
+				// fPackageStartIndex + packageIndex gives global index
+				int32 globalIndex = node->PackageStartIndex() + packageIndex;
+				package = &gPackageEntries[globalIndex];
+				break;
+			}
 		}
 	}
 
@@ -453,7 +467,11 @@ rebalance(const ThreadData* threadData)
 		}
 
 		// If other is NULL, we failed to find candidate.
-		if (other == NULL) return core; // Fallback
+		if (other == NULL) {
+			if (core->CPUCount() == 0)
+				return NULL; // Force migration to *any* core by triggering full search
+			return core; // Fallback
+		}
 		ASSERT(other != NULL);
 
 		int32 coreNewLoad = coreLoad - threadLoad;
@@ -533,22 +551,21 @@ rebalance_irqs(bool idle)
 	irq_assignment* chosen = NULL;
 	irq_assignment* irq = (irq_assignment*)list_get_first_item(&cpu->irqs);
 
+	int32 totalLoad = 0;
 	while (irq != NULL) {
 		if (chosen == NULL || chosen->load < irq->load)
 			chosen = irq;
+		totalLoad += irq->load;
 		irq = (irq_assignment*)list_get_next_item(&cpu->irqs, irq);
 	}
 
 	int32 chosenIRQ = -1;
-	int32 chosenLoad = -1;
-	if (chosen != NULL) {
+	if (chosen != NULL)
 		chosenIRQ = chosen->irq;
-		chosenLoad = chosen->load;
-	}
 
 	locker.Unlock();
 
-	if (chosen == NULL || chosenLoad < kLowLoad)
+	if (chosen == NULL || totalLoad < kLowLoad)
 		return;
 
 	CoreEntry* other = NULL;
@@ -573,12 +590,12 @@ rebalance_irqs(bool idle)
 			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
 			return false;
 		});
+	}
 
-	} else {
+	if (other == NULL) {
 		// Limit fallback attempts
 		const int32 kMaxFallbackAttempts = 64;
-		int32 startIndex = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-			% gPackageCount;
+		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 		for (int32 i = 0; i < attempts; i++) {

@@ -134,7 +134,8 @@ CPUEntry::Stop()
 		status_t status = assign_io_interrupt_to_cpu(irqVector, -1);
 		if (status != B_OK) {
 			dprintf("CPUEntry::Stop: failed to unassign interrupt %" B_PRId32
-				": %s\n", irqVector, strerror(status));
+				": %s. Trying current CPU.\n", irqVector, strerror(status));
+			status = assign_io_interrupt_to_cpu(irqVector, smp_get_current_cpu());
 		}
 
 		locker.Lock();
