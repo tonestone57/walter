@@ -188,6 +188,8 @@ cmd_scheduler(int argc, char** argv)
 
 				if (state == STILL_RUNNING) {
 					// Thread was running and continues to run.
+					// Update lastTime to start of this segment.
+					lastTime = entry->Time();
 					state = RUNNING;
 				}
 

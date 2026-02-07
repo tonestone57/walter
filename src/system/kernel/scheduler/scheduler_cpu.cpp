@@ -97,7 +97,8 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 {
 	fCPUNumber = id;
 	fCore = core;
-	fRandomState = (uint32)system_time() + id * 31337 + 1;
+	// Mix id into high bits to avoid correlation if system_time is similar
+	fRandomState = (uint32)system_time() ^ (id << 16) ^ (id * 31337) ^ 1;
 	if (fRandomState == 0)
 		fRandomState = 0x12345678;
 }
@@ -108,7 +109,7 @@ CPUEntry::Start()
 {
 	fThreadCount = 0;
 	fLoad = 0;
-	fMeasureTime = 0;
+	fMeasureTime = system_time();
 	fMeasureActiveTime = 0;
 	fCore->AddCPU(this);
 }

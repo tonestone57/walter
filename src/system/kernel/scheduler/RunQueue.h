@@ -495,6 +495,9 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	const int kMaxSearchCount = 16;
+	int count = 0;
+
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
 
@@ -508,15 +511,15 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			unsigned int priority = i * 32 + bit;
 			Element* current = fHeads[priority];
 
-			const int kSearchDepth = 16;
-			int count = 0;
-
-			while (current != NULL && count++ < kSearchDepth) {
+			while (current != NULL && count++ < kMaxSearchCount) {
 				if (predicate(current))
 					return current;
 
 				current = sGetLink(current)->fNext;
 			}
+
+			if (count >= kMaxSearchCount)
+				return NULL;
 		}
 	}
 	return NULL;

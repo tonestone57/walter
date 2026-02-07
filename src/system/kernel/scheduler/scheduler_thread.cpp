@@ -220,6 +220,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 
 	ASSERT(targetCore != NULL);
 	ASSERT(targetCPU != NULL);
+	ASSERT(targetCPU->Core() == targetCore);
 
 	// First touch: assign home package if not yet assigned
 	if (fHomePackage == -1)

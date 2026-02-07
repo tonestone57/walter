@@ -221,7 +221,16 @@ public:
 
 		size_t maxObjectSize = max_c(max_c(sizeof(Thread), sizeof(WaitObject)),
 			sizeof(ThreadWaitObject));
-		fHashTableSize = size / (maxObjectSize + sizeof(HashObject*));
+		size_t entrySize = maxObjectSize + sizeof(HashObject*);
+		fHashTableSize = size / entrySize;
+		if (fHashTableSize == 0) {
+			// Buffer too small even for one entry
+			fHashTable = NULL;
+			fNextAllocation = NULL;
+			fRemainingBytes = 0;
+			return;
+		}
+
 		fHashTable = (HashObject**)((uint8*)fBuffer + fSize) - fHashTableSize;
 		fNextAllocation = (uint8*)fBuffer;
 		fRemainingBytes = (addr_t)fHashTable - (addr_t)fBuffer;

@@ -239,7 +239,6 @@ choose_core(const ThreadData* threadData)
 		core = CoreEntry::GetCore(smp_get_current_cpu());
 		if (useMask && !core->CPUMask().Matches(mask)) {
 			// fallback to the first valid core
-			core = NULL;
 			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 			const int32 cpuCount = smp_get_num_cpus();
 			for (int32 i = 0; i < kCPUSetArraySize; i++) {

@@ -201,8 +201,8 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	CPUEntry* targetCPU = NULL;
 	CoreEntry* targetCore = NULL;
 	if (thread->pinned_to_cpu > 0) {
-		ASSERT(thread->previous_cpu != NULL);
-		targetCPU = &gCPUEntries[thread->previous_cpu->cpu_num];
+		int32 pinnedCPU = thread->pinned_to_cpu - 1;
+		targetCPU = CPUEntry::GetCPU(pinnedCPU);
 		if (gCPU[targetCPU->ID()].disabled)
 			targetCPU = NULL;
 	} else if (gSingleCore) {
