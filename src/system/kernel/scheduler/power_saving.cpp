@@ -582,12 +582,15 @@ rebalance_irqs(bool idle)
 	}
 
 	int32 chosenIRQ = -1;
-	if (chosen != NULL)
+	int32 chosenLoad = -1;
+	if (chosen != NULL) {
 		chosenIRQ = chosen->irq;
+		chosenLoad = chosen->load;
+	}
 
 	locker.Unlock();
 
-	if (chosen == NULL || chosen->load < kLowLoad)
+	if (chosen == NULL || chosenLoad < kLowLoad)
 		return;
 
 	CoreEntry* other = NULL;

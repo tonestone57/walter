@@ -129,6 +129,11 @@ CPUEntry::Stop()
 		assign_io_interrupt_to_cpu(irqVector, -1);
 
 		locker.Lock();
+
+		irq_assignment* currentHead
+			= (irq_assignment*)list_get_first_item(&entry->irqs);
+		if (currentHead != NULL && currentHead->irq == irqVector)
+			break;
 	}
 	locker.Unlock();
 }
