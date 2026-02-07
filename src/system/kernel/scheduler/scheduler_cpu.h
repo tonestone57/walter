@@ -36,10 +36,10 @@ class CPUEntry;
 class CoreEntry;
 class PackageEntry;
 
-// Adjusted to 8 to support finer-grained clustering (clusters of 4 cores).
+// Adjusted to 16 to support finer-grained clustering (clusters of 4 cores).
 // This reduces lock contention and allows L3 domains to be represented as
 // groups of packages (SchedulerNode).
-const int32 kMaxCoresPerPackage = 8;
+const int32 kMaxCoresPerPackage = 16;
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
@@ -312,8 +312,6 @@ public:
 
 						CoreEntry*			PeekMinimumLoadCore(
 												const CPUSet* mask = NULL) const;
-						CoreEntry*			PeekMaximumLoadCore(
-												const CPUSet* mask = NULL) const;
 
 private:
 						int32				fPackageID;
@@ -496,11 +494,13 @@ CoreEntry::GetLoad() const
 	if (cpuCount <= 0)
 		return kMaxLoad;
 
+	int32 load = atomic_get(const_cast<int32*>(&fLoad));
+
 	// Optimization: Avoid division and multiplication in the common case.
 	if (cpuCount == 1 && fCapacity == kDefaultCapacity)
-		return min_c(fLoad, kMaxLoad);
+		return min_c(load, kMaxLoad);
 
-	int32 load = fLoad / cpuCount;
+	load /= cpuCount;
 	load = (int64)load * kDefaultCapacity / fCapacity;
 	return min_c(load, kMaxLoad);
 }
