@@ -686,8 +686,8 @@ CoreEntry::Remove(ThreadData* thread)
 	ASSERT(thread->IsEnqueued());
 	thread->SetDequeued();
 
-	fRunQueue.Remove(thread);
 	atomic_add(&fThreadCount, -1);
+	fRunQueue.Remove(thread);
 }
 
 
