@@ -528,16 +528,24 @@ pack_irqs()
 		return;
 
 	SpinLocker locker(cpu->irqs_lock);
-	while (list_get_first_item(&cpu->irqs) != NULL) {
+	while (true) {
 		irq_assignment* irq = (irq_assignment*)list_get_first_item(&cpu->irqs);
+		if (irq == NULL)
+			break;
+
+		int32 irqVector = irq->irq;
 		locker.Unlock();
 
 		CoreCPUHeapLocker _(smallTaskCore);
 		int32 newCPU = smallTaskCore->CPUHeap()->PeekRoot()->ID();
 		_.Unlock();
 
-		if (newCPU != cpu->cpu_num)
-			assign_io_interrupt_to_cpu(irq->irq, newCPU);
+		if (newCPU != cpu->cpu_num) {
+			assign_io_interrupt_to_cpu(irqVector, newCPU);
+		} else {
+			locker.Lock();
+			break;
+		}
 
 		locker.Lock();
 	}
