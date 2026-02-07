@@ -311,6 +311,8 @@ public:
 
 						CoreEntry*			PeekMinimumLoadCore(
 												const CPUSet* mask = NULL) const;
+						CoreEntry*			PeekMaximumLoadCore(
+												const CPUSet* mask = NULL) const;
 
 private:
 						int32				fPackageID;
@@ -686,14 +688,41 @@ PackageEntry::GetLeastIdlePackage()
 	SCHEDULER_ENTER_FUNCTION();
 
 	PackageEntry* package = NULL;
+	int32 bestIdleCount = -1;
 
+	// Use random sampling for large systems to avoid O(N) scan
+	if (gPackageCount > kRandomSearchThreshold) {
+		int32 attempts = 0;
+		// 4 + log2(N) attempts
+		const int kMaxAttempts = 4 + (31 - __builtin_clz(gPackageCount));
+
+		while (attempts++ < kMaxAttempts) {
+			int32 i = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+				% gPackageCount;
+			PackageEntry* current = &gPackageEntries[i];
+			int32 currentIdleCoreCount
+				= atomic_get((int32*)&current->fIdleCoreCount);
+
+			if (currentIdleCoreCount != 0) {
+				if (package == NULL || currentIdleCoreCount < bestIdleCount) {
+					package = current;
+					bestIdleCount = currentIdleCoreCount;
+				}
+			}
+		}
+		if (package != NULL)
+			return package;
+	}
+
+	// Fallback to linear scan
 	for (int32 i = 0; i < gPackageCount; i++) {
 		PackageEntry* current = &gPackageEntries[i];
 
 		int32 currentIdleCoreCount = atomic_get((int32*)&current->fIdleCoreCount);
 		if (currentIdleCoreCount != 0 && (package == NULL
-				|| currentIdleCoreCount < atomic_get((int32*)&package->fIdleCoreCount))) {
+				|| currentIdleCoreCount < bestIdleCount)) {
 			package = current;
+			bestIdleCount = currentIdleCoreCount;
 		}
 	}
 

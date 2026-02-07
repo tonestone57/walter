@@ -1180,7 +1180,7 @@ static int
 dump_idle_cores(int /* argc */, char** /* argv */)
 {
 	kprintf("Idle packages:\n");
-	uint64 nodeMask = gIdleNodeMask;
+	uint64 nodeMask = atomic_get64((int64*)&gIdleNodeMask);
 
 	if (nodeMask != 0) {
 		kprintf("node package cores\n");

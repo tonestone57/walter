@@ -52,8 +52,6 @@ has_cache_expired(const ThreadData* threadData)
 static void
 check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 {
-	entry->ReadLockCore();
-
 	// Find the core with highest load that isn't overloaded.
 	// If all are overloaded, we might pick the least loaded later.
 	// For choosing a small task core, we want packing.
@@ -66,7 +64,6 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 			bestLoad = load;
 		}
 	}
-	entry->ReadUnlockCore();
 }
 
 
@@ -78,8 +75,27 @@ choose_small_task_core()
 	CoreEntry* core = NULL;
 	int32 bestLoad = -1;
 
-	for (int32 i = 0; i < gPackageCount; i++) {
-		check_package_small_task(&gPackageEntries[i], core, bestLoad);
+	bool tryRandom = gPackageCount > kRandomSearchThreshold;
+	if (tryRandom) {
+		search_global_random([&](PackageEntry* entry) {
+			check_package_small_task(entry, core, bestLoad);
+			return false;
+		});
+	}
+
+	// Fallback to full scan if random sampling failed to find a candidate
+	// or if system is small.
+	if (core == NULL) {
+		const int32 kMaxFallbackAttempts = 64;
+		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+
+		for (int32 i = 0; i < attempts; i++) {
+			int32 index = startIndex + i;
+			if (index >= gPackageCount)
+				index -= gPackageCount;
+			check_package_small_task(&gPackageEntries[index], core, bestLoad);
+		}
 	}
 
 	if (core == NULL)
@@ -120,8 +136,6 @@ static void
 check_package_min_load(PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& bestCore, int32& bestLoad)
 {
-	entry->ReadLockCore();
-
 	CoreEntry* candidate = entry->PeekMinimumLoadCore(mask);
 
 	if (candidate != NULL) {
@@ -131,7 +145,6 @@ check_package_min_load(PackageEntry* entry, const CPUSet* mask,
 			bestLoad = load;
 		}
 	}
-	entry->ReadUnlockCore();
 }
 
 
@@ -172,8 +185,6 @@ static void
 check_package_packing(PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& other, int32& bestLoad, bool& foundNonOverloaded)
 {
-	entry->ReadLockCore();
-
 	// We want to pack: find the busiest core that is NOT overloaded (load < kHighLoad).
 	// If all active cores are overloaded, pick the least loaded one (to minimize overload).
 	CoreEntry* candidate = entry->PeekMaximumLoadCore(mask);
@@ -217,7 +228,6 @@ check_package_packing(PackageEntry* entry, const CPUSet* mask,
 			}
 		}
 	}
-	entry->ReadUnlockCore();
 }
 
 
@@ -411,10 +421,13 @@ choose_core(const ThreadData* threadData)
 
 		if (core == NULL) {
 			core = choose_idle_core();
-			if (useMask && !core->CPUMask().Matches(mask))
+			if (core != NULL && useMask && !core->CPUMask().Matches(mask))
 				core = NULL;
 		}
 	}
+
+	if (core == NULL)
+		core = CoreEntry::GetCore(smp_get_current_cpu());
 
 	ASSERT(core != NULL);
 	return core;
@@ -482,6 +495,7 @@ rebalance(const ThreadData* threadData)
 		}
 
 		if (other == NULL && !useMask) {
+			// Phase 4: Limited Global Scan (Fallback)
 			const int32 kMaxFallbackAttempts = 64;
 			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);

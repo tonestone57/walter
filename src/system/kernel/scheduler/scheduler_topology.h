@@ -29,7 +29,8 @@ search_local_node(SchedulerNode* node, Action action)
 	if (nodeBaseIndex >= gPackageCount || packagesInNode <= 0)
 		return;
 
-	const int kMaxLocalAttempts = 4;
+	// Limit attempts to avoid duplicate probes on small nodes
+	const int kMaxLocalAttempts = min_c(4, packagesInNode);
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
 		// Multiplicative random mapping to avoid expensive modulo
@@ -45,7 +46,7 @@ template <typename Action>
 static void
 search_global_random(Action action)
 {
-	int32 samplesToTake = gRandomSamples;
+	int32 samplesToTake = min_c(gRandomSamples, gPackageCount);
 	int32 samplesTaken = 0;
 	int32 attempts = 0;
 	const int32 kMaxAttempts = samplesToTake * 2;

@@ -29,6 +29,8 @@ static struct loadavg sAverageRunnable = {{0, 0, 0}, kFScale};
 const static uint64 sCExp[3] = {(uint64)(0.9200444146293232 * kFScale),
 	(uint64)(0.9834714538216174 * kFScale), (uint64)(0.9944598480048967 * kFScale)};
 
+static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;
+
 
 static void
 _LoadavgUpdate(void *data, int iteration)
@@ -37,6 +39,7 @@ _LoadavgUpdate(void *data, int iteration)
 	for (int i = 0; i < gCoreCount; i++)
 		threadCount += gCoreEntries[i].ThreadCount();
 
+	InterruptsSpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {
 		sAverageRunnable.ldavg[i]
 			= (sCExp[i] * sAverageRunnable.ldavg[i] + threadCount * kFScale * (kFScale - sCExp[i]))
@@ -65,7 +68,14 @@ _user_get_loadavg(struct loadavg* userInfo, size_t size)
 		return B_BAD_ADDRESS;
 	if (size != sizeof(struct loadavg))
 		return B_BAD_VALUE;
-	if (user_memcpy(userInfo, &sAverageRunnable, sizeof(struct loadavg)) < B_OK)
+
+	struct loadavg loadAvg;
+	{
+		InterruptsSpinLocker locker(sLoadAvgLock);
+		loadAvg = sAverageRunnable;
+	}
+
+	if (user_memcpy(userInfo, &loadAvg, sizeof(struct loadavg)) < B_OK)
 		return B_BAD_ADDRESS;
 
 	return B_OK;

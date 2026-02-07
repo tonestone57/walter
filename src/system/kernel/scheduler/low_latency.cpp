@@ -49,8 +49,6 @@ static void
 check_package(PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& bestCore, int32& bestLoad)
 {
-	entry->ReadLockCore();
-
 	CoreEntry* candidate = entry->PeekMinimumLoadCore(mask);
 
 	if (candidate != NULL) {
@@ -60,7 +58,6 @@ check_package(PackageEntry* entry, const CPUSet* mask,
 			bestLoad = load;
 		}
 	}
-	entry->ReadUnlockCore();
 }
 
 
@@ -284,6 +281,9 @@ choose_core(const ThreadData* threadData)
 
 		core = bestCore;
 	}
+
+	if (core == NULL)
+		core = CoreEntry::GetCore(smp_get_current_cpu());
 
 	ASSERT(core != NULL);
 

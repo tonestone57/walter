@@ -18,9 +18,6 @@
 namespace Scheduler {
 
 
-const bigtime_t kPriorityBoostInterval = 300000;
-
-
 struct CACHE_LINE_ALIGN ThreadData : public DoublyLinkedListLinkImpl<ThreadData>,
 	RunQueueLinkImpl<ThreadData> {
 private:
