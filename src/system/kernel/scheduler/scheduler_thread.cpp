@@ -453,6 +453,9 @@ ThreadData::_ScaleQuantum(bigtime_t maxQuantum, bigtime_t minQuantum,
 	ASSERT(priority <= maxPriority);
 	ASSERT(priority >= minPriority);
 
+	if (maxPriority <= minPriority)
+		return maxQuantum;
+
 	bigtime_t result = (maxQuantum - minQuantum) * (priority - minPriority);
 	result /= maxPriority - minPriority;
 	return maxQuantum - result;
