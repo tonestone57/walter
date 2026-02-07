@@ -788,7 +788,8 @@ CPUEntry::GetMinVirtualRuntime() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	CPURunQueueLocker locker(const_cast<CPUEntry*>(this));
-	ThreadData* thread = fRunQueue.PeekMaximum();
+	ThreadData* thread = fRunQueue.PeekBest(ThreadDataVRuntimeCompare(),
+		ThreadDataOptimal());
 	if (thread == NULL)
 		return 0;
 	return thread->GetVirtualRuntime();
@@ -801,7 +802,8 @@ CoreEntry::GetMinVirtualRuntime() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	CoreRunQueueLocker locker(const_cast<CoreEntry*>(this));
-	ThreadData* thread = fRunQueue.PeekMaximum();
+	ThreadData* thread = fRunQueue.PeekBest(ThreadDataVRuntimeCompare(),
+		ThreadDataOptimal());
 	if (thread == NULL)
 		return 0;
 	return thread->GetVirtualRuntime();
