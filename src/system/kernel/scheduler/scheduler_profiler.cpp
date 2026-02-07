@@ -38,7 +38,7 @@ Profiler::Profiler()
 	}
 	memset(fFunctionData, 0, sizeof(FunctionData) * kMaxFunctionEntries);
 
-	memset(fFunctionStacks, 0, sizeof(FunctionEntry*) * smp_get_num_cpus());
+	memset(fFunctionStacks, 0, sizeof(fFunctionStacks));
 
 	for (int32 i = 0; i < smp_get_num_cpus(); i++) {
 		fFunctionStacks[i]
@@ -57,6 +57,14 @@ Profiler::Profiler()
 			sizeof(FunctionEntry) * kMaxFunctionStackEntries);
 	}
 	memset(fFunctionStackPointers, 0, sizeof(int32) * smp_get_num_cpus());
+}
+
+
+Profiler::~Profiler()
+{
+	for (int32 i = 0; i < smp_get_num_cpus(); i++)
+		delete[] fFunctionStacks[i];
+	delete[] fFunctionData;
 }
 
 

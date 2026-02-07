@@ -27,6 +27,7 @@ namespace Profiling {
 class Profiler {
 public:
 							Profiler();
+							~Profiler();
 
 			bool			EnterFunction(int32 cpu, const char* function);
 			void			ExitFunction(int32 cpu, const char* function);

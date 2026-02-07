@@ -459,7 +459,9 @@ public:
 					_PolishWaitObject(waitObject);
 				}
 
-				object = object->next;
+				HashObject* next = object->next;
+				*(void**)object = NULL;
+				object = next;
 			}
 		}
 
@@ -835,15 +837,15 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 	size &= ~(size_t)0x7;
 
 	if (buffer == NULL || !IS_USER_ADDRESS(buffer) || size == 0)
-		return B_BAD_VALUE;
+		return B_BAD_ADDRESS;
 
-	status_t error = lock_memory(buffer, size, B_READ_DEVICE);
+	status_t error = lock_memory(buffer, size, B_WRITE_DEVICE);
 	if (error != B_OK)
 		return error;
 
 	error = user_memset(buffer, 0, size);
 	if (error != B_OK) {
-		unlock_memory(buffer, size, B_READ_DEVICE);
+		unlock_memory(buffer, size, B_WRITE_DEVICE);
 		return error;
 	}
 
@@ -860,7 +862,7 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 	if (error == B_OK)
 		error = manager.FinishAnalysis();
 
-	unlock_memory(buffer, size, B_READ_DEVICE);
+	unlock_memory(buffer, size, B_WRITE_DEVICE);
 
 	if (error == B_OK) {
 		error = user_memcpy(analysis, manager.Analysis(),
