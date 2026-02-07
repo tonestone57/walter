@@ -80,6 +80,7 @@ ThreadRunQueue::Dump() const
 
 CPUEntry::CPUEntry()
 	:
+	fThreadCount(0),
 	fLoad(0),
 	fMeasureActiveTime(0),
 	fMeasureTime(0),
@@ -105,6 +106,7 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 void
 CPUEntry::Start()
 {
+	fThreadCount = 0;
 	fLoad = 0;
 	fMeasureTime = 0;
 	fMeasureActiveTime = 0;
@@ -147,6 +149,7 @@ CPUEntry::PushFront(ThreadData* thread, int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushFront(thread, priority);
+	atomic_add(&fThreadCount, 1);
 }
 
 
@@ -155,6 +158,7 @@ CPUEntry::PushBack(ThreadData* thread, int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushBack(thread, priority);
+	atomic_add(&fThreadCount, 1);
 }
 
 
@@ -165,6 +169,7 @@ CPUEntry::Remove(ThreadData* thread)
 	ASSERT(thread->IsEnqueued());
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
+	atomic_add(&fThreadCount, -1);
 }
 
 

@@ -19,8 +19,6 @@
 using namespace Scheduler;
 
 
-const bigtime_t kCacheExpire = 100000;
-
 static CoreEntry* sSmallTaskCore;
 
 
@@ -58,6 +56,13 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 	// If all are overloaded, we might pick the least loaded later.
 	// For choosing a small task core, we want packing.
 	CoreEntry* candidate = entry->PeekMaximumLoadCore();
+
+	if (candidate != NULL) {
+		if (candidate->GetLoad() >= kHighLoad) {
+			// The busiest is overloaded. Check if there is a less loaded one.
+			candidate = entry->PeekMinimumLoadCore();
+		}
+	}
 
 	if (candidate != NULL) {
 		int32 load = candidate->GetLoad();
@@ -134,53 +139,6 @@ choose_idle_core()
 }
 
 
-static void
-check_package_min_load(PackageEntry* entry, const CPUSet* mask,
-	CoreEntry*& bestCore, int32& bestLoad)
-{
-	CoreEntry* candidate = entry->PeekMinimumLoadCore(mask);
-
-	if (candidate != NULL) {
-		int32 load = candidate->GetLoad();
-		if (bestCore == NULL || load < bestLoad) {
-			bestCore = candidate;
-			bestLoad = load;
-		}
-	}
-}
-
-
-static void
-check_masked_packages_min_load(const CPUSet& mask, CoreEntry*& bestCore, int32& bestLoad)
-{
-	const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
-	const int32 cpuCount = smp_get_num_cpus();
-	PackageEntry* lastPackage = NULL;
-
-	for (int32 i = 0; i < kCPUSetArraySize; i++) {
-		uint32 bits = mask.Bits(i);
-		if (bits == 0)
-			continue;
-
-		while (bits != 0) {
-			int bit = __builtin_ctz(bits);
-			bits &= ~(1U << bit);
-			int32 cpuID = i * 32 + bit;
-
-			if (cpuID >= cpuCount)
-				continue;
-
-			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
-			if (cpuCore != NULL) {
-				PackageEntry* package = cpuCore->Package();
-				if (package != NULL && package != lastPackage) {
-					check_package_min_load(package, &mask, bestCore, bestLoad);
-					lastPackage = package;
-				}
-			}
-		}
-	}
-}
 
 
 static void
@@ -312,7 +270,7 @@ choose_core(const ThreadData* threadData)
 			if (previousCore != NULL && !has_cache_expired(threadData)) {
 				PackageEntry* package = previousCore->Package();
 				if (package != NULL) {
-					check_package_min_load(package, NULL, bestCore, bestLoad);
+					CheckPackageMinimumLoad(package, NULL, bestCore, bestLoad);
 				}
 			}
 
@@ -326,18 +284,18 @@ choose_core(const ThreadData* threadData)
 			}
 
 			search_local_node(node, [&](PackageEntry* entry) {
-				check_package_min_load(entry, NULL, bestCore, bestLoad);
+				CheckPackageMinimumLoad(entry, NULL, bestCore, bestLoad);
 				return false;
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
-				check_package_min_load(entry, NULL, bestCore, bestLoad);
+				CheckPackageMinimumLoad(entry, NULL, bestCore, bestLoad);
 				return false;
 			});
 
 		} else if (useMask) {
-			check_masked_packages_min_load(mask, bestCore, bestLoad);
+			CheckMaskedPackagesMinimumLoad(mask, bestCore, bestLoad);
 		}
 
 		// Fallback to full scan
@@ -350,7 +308,8 @@ choose_core(const ThreadData* threadData)
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
 					index -= gPackageCount;
-				check_package_min_load(&gPackageEntries[index], NULL, bestCore, bestLoad);
+				CheckPackageMinimumLoad(&gPackageEntries[index], NULL, bestCore,
+					bestLoad);
 			}
 		}
 
@@ -580,14 +539,14 @@ rebalance_irqs(bool idle)
 		if (currentCore != NULL) {
 			SchedulerNode* node = currentCore->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {
-				check_package_min_load(entry, NULL, other, bestLoad);
+				CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
 				return false;
 			});
 		}
 
 		// Phase 3: Global Random
 		search_global_random([&](PackageEntry* entry) {
-			check_package_min_load(entry, NULL, other, bestLoad);
+			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
 			return false;
 		});
 
@@ -602,7 +561,8 @@ rebalance_irqs(bool idle)
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
 				index -= gPackageCount;
-			check_package_min_load(&gPackageEntries[index], NULL, other, bestLoad);
+			CheckPackageMinimumLoad(&gPackageEntries[index], NULL, other,
+				bestLoad);
 		}
 	}
 

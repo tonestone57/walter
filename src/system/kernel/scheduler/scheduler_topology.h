@@ -90,6 +90,56 @@ search_global_random(Action action)
 }
 
 
+static inline void
+CheckPackageMinimumLoad(PackageEntry* entry, const CPUSet* mask,
+	CoreEntry*& bestCore, int32& bestLoad)
+{
+	CoreEntry* candidate = entry->PeekMinimumLoadCore(mask);
+
+	if (candidate != NULL) {
+		int32 load = candidate->GetLoad();
+		if (bestCore == NULL || load < bestLoad) {
+			bestCore = candidate;
+			bestLoad = load;
+		}
+	}
+}
+
+
+static inline void
+CheckMaskedPackagesMinimumLoad(const CPUSet& mask, CoreEntry*& bestCore,
+	int32& bestLoad)
+{
+	const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
+	const int32 cpuCount = smp_get_num_cpus();
+	PackageEntry* lastPackage = NULL;
+
+	for (int32 i = 0; i < kCPUSetArraySize; i++) {
+		uint32 bits = mask.Bits(i);
+		if (bits == 0)
+			continue;
+
+		while (bits != 0) {
+			int bit = __builtin_ctz(bits);
+			bits &= ~(1U << bit);
+			int32 cpuID = i * 32 + bit;
+
+			if (cpuID >= cpuCount)
+				continue;
+
+			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
+			if (cpuCore != NULL) {
+				PackageEntry* package = cpuCore->Package();
+				if (package != NULL && package != lastPackage) {
+					CheckPackageMinimumLoad(package, &mask, bestCore, bestLoad);
+					lastPackage = package;
+				}
+			}
+		}
+	}
+}
+
+
 }	// namespace Scheduler
 
 

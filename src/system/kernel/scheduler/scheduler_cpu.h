@@ -101,6 +101,9 @@ public:
 
 						uint32			GetRandom();
 
+	inline				int32			ThreadCount() const
+											{ return atomic_get((int32*)&fThreadCount); }
+
 	static inline		CPUEntry*		GetCPU(int32 cpu);
 
 private:
@@ -119,6 +122,7 @@ private:
 						ThreadRunQueue	fRunQueue;
 						spinlock		fQueueLock;
 
+						int32			fThreadCount;
 						int32			fLoad;
 
 						bigtime_t		fMeasureActiveTime;

@@ -46,6 +46,8 @@ const int kLoadDifference = kMaxLoad * 20 / 100;
 const int32 kDefaultCapacity = 1024;
 const int32 kRandomSearchThreshold = 8;
 
+const bigtime_t kCacheExpire = 100000;
+
 extern bool gSingleCore;
 extern bool gTrackCoreLoad;
 extern bool gTrackCPULoad;
