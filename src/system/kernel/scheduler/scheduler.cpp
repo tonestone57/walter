@@ -718,7 +718,8 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 
 
 static void
-traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID)
+traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
+	int32& coreIndex)
 {
 	switch (node->level) {
 		case CPU_TOPOLOGY_SMT:
@@ -727,7 +728,7 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID)
 			return;
 
 		case CPU_TOPOLOGY_CORE:
-			coreID = node->id;
+			coreID = coreIndex++;
 			break;
 
 		case CPU_TOPOLOGY_PACKAGE:
@@ -739,7 +740,7 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID)
 	}
 
 	for (int32 i = 0; i < node->children_count; i++)
-		traverse_topology_tree(node->children[i], packageID, coreID);
+		traverse_topology_tree(node->children[i], packageID, coreID, coreIndex);
 }
 
 
@@ -762,11 +763,13 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	if (sCPUToCore == NULL)
 		return B_NO_MEMORY;
 	ArrayDeleter<int32> cpuToCoreDeleter(sCPUToCore);
+	memset(sCPUToCore, 0, sizeof(int32) * cpuCount);
 
 	sCPUToPackage = new(std::nothrow) int32[cpuCount];
 	if (sCPUToPackage == NULL)
 		return B_NO_MEMORY;
 	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
+	memset(sCPUToPackage, 0, sizeof(int32) * cpuCount);
 
 	// Safe upper bound allocation for mapping packages to nodes
 	sPackageToNode = new(std::nothrow) int32[cpuCount];
@@ -776,7 +779,17 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 	// First pass: logical topology from ACPI/Device Tree
 	const cpu_topology_node* root = get_cpu_topology();
-	traverse_topology_tree(root, 0, 0);
+	int32 coreIndex = 0;
+
+	if (root != NULL)
+		traverse_topology_tree(root, 0, 0, coreIndex);
+	else {
+		// Fallback for missing topology: 1-to-1 mapping
+		for (int32 i = 0; i < cpuCount; i++) {
+			sCPUToCore[i] = i;
+			sCPUToPackage[i] = 0;
+		}
+	}
 
 	coreCount = 0;
 	for (int32 i = 0; i < cpuCount; i++) {
