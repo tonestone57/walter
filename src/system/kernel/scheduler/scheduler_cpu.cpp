@@ -126,7 +126,8 @@ CPUEntry::Stop()
 		int32 irqVector = irq->irq;
 		locker.Unlock();
 
-		assign_io_interrupt_to_cpu(irqVector, -1);
+		if (assign_io_interrupt_to_cpu(irqVector, -1) != B_OK)
+			panic("CPUEntry::Stop: failed to unassign interrupt %" B_PRId32, irqVector);
 
 		locker.Lock();
 
@@ -273,7 +274,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 
 	CPURunQueueLocker cpuLocker(this);
 
-	ThreadData* pinnedThread = fRunQueue.PeekMaximum();
+	ThreadData* pinnedThread = PeekThread();
 	int32 pinnedPriority = -1;
 	if (pinnedThread != NULL)
 		pinnedPriority = pinnedThread->GetEffectivePriority();
@@ -653,6 +654,8 @@ CoreEntry::Init(int32 id, PackageEntry* package)
 
 	fCPUHeap.~CPUPriorityHeap();
 	new(&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
+	if (fCPUHeap.InitCheck() != B_OK)
+		panic("CoreEntry::Init: failed to allocate CPU heap");
 }
 
 
@@ -835,7 +838,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex],
 				std::min(load, kMaxLoad));
 		}
-		fLoadMeasurementEpoch++;
+		atomic_add((int32*)&fLoadMeasurementEpoch, 1);
 		fLastLoadUpdate = now;
 	}
 }
@@ -961,7 +964,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
-	if (fCoreCount > 8) {
+	if (fRegisteredCoreCount > 8) {
 		uint32 enabledMask = atomic_get((int32*)&fEnabledCoreMask);
 		if (enabledMask == 0)
 			return NULL;

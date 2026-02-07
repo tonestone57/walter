@@ -192,7 +192,7 @@ public:
 	inline				int32			Capacity() const { return fCapacity; }
 						bigtime_t		GetMinVirtualRuntime() const;
 	inline				uint32			LoadMeasurementEpoch() const
-											{ return fLoadMeasurementEpoch; }
+											{ return atomic_get((int32*)&fLoadMeasurementEpoch); }
 
 	inline				void			AddLoad(int32 load, uint32 epoch,
 											bool updateLoad);
@@ -515,7 +515,7 @@ CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad)
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
 	atomic_add(&fCurrentLoad, load);
-	if (fLoadMeasurementEpoch != epoch)
+	if (atomic_get((int32*)&fLoadMeasurementEpoch) != epoch)
 		atomic_add(&fLoad, load);
 
 	if (updateLoad)
@@ -537,7 +537,7 @@ CoreEntry::RemoveLoad(int32 load, bool force)
 
 		_UpdateLoad(true);
 	}
-	return fLoadMeasurementEpoch;
+	return atomic_get((int32*)&fLoadMeasurementEpoch);
 }
 
 
@@ -686,11 +686,13 @@ PackageEntry::GetMostIdlePackage()
 
 	PackageEntry* current = &gPackageEntries[0];
 	for (int32 i = 1; i < gPackageCount; i++) {
-		if (gPackageEntries[i].fIdleCoreCount > current->fIdleCoreCount)
+		if (atomic_get((int32*)&gPackageEntries[i].fIdleCoreCount)
+			> atomic_get((int32*)&current->fIdleCoreCount)) {
 			current = &gPackageEntries[i];
+		}
 	}
 
-	if (current->fIdleCoreCount == 0)
+	if (atomic_get((int32*)&current->fIdleCoreCount) == 0)
 		return NULL;
 
 	return current;
@@ -707,9 +709,9 @@ PackageEntry::GetLeastIdlePackage()
 	for (int32 i = 0; i < gPackageCount; i++) {
 		PackageEntry* current = &gPackageEntries[i];
 
-		int32 currentIdleCoreCount = current->fIdleCoreCount;
+		int32 currentIdleCoreCount = atomic_get((int32*)&current->fIdleCoreCount);
 		if (currentIdleCoreCount != 0 && (package == NULL
-				|| currentIdleCoreCount < package->fIdleCoreCount)) {
+				|| currentIdleCoreCount < atomic_get((int32*)&package->fIdleCoreCount))) {
 			package = current;
 		}
 	}

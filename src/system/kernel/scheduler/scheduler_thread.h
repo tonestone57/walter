@@ -26,8 +26,6 @@ struct CACHE_LINE_ALIGN ThreadData : public DoublyLinkedListLinkImpl<ThreadData>
 private:
 	inline	void		_InitBase();
 
-	SCHEDULER_INLINE	int32		_GetMinimalPriority() const;
-
 	SCHEDULER_INLINE	CoreEntry*	_ChooseCore() const;
 	SCHEDULER_INLINE	CPUEntry*	_ChooseCPU(CoreEntry* core,
 							bool& rescheduleNeeded) const;
@@ -156,19 +154,6 @@ public:
 };
 
 
-inline int32
-ThreadData::_GetMinimalPriority() const
-{
-	SCHEDULER_ENTER_FUNCTION();
-
-	const int32 kDivisor = 5;
-
-	const int32 kMaximalPriority = 25;
-	const int32 kMinimalPriority = B_LOWEST_ACTIVE_PRIORITY;
-
-	int32 priority = GetPriority() / kDivisor;
-	return max_c(min_c(priority, kMaximalPriority), kMinimalPriority);
-}
 
 
 inline bool
