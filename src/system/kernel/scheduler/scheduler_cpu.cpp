@@ -6,6 +6,8 @@
 
 #include "scheduler_cpu.h"
 
+#include <new>
+
 #include <util/AutoLock.h>
 #include <util/Random.h>
 
@@ -631,6 +633,9 @@ CoreEntry::Init(int32 id, PackageEntry* package)
 {
 	fCoreID = id;
 	fPackage = package;
+
+	fCPUHeap.~CPUPriorityHeap();
+	new(&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
 }
 
 
@@ -858,6 +863,7 @@ PackageEntry::Init(int32 id, SchedulerNode* node)
 	fNodeIndex = id % 64; // Assuming 64 packages per node max
 	fIdleCoreMask = 0;
 	fEnabledCoreMask = 0;
+	fCoreCount = 0;
 	fRegisteredCoreCount = 0;
 	memset(fCores, 0, sizeof(fCores));
 	memset(fCoreLoads, 0, sizeof(fCoreLoads));
@@ -937,6 +943,8 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 		int32 firstIndex = -1;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
+		if (registeredCores <= 0)
+			return NULL;
 
 		// Try to pick two distinct random valid cores.
 		// Use formula: 4 + (3 * log2(N)) / 2

@@ -43,6 +43,12 @@ Profiler::Profiler()
 			= new(std::nothrow) FunctionEntry[kMaxFunctionStackEntries];
 		if (fFunctionStacks[i] == NULL) {
 			fStatus = B_NO_MEMORY;
+			delete[] fFunctionData;
+			fFunctionData = NULL;
+			for (int32 j = 0; j < i; j++) {
+				delete[] fFunctionStacks[j];
+				fFunctionStacks[j] = NULL;
+			}
 			return;
 		}
 		memset(fFunctionStacks[i], 0,
@@ -235,9 +241,12 @@ Profiler::_Dump(uint32 count)
 		kprintf("%10" B_PRId32 " %14" B_PRId64 " %8" B_PRId64 " %14" B_PRId64
 			" %8" B_PRId64 " %s\n", function->fCalled,
 			function->fTimeInclusive,
-			function->fTimeInclusive / function->fCalled,
+			function->fCalled > 0 ? function->fTimeInclusive / function->fCalled
+				: 0,
 			function->fTimeExclusive,
-			function->fTimeExclusive / function->fCalled, function->fFunction);
+			function->fCalled > 0 ? function->fTimeExclusive / function->fCalled
+				: 0,
+			function->fFunction);
 	}
 }
 
@@ -288,8 +297,8 @@ Profiler::_CompareFunctionsPerCall(const void* _a, const void* _b)
 	const FunctionData* a = static_cast<const FunctionData*>(_a);
 	const FunctionData* b = static_cast<const FunctionData*>(_b);
 
-	Type valueA = a->*Member / a->fCalled;
-	Type valueB = b->*Member / b->fCalled;
+	Type valueA = a->fCalled > 0 ? a->*Member / a->fCalled : 0;
+	Type valueB = b->fCalled > 0 ? b->*Member / b->fCalled : 0;
 
 	if (valueB > valueA)
 		return 1;
