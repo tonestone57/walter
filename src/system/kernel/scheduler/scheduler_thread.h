@@ -49,6 +49,7 @@ public:
 
 	SCHEDULER_INLINE	bool		HasCacheExpired() const;
 	SCHEDULER_INLINE	int32		HomePackage() const { return fHomePackage; }
+	SCHEDULER_INLINE	CoreEntry*	PreviousCore() const;
 	SCHEDULER_INLINE	CoreEntry*	Rebalance() const;
 
 	SCHEDULER_INLINE	int32		GetEffectivePriority() const;
@@ -189,6 +190,22 @@ ThreadData::HasCacheExpired() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 	return gCurrentMode->has_cache_expired(this);
+}
+
+
+inline CoreEntry*
+ThreadData::PreviousCore() const
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	if (fThread->previous_cpu == NULL)
+		return NULL;
+
+	CoreEntry* core = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num)->Core();
+	if (core->CPUCount() <= 0)
+		return NULL;
+
+	return core;
 }
 
 

@@ -28,7 +28,7 @@ class Profiler {
 public:
 							Profiler();
 
-			void			EnterFunction(int32 cpu, const char* function);
+			bool			EnterFunction(int32 cpu, const char* function);
 			void			ExitFunction(int32 cpu, const char* function);
 
 			void			DumpCalled(uint32 count);
@@ -93,14 +93,17 @@ public:
 
 private:
 			const char*		fFunctionName;
+			bool			fEntered;
 };
 
 
 Function::Function(const char* functionName)
 	:
-	fFunctionName(functionName)
+	fFunctionName(functionName),
+	fEntered(false)
 {
-	Profiler::Get()->EnterFunction(smp_get_current_cpu(), fFunctionName);
+	fEntered = Profiler::Get()->EnterFunction(smp_get_current_cpu(),
+		fFunctionName);
 }
 
 
@@ -114,7 +117,10 @@ Function::~Function()
 void
 Function::Exit()
 {
-	Profiler::Get()->ExitFunction(smp_get_current_cpu(), fFunctionName);
+	if (fEntered) {
+		Profiler::Get()->ExitFunction(smp_get_current_cpu(), fFunctionName);
+		fEntered = false;
+	}
 	fFunctionName = NULL;
 }
 
