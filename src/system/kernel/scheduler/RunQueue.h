@@ -440,6 +440,12 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare, const IsOptimal& isOptima
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
 		if (val != 0) {
+			if (i == kBitmapSize - 1 && (MaxPriority % 32 != 31)) {
+				val &= (1UL << (MaxPriority % 32 + 1)) - 1;
+				if (val == 0)
+					continue;
+			}
+
 			int bit = fls(val) - 1;
 			unsigned int priority = i * 32 + bit;
 			Element* current = fHeads[priority];
@@ -487,6 +493,10 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
+
+		if (i == kBitmapSize - 1 && (MaxPriority % 32 != 31))
+			val &= (1UL << (MaxPriority % 32 + 1)) - 1;
+
 		while (val != 0) {
 			int bit = fls(val) - 1;
 			val &= ~(1UL << bit);

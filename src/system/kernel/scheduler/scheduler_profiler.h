@@ -51,7 +51,7 @@ private:
 
 			bigtime_t		fTimeInclusive;
 			bigtime_t		fTimeExclusive;
-	};
+	} __attribute__((aligned(8)));
 
 	struct FunctionEntry {
 			FunctionData*	fFunction;
@@ -62,7 +62,7 @@ private:
 	};
 
 			uint32			_FunctionCount() const;
-			void			_Dump(uint32 count);
+			void			_Dump(FunctionData* data, uint32 count);
 
 			FunctionData*	_FindFunction(const char* function);
 
@@ -80,6 +80,7 @@ private:
 			uint32			fFunctionStackPointers[SMP_MAX_CPUS];
 
 			FunctionData*	fFunctionData;
+			FunctionData*	fSortBuffer;
 			spinlock		fFunctionLock;
 
 			status_t		fStatus;

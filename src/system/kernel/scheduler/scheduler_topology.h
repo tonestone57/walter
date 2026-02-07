@@ -36,6 +36,10 @@ search_local_node(SchedulerNode* node, Action action)
 		// Multiplicative random mapping to avoid expensive modulo
 		int32 index = nodeBaseIndex
 			+ (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
+
+		if (index >= gPackageCount)
+			continue;
+
 		if (action(&gPackageEntries[index]))
 			break;
 	}

@@ -502,8 +502,8 @@ CoreEntry::GetLoad() const
 		return min_c(load, kMaxLoad);
 
 	load /= cpuCount;
-	load = (int64)load * kDefaultCapacity / fCapacity;
-	return min_c(load, kMaxLoad);
+	int64 adjustedLoad = (int64)load * kDefaultCapacity / fCapacity;
+	return (int32)min_c(adjustedLoad, (int64)kMaxLoad);
 }
 
 

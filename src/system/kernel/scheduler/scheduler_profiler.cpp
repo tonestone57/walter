@@ -28,11 +28,12 @@ Profiler::Profiler()
 	kMaxFunctionEntries(1024),
 	kMaxFunctionStackEntries(512),
 	fFunctionData(new(std::nothrow) FunctionData[kMaxFunctionEntries]),
+	fSortBuffer(new(std::nothrow) FunctionData[kMaxFunctionEntries]),
 	fStatus(B_OK)
 {
 	B_INITIALIZE_SPINLOCK(&fFunctionLock);
 
-	if (fFunctionData == NULL) {
+	if (fFunctionData == NULL || fSortBuffer == NULL) {
 		fStatus = B_NO_MEMORY;
 		return;
 	}
@@ -65,6 +66,7 @@ Profiler::~Profiler()
 	for (int32 i = 0; i < smp_get_num_cpus(); i++)
 		delete[] fFunctionStacks[i];
 	delete[] fFunctionData;
+	delete[] fSortBuffer;
 }
 
 
@@ -126,9 +128,9 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 	nanotime_t timeSpent = start - stackEntry->fEntryTime;
 	timeSpent -= stackEntry->fProfilerTime;
 
-	atomic_add64(&stackEntry->fFunction->fTimeInclusive, timeSpent);
+	atomic_add64(&stackEntry->fFunction->fTimeInclusive, timeSpent / 1000);
 	atomic_add64(&stackEntry->fFunction->fTimeExclusive,
-		timeSpent - stackEntry->fOthersTime);
+		(timeSpent - stackEntry->fOthersTime) / 1000);
 
 	nanotime_t profilerTime = stackEntry->fProfilerTime;
 	if (stackDepth > 0) {
@@ -146,13 +148,14 @@ void
 Profiler::DumpCalled(uint32 maxCount)
 {
 	uint32 count = _FunctionCount();
+	memcpy(fSortBuffer, fFunctionData, count * sizeof(FunctionData));
 
-	qsort(fFunctionData, count, sizeof(FunctionData),
+	qsort(fSortBuffer, count, sizeof(FunctionData),
 		&_CompareFunctions<uint32, &FunctionData::fCalled>);
 
 	if (maxCount > 0)
 		count = std::min(count, maxCount);
-	_Dump(count);
+	_Dump(fSortBuffer, count);
 }
 
 
@@ -160,13 +163,14 @@ void
 Profiler::DumpTimeInclusive(uint32 maxCount)
 {
 	uint32 count = _FunctionCount();
+	memcpy(fSortBuffer, fFunctionData, count * sizeof(FunctionData));
 
-	qsort(fFunctionData, count, sizeof(FunctionData),
+	qsort(fSortBuffer, count, sizeof(FunctionData),
 		&_CompareFunctions<nanotime_t, &FunctionData::fTimeInclusive>);
 
 	if (maxCount > 0)
 		count = std::min(count, maxCount);
-	_Dump(count);
+	_Dump(fSortBuffer, count);
 }
 
 
@@ -174,13 +178,14 @@ void
 Profiler::DumpTimeExclusive(uint32 maxCount)
 {
 	uint32 count = _FunctionCount();
+	memcpy(fSortBuffer, fFunctionData, count * sizeof(FunctionData));
 
-	qsort(fFunctionData, count, sizeof(FunctionData),
+	qsort(fSortBuffer, count, sizeof(FunctionData),
 		&_CompareFunctions<nanotime_t, &FunctionData::fTimeExclusive>);
 
 	if (maxCount > 0)
 		count = std::min(count, maxCount);
-	_Dump(count);
+	_Dump(fSortBuffer, count);
 }
 
 
@@ -188,13 +193,14 @@ void
 Profiler::DumpTimeInclusivePerCall(uint32 maxCount)
 {
 	uint32 count = _FunctionCount();
+	memcpy(fSortBuffer, fFunctionData, count * sizeof(FunctionData));
 
-	qsort(fFunctionData, count, sizeof(FunctionData),
+	qsort(fSortBuffer, count, sizeof(FunctionData),
 		&_CompareFunctionsPerCall<nanotime_t, &FunctionData::fTimeInclusive>);
 
 	if (maxCount > 0)
 		count = std::min(count, maxCount);
-	_Dump(count);
+	_Dump(fSortBuffer, count);
 }
 
 
@@ -202,13 +208,14 @@ void
 Profiler::DumpTimeExclusivePerCall(uint32 maxCount)
 {
 	uint32 count = _FunctionCount();
+	memcpy(fSortBuffer, fFunctionData, count * sizeof(FunctionData));
 
-	qsort(fFunctionData, count, sizeof(FunctionData),
+	qsort(fSortBuffer, count, sizeof(FunctionData),
 		&_CompareFunctionsPerCall<nanotime_t, &FunctionData::fTimeExclusive>);
 
 	if (maxCount > 0)
 		count = std::min(count, maxCount);
-	_Dump(count);
+	_Dump(fSortBuffer, count);
 }
 
 
@@ -251,13 +258,13 @@ Profiler::_FunctionCount() const
 
 
 void
-Profiler::_Dump(uint32 count)
+Profiler::_Dump(FunctionData* data, uint32 count)
 {
 	kprintf("Function calls (%" B_PRId32 " functions):\n", count);
 	kprintf("    called time-inclusive per-call time-exclusive per-call "
 		"function\n");
 	for (uint32 i = 0; i < count; i++) {
-		FunctionData* function = &fFunctionData[i];
+		FunctionData* function = &data[i];
 		kprintf("%10" B_PRId32 " %14" B_PRId64 " %8" B_PRId64 " %14" B_PRId64
 			" %8" B_PRId64 " %s\n", function->fCalled,
 			function->fTimeInclusive,

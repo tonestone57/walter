@@ -106,6 +106,8 @@ void
 CPUEntry::Start()
 {
 	fLoad = 0;
+	fMeasureTime = 0;
+	fMeasureActiveTime = 0;
 	fCore->AddCPU(this);
 }
 
@@ -734,7 +736,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 
 		fPackage->AddIdleCore(this);
 	}
-	fCPUSet.SetBit(cpu->ID());
+	fCPUSet.SetBitAtomic(cpu->ID());
 
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK)
 		panic("CoreEntry::AddCPU: failed to insert CPU into heap");
@@ -748,7 +750,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
 	atomic_add(&fIdleCPUCount, -1);
-	fCPUSet.ClearBit(cpu->ID());
+	fCPUSet.ClearBitAtomic(cpu->ID());
 	if (atomic_add(&fCPUCount, -1) == 1) {
 		// unassign threads
 		thread_map(CoreEntry::_UnassignThread, this);
