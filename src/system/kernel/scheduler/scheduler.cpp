@@ -1266,9 +1266,7 @@ _user_estimate_max_scheduling_latency(thread_id id)
 	}
 	BReference<Thread> threadReference(thread, true);
 
-#ifdef SCHEDULER_PROFILING
 	InterruptsLocker _;
-#endif
 
 	ThreadData* threadData = thread->scheduler_data;
 	CoreEntry* core = threadData->Core();
@@ -1294,8 +1292,8 @@ _user_estimate_max_scheduling_latency(thread_id id)
 		threadCount /= cpuCount;
 
 	if (threadData->GetEffectivePriority() > 0) {
-		threadCount -= threadCount * THREAD_MAX_SET_PRIORITY
-				/ threadData->GetEffectivePriority();
+		threadCount -= threadCount * threadData->GetEffectivePriority()
+				/ THREAD_MAX_SET_PRIORITY;
 	}
 
 	return min_c(max_c(threadCount * gCurrentMode->base_quantum,

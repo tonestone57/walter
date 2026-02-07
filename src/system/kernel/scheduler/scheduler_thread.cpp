@@ -397,7 +397,7 @@ ThreadData::_ComputeNeededLoad()
 	ASSERT(!IsIdle());
 
 	int32 oldLoad = compute_load(fLastMeasureAvailableTime,
-		fMeasureAvailableActiveTime, fNeededLoad, fMeasureAvailableTime);
+		fMeasureAvailableActiveTime, fNeededLoad, system_time());
 	if (oldLoad < 0 || oldLoad == fNeededLoad)
 		return;
 
