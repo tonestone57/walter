@@ -44,8 +44,11 @@ Profiler::Profiler()
 		if (fFunctionStacks[i] == NULL) {
 			fStatus = B_NO_MEMORY;
 			delete[] fFunctionData;
-			for (int32 j = 0; j < i; j++)
+			fFunctionData = NULL;
+			for (int32 j = 0; j < i; j++) {
 				delete[] fFunctionStacks[j];
+				fFunctionStacks[j] = NULL;
+			}
 			return;
 		}
 		memset(fFunctionStacks[i], 0,
