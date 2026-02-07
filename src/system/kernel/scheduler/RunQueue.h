@@ -468,7 +468,9 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare, const IsOptimal& isOptima
 			const int kSearchDepth = 32;
 
 			Element* best = current;
-			for (int j = 0; j < kSearchDepth && current != NULL; j++) {
+			current = sGetLink(current)->fNext;
+
+			for (int j = 1; j < kSearchDepth && current != NULL; j++) {
 				if (compare(current, best))
 					best = current;
 

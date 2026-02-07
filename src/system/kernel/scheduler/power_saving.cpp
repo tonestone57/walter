@@ -66,9 +66,29 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 
 	if (candidate != NULL) {
 		int32 load = candidate->GetLoad();
-		if (core == NULL || load > bestLoad) {
+		if (core == NULL) {
 			core = candidate;
 			bestLoad = load;
+		} else {
+			bool bestOverloaded = bestLoad >= kHighLoad;
+			bool candidateOverloaded = load >= kHighLoad;
+
+			if (candidateOverloaded) {
+				// If candidate is overloaded, we only pick it if current is ALSO overloaded
+				// AND candidate is LESS loaded (minimize overload).
+				if (bestOverloaded && load < bestLoad) {
+					core = candidate;
+					bestLoad = load;
+				}
+			} else {
+				// Candidate is NOT overloaded.
+				// If current is overloaded, we definitely switch.
+				// If current is NOT overloaded, we switch if candidate is BUSIER (packing).
+				if (bestOverloaded || load > bestLoad) {
+					core = candidate;
+					bestLoad = load;
+				}
+			}
 		}
 	}
 }
@@ -326,6 +346,7 @@ choose_core(const ThreadData* threadData)
 		core = CoreEntry::GetCore(smp_get_current_cpu());
 		if (useMask && !core->CPUMask().Matches(mask)) {
 			// fallback to the first valid core
+			core = NULL;
 			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 			const int32 cpuCount = smp_get_num_cpus();
 			for (int32 i = 0; i < kCPUSetArraySize; i++) {
@@ -347,6 +368,9 @@ choose_core(const ThreadData* threadData)
 			}
 		}
 	}
+
+	if (core == NULL)
+		return NULL;
 
 	ASSERT(core != NULL);
 	return core;

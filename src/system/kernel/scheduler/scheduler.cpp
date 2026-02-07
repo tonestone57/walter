@@ -745,10 +745,15 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 
 static void
 traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
-	int32& coreIndex)
+	int32& coreIndex, int32 cpuCount)
 {
 	switch (node->level) {
 		case CPU_TOPOLOGY_SMT:
+			if (node->id >= cpuCount) {
+				dprintf("scheduler: topology node id %d out of bounds (max %"
+					B_PRId32 ")\n", node->id, cpuCount);
+				return;
+			}
 			sCPUToCore[node->id] = coreID;
 			sCPUToPackage[node->id] = packageID;
 			return;
@@ -765,8 +770,10 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
 			break;
 	}
 
-	for (int32 i = 0; i < node->children_count; i++)
-		traverse_topology_tree(node->children[i], packageID, coreID, coreIndex);
+	for (int32 i = 0; i < node->children_count; i++) {
+		traverse_topology_tree(node->children[i], packageID, coreID, coreIndex,
+			cpuCount);
+	}
 }
 
 
@@ -808,7 +815,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	int32 coreIndex = 0;
 
 	if (root != NULL)
-		traverse_topology_tree(root, 0, 0, coreIndex);
+		traverse_topology_tree(root, 0, 0, coreIndex, cpuCount);
 	else {
 		// Fallback for missing topology: 1-to-1 mapping
 		for (int32 i = 0; i < cpuCount; i++) {
@@ -915,6 +922,10 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 			if (currentPackageSize >= clusterSize) {
 				packageCount++;
+				if (packageCount >= cpuCount) {
+					// Should not happen with valid topology
+					break;
+				}
 				currentPackageSize = 0;
 				clusterIndex++;
 			}
@@ -1026,12 +1037,8 @@ init()
 		currentPackageIndexInNode++;
 
 		// Ensure we don't overflow the package mask in SchedulerNode
-		if (currentPackageIndexInNode >= 64) {
-			// Cap the index to prevent shift overflow (UB) in SchedulerNode methods.
-			// Packages beyond 63 will share the last bit or be ignored by mask logic.
-			// This degrades idle tracking for massive nodes but prevents kernel panic/UB.
-			currentPackageIndexInNode = 63;
-		}
+		if (currentPackageIndexInNode >= 64)
+			currentPackageIndexInNode = -1;
 	}
 
 	if (currentNode != -1) {
@@ -1289,8 +1296,11 @@ _user_estimate_max_scheduling_latency(thread_id id)
 		} while (core->Package() == NULL && retries++ < kMaxCoreSelectionRetries);
 
 		// Fallback to the first core if random selection failed
-		if (core->Package() == NULL)
+		if (core->Package() == NULL) {
 			core = &gCoreEntries[0];
+			if (core->Package() == NULL)
+				core = CoreEntry::GetCore(smp_get_current_cpu());
+		}
 	}
 
 	int32 threadCount = core->ThreadCount();
@@ -1299,8 +1309,11 @@ _user_estimate_max_scheduling_latency(thread_id id)
 		threadCount /= cpuCount;
 
 	if (threadData->GetEffectivePriority() > 0) {
-		threadCount -= threadCount * threadData->GetEffectivePriority()
-				/ THREAD_MAX_SET_PRIORITY;
+		int32 priority = threadData->GetEffectivePriority();
+		if (priority > THREAD_MAX_SET_PRIORITY)
+			priority = THREAD_MAX_SET_PRIORITY;
+
+		threadCount -= threadCount * priority / THREAD_MAX_SET_PRIORITY;
 	}
 
 	return min_c(max_c(threadCount * gCurrentMode->base_quantum,
