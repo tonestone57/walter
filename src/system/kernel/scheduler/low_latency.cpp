@@ -418,6 +418,10 @@ rebalance_irqs(bool idle)
 		irq = (irq_assignment*)list_get_next_item(&cpu->irqs, irq);
 	}
 
+	int32 chosenIRQ = -1;
+	if (chosen != NULL)
+		chosenIRQ = chosen->irq;
+
 	locker.Unlock();
 
 	if (chosen == NULL || totalLoad < kLowLoad)
@@ -465,7 +469,7 @@ rebalance_irqs(bool idle)
 	if (other->GetLoad() + kLoadDifference >= core->GetLoad())
 		return;
 
-	assign_io_interrupt_to_cpu(chosen->irq, newCPU);
+	assign_io_interrupt_to_cpu(chosenIRQ, newCPU);
 }
 
 

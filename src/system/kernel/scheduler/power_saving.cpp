@@ -519,7 +519,7 @@ pack_irqs()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	CoreEntry* smallTaskCore = atomic_pointer_get(&sSmallTaskCore);
+	CoreEntry* smallTaskCore = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore);
 	if (smallTaskCore == NULL)
 		return;
 
@@ -548,6 +548,10 @@ pack_irqs()
 		}
 
 		locker.Lock();
+
+		irq_assignment* currentHead = (irq_assignment*)list_get_first_item(&cpu->irqs);
+		if (currentHead != NULL && currentHead->irq == irqVector)
+			break;
 	}
 }
 
@@ -557,12 +561,12 @@ rebalance_irqs(bool idle)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (idle && sSmallTaskCore != NULL) {
+	if (idle && atomic_pointer_get(&sSmallTaskCore) != NULL) {
 		pack_irqs();
 		return;
 	}
 
-	if (idle || sSmallTaskCore != NULL)
+	if (idle || atomic_pointer_get(&sSmallTaskCore) != NULL)
 		return;
 
 	cpu_ent* cpu = get_cpu_struct();
@@ -576,6 +580,10 @@ rebalance_irqs(bool idle)
 			chosen = irq;
 		irq = (irq_assignment*)list_get_next_item(&cpu->irqs, irq);
 	}
+
+	int32 chosenIRQ = -1;
+	if (chosen != NULL)
+		chosenIRQ = chosen->irq;
 
 	locker.Unlock();
 
@@ -629,7 +637,7 @@ rebalance_irqs(bool idle)
 	if (other->GetLoad() + kLoadDifference >= core->GetLoad())
 		return;
 
-	assign_io_interrupt_to_cpu(chosen->irq, newCPU);
+	assign_io_interrupt_to_cpu(chosenIRQ, newCPU);
 }
 
 

@@ -38,6 +38,8 @@ Profiler::Profiler()
 	}
 	memset(fFunctionData, 0, sizeof(FunctionData) * kMaxFunctionEntries);
 
+	memset(fFunctionStacks, 0, sizeof(FunctionEntry*) * smp_get_num_cpus());
+
 	for (int32 i = 0; i < smp_get_num_cpus(); i++) {
 		fFunctionStacks[i]
 			= new(std::nothrow) FunctionEntry[kMaxFunctionStackEntries];
