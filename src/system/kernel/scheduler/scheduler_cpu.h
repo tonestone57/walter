@@ -477,7 +477,8 @@ CoreEntry::GetLoad() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	ASSERT(fCPUCount > 0);
+	if (fCPUCount <= 0)
+		return kMaxLoad;
 
 	// Optimization: Avoid division and multiplication in the common case.
 	if (fCPUCount == 1 && fCapacity == kDefaultCapacity)
