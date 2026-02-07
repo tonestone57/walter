@@ -441,7 +441,8 @@ inline int32
 CoreEntry::ThreadCount() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return atomic_get(const_cast<int32*>(&fThreadCount)) + fCPUCount
+	return atomic_get(const_cast<int32*>(&fThreadCount))
+		+ atomic_get(const_cast<int32*>(&fCPUCount))
 		- atomic_get(const_cast<int32*>(&fIdleCPUCount));
 }
 
@@ -491,14 +492,15 @@ CoreEntry::GetLoad() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (fCPUCount <= 0)
+	int32 cpuCount = atomic_get(const_cast<int32*>(&fCPUCount));
+	if (cpuCount <= 0)
 		return kMaxLoad;
 
 	// Optimization: Avoid division and multiplication in the common case.
-	if (fCPUCount == 1 && fCapacity == kDefaultCapacity)
+	if (cpuCount == 1 && fCapacity == kDefaultCapacity)
 		return min_c(fLoad, kMaxLoad);
 
-	int32 load = fLoad / fCPUCount;
+	int32 load = fLoad / cpuCount;
 	load = (int64)load * kDefaultCapacity / fCapacity;
 	return min_c(load, kMaxLoad);
 }
@@ -633,8 +635,9 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	ASSERT(atomic_get(&fIdleCPUCount) < fCPUCount);
-	if (atomic_add(&fIdleCPUCount, 1) == fCPUCount - 1)
+	int32 cpuCount = atomic_get(&fCPUCount);
+	ASSERT(atomic_get(&fIdleCPUCount) < cpuCount);
+	if (atomic_add(&fIdleCPUCount, 1) == cpuCount - 1)
 		fPackage->CoreGoesIdle(this);
 }
 
@@ -645,8 +648,9 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
+	int32 cpuCount = atomic_get(&fCPUCount);
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
-	if (atomic_add(&fIdleCPUCount, -1) == fCPUCount)
+	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 

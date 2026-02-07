@@ -704,7 +704,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
 	atomic_add(&fIdleCPUCount, 1);
-	if (fCPUCount++ == 0) {
+	if (atomic_add(&fCPUCount, 1) == 0) {
 		// core has been reenabled
 		fLoad = 0;
 		fCurrentLoad = 0;
@@ -729,7 +729,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 
 	atomic_add(&fIdleCPUCount, -1);
 	fCPUSet.ClearBit(cpu->ID());
-	if (--fCPUCount == 0) {
+	if (atomic_add(&fCPUCount, -1) == 1) {
 		// unassign threads
 		thread_map(CoreEntry::_UnassignThread, this);
 
@@ -794,7 +794,8 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (fCPUCount <= 0)
+	int32 cpuCount = atomic_get((int32*)&fCPUCount);
+	if (cpuCount <= 0)
 		return;
 
 	bigtime_t now = system_time();
@@ -807,8 +808,8 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		// No locking needed for atomic updates of fLoad.
 		// fCurrentLoad is updated atomically.
 		fLoad = fCurrentLoad;
-		if (fCPUCount > 0) {
-			int32 load = fLoad / fCPUCount;
+		if (cpuCount > 0) {
+			int32 load = fLoad / cpuCount;
 			load = (int64)load * kDefaultCapacity / fCapacity;
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex],
 				std::min(load, kMaxLoad));

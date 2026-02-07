@@ -925,6 +925,11 @@ init()
 	if (result != B_OK)
 		return result;
 
+	// These arrays are only used for initialization and can be freed now.
+	ArrayDeleter<int32> cpuToCoreDeleter(sCPUToCore);
+	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
+	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
+
 	if (packageCount > 4096) {
 		dprintf("scheduler: system has too many packages (%" B_PRId32 " > 4096). "
 			"Limiting to 4096 packages. Excess cores will be disabled.\n",
