@@ -499,6 +499,8 @@ reschedule(int32 nextState)
 			= cpu->ChooseNextThread(enqueueOldThread ? oldThreadData : NULL,
 				putOldThreadAtBack);
 
+		cpu->UpdateActiveTime(oldThreadData);
+
 		if (oldThreadShouldMigrate) {
 			enqueue(oldThread, true, NULL);
 			// replace with the idle thread, if no other thread could be found
@@ -541,7 +543,7 @@ reschedule(int32 nextState)
 	nextThreadData->StartCPUTime();
 
 	// track CPU activity
-	cpu->TrackActivity(oldThreadData, nextThreadData);
+	cpu->TrackLoad(nextThreadData);
 
 	if (nextThread != oldThread || oldThread->cpu->preempted) {
 		cpu->StartQuantumTimer(nextThreadData, oldThread->cpu->preempted);

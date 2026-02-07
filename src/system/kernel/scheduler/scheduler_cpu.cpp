@@ -322,7 +322,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 
 
 void
-CPUEntry::TrackActivity(ThreadData* oldThreadData, ThreadData* nextThreadData)
+CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -343,6 +343,15 @@ CPUEntry::TrackActivity(ThreadData* oldThreadData, ThreadData* nextThreadData)
 
 		oldThreadData->UpdateActivity(active);
 	}
+}
+
+
+void
+CPUEntry::TrackLoad(ThreadData* nextThreadData)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	cpu_ent* cpuEntry = &gCPU[fCPUNumber];
 
 	if (gTrackCPULoad) {
 		if (!cpuEntry->disabled)

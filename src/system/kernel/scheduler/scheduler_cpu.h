@@ -93,8 +93,8 @@ public:
 						ThreadData*		ChooseNextThread(ThreadData* oldThread,
 											bool putAtBack);
 
-						void			TrackActivity(ThreadData* oldThreadData,
-											ThreadData* nextThreadData);
+						void			UpdateActiveTime(ThreadData* oldThreadData);
+						void			TrackLoad(ThreadData* nextThreadData);
 
 						void			StartQuantumTimer(ThreadData* thread,
 											bool wasPreempted);
