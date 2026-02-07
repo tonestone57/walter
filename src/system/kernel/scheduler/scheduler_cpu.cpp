@@ -136,7 +136,7 @@ CPUEntry::Stop()
 		irq_assignment* currentHead
 			= (irq_assignment*)list_get_first_item(&entry->irqs);
 		if (currentHead != NULL && currentHead->irq == irqVector)
-			break;
+			panic("CPUEntry::Stop: failed to remove interrupt %" B_PRId32, irqVector);
 	}
 	locker.Unlock();
 }
@@ -1010,8 +1010,6 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 		}
 
 		// Fallback to linear scan if sampling failed to find 2 valid cores quickly
-		if (minEntry != NULL)
-			return minEntry;
 	}
 
 	// Linear Scan (Robust Path for small clusters or fallback)

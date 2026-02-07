@@ -599,6 +599,9 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	if (package->NodeIndex() < 0)
+		return;
+
 	uint64 oldMask = atomic_or64((int64*)&fIdlePackageMask, 1ULL << package->NodeIndex());
 
 	if (oldMask == 0) {
@@ -612,6 +615,9 @@ inline void
 SchedulerNode::PackageWakesUp(PackageEntry* package)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	if (package->NodeIndex() < 0)
+		return;
 
 	uint64 oldMask = atomic_and64((int64*)&fIdlePackageMask, ~(1ULL << package->NodeIndex()));
 

@@ -1023,7 +1023,7 @@ init()
 			// Cap the index to prevent shift overflow (UB) in SchedulerNode methods.
 			// Packages beyond 63 will share the last bit or be ignored by mask logic.
 			// This degrades idle tracking for massive nodes but prevents kernel panic/UB.
-			currentPackageIndexInNode = 63;
+			currentPackageIndexInNode = -1;
 		}
 	}
 

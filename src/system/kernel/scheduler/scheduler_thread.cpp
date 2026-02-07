@@ -198,6 +198,11 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 
 	bool rescheduleNeeded = false;
 
+	if (targetCore != NULL && targetCPU != NULL) {
+		if (targetCPU->Core() != targetCore)
+			targetCore = targetCPU->Core();
+	}
+
 	CPUSet mask = GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 

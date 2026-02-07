@@ -50,12 +50,13 @@ has_cache_expired(const ThreadData* threadData)
 
 
 static void
-check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
+check_package_small_task(PackageEntry* entry, const CPUSet* mask,
+	CoreEntry*& core, int32& bestLoad)
 {
 	// Find the core with highest load that isn't overloaded.
 	// If all are overloaded, we might pick the least loaded later.
 	// For choosing a small task core, we want packing.
-	CoreEntry* candidate = entry->PeekMaximumLoadCore();
+	CoreEntry* candidate = entry->PeekMaximumLoadCore(mask);
 
 	if (candidate != NULL) {
 		int32 load = candidate->GetLoad();
@@ -68,7 +69,7 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 
 
 static CoreEntry*
-choose_small_task_core()
+choose_small_task_core(const CPUSet* mask = NULL)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -78,7 +79,7 @@ choose_small_task_core()
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 	if (tryRandom) {
 		search_global_random([&](PackageEntry* entry) {
-			check_package_small_task(entry, core, bestLoad);
+			check_package_small_task(entry, mask, core, bestLoad);
 			return false;
 		});
 	}
@@ -94,7 +95,7 @@ choose_small_task_core()
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
 				index -= gPackageCount;
-			check_package_small_task(&gPackageEntries[index], core, bestLoad);
+			check_package_small_task(&gPackageEntries[index], mask, core, bestLoad);
 		}
 	}
 
@@ -265,73 +266,6 @@ check_masked_packages_packing(const CPUSet& mask, CoreEntry*& other,
 }
 
 
-template <typename Action>
-static void
-search_local_node(SchedulerNode* node, Action action)
-{
-	if (node == NULL)
-		return;
-
-	int32 nodeBaseIndex = node->PackageStartIndex();
-	int32 packagesInNode = node->PackageCount();
-
-	if (nodeBaseIndex >= gPackageCount || packagesInNode <= 0)
-		return;
-
-	const int kMaxLocalAttempts = 4;
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-	for (int i = 0; i < kMaxLocalAttempts; i++) {
-		// Multiplicative random mapping to avoid expensive modulo
-		int32 index = nodeBaseIndex
-			+ (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
-		action(&gPackageEntries[index]);
-	}
-}
-
-
-template <typename Action>
-static void
-search_global_random(Action action)
-{
-	int32 samplesToTake = gRandomSamples;
-	int32 samplesTaken = 0;
-	int32 attempts = 0;
-	const int32 kMaxAttempts = samplesToTake * 2;
-
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-
-	// Bitmask for tracking visited packages to avoid collisions.
-	// Use a smaller fixed buffer on the stack (128 bytes = 1024 packages)
-	// which covers >99% of systems. For massive systems, we skip collision
-	// detection for indices beyond 1024 to save stack space.
-	const int32 kStackBitmaskSize = 1024;
-	uint64 visitedBits[kStackBitmaskSize / 64];
-
-	int32 packagesToCheck = min_c(gPackageCount, kStackBitmaskSize);
-	int32 wordsToClear = (packagesToCheck + 63) / 64;
-	memset(visitedBits, 0, wordsToClear * sizeof(uint64));
-
-	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-		// Multiplicative random mapping to avoid expensive modulo
-		int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
-
-		// Avoid checking the same package twice using the bitmask
-		int32 word = i / 64;
-		int32 bit = i % 64;
-
-		// Only check collision if within our stack bitmask range
-		if (i < kStackBitmaskSize) {
-			if ((visitedBits[word] & (1ULL << bit)) != 0)
-				continue;
-			visitedBits[word] |= (1ULL << bit);
-		}
-
-		samplesTaken++;
-		action(&gPackageEntries[i]);
-	}
-}
-
-
 static CoreEntry*
 choose_core(const ThreadData* threadData)
 {
@@ -357,7 +291,7 @@ choose_core(const ThreadData* threadData)
 	}
 
 	// try to pack all threads on one core
-	core = choose_small_task_core();
+	core = choose_small_task_core(useMask ? &mask : NULL);
 	if (core != NULL && (useMask && !core->CPUMask().Matches(mask)))
 		core = NULL;
 
@@ -479,7 +413,7 @@ rebalance(const ThreadData* threadData)
 	if (coreLoad > kHighLoad) {
 		if (atomic_pointer_get(&sSmallTaskCore) == core) {
 			atomic_pointer_set(&sSmallTaskCore, (CoreEntry*)NULL);
-			CoreEntry* smallTaskCore = choose_small_task_core();
+			CoreEntry* smallTaskCore = choose_small_task_core(useMask ? &mask : NULL);
 
 			if (threadLoad > coreLoad / 3 || smallTaskCore == NULL
 					|| (useMask && !smallTaskCore->CPUMask().Matches(mask))) {
@@ -536,15 +470,41 @@ rebalance(const ThreadData* threadData)
 		if (other == NULL) return core; // Fallback
 		ASSERT(other != NULL);
 
+		bigtime_t coreVRuntime = core->GetMinVirtualRuntime();
+		bigtime_t otherVRuntime = other->GetMinVirtualRuntime();
+
+		// If the current core is significantly lagging behind the other core,
+		// we lower the threshold for migration to improve latency.
+		bool congested = coreVRuntime > 0 && otherVRuntime > coreVRuntime + 20000;
+		int32 threshold = congested ? 0 : (kLoadDifference >> 1);
+
+		// Advanced NUMA Support:
+		// If the candidate core 'other' is in the thread's Home Package,
+		// we reduce the migration threshold to encourage returning home.
+		// Conversely, if 'other' is remote and we are currently home, we increase it.
+		int32 homePackageID = threadData->HomePackage();
+		if (homePackageID >= 0) {
+			int32 currentPackageID = core->Package()->ID();
+			int32 otherPackageID = other->Package()->ID();
+
+			if (otherPackageID == homePackageID && currentPackageID != homePackageID) {
+				// Bonus for returning home
+				threshold = 0;
+			} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
+				// Penalty for leaving home: double the threshold.
+				threshold *= 2;
+			}
+		}
+
 		int32 coreNewLoad = coreLoad - threadLoad;
 		int32 otherNewLoad = other->GetLoad() + threadLoad;
-		return coreNewLoad - otherNewLoad >= kLoadDifference >> 1 ? other : core;
+		return coreNewLoad - otherNewLoad >= threshold ? other : core;
 	}
 
 	if (coreLoad >= kMediumLoad)
 		return core;
 
-	CoreEntry* smallTaskCore = choose_small_task_core();
+	CoreEntry* smallTaskCore = choose_small_task_core(useMask ? &mask : NULL);
 	if (smallTaskCore == NULL || (useMask && !smallTaskCore->CPUMask().Matches(mask)))
 		return core;
 	return smallTaskCore->GetLoad() + threadLoad < kHighLoad
@@ -653,12 +613,12 @@ rebalance_irqs(bool idle)
 			check_package_min_load(entry, NULL, other, bestLoad);
 			return false;
 		});
+	}
 
-	} else {
-		// Limit fallback attempts
+	// Use empty mask (NULL), as we don't care about affinity here
+	if (other == NULL) {
 		const int32 kMaxFallbackAttempts = 64;
-		int32 startIndex = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-			% gPackageCount;
+		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 		for (int32 i = 0; i < attempts; i++) {
