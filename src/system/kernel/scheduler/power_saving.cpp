@@ -27,7 +27,7 @@ static CoreEntry* sSmallTaskCore;
 static void
 switch_to_mode()
 {
-	sSmallTaskCore = NULL;
+	atomic_pointer_set(&sSmallTaskCore, (CoreEntry*)NULL);
 }
 
 
@@ -35,7 +35,7 @@ static void
 set_cpu_enabled(int32 cpu, bool enabled)
 {
 	if (!enabled)
-		sSmallTaskCore = NULL;
+		atomic_pointer_set(&sSmallTaskCore, (CoreEntry*)NULL);
 }
 
 
@@ -83,10 +83,11 @@ choose_small_task_core()
 	}
 
 	if (core == NULL)
-		return sSmallTaskCore;
+		return (CoreEntry*)atomic_pointer_get(&sSmallTaskCore);
 
 	CoreEntry* smallTaskCore
-		= atomic_pointer_test_and_set(&sSmallTaskCore, core, (CoreEntry*)NULL);
+		= (CoreEntry*)atomic_pointer_test_and_set(&sSmallTaskCore, core,
+			(CoreEntry*)NULL);
 	if (smallTaskCore == NULL)
 		return core;
 	return smallTaskCore;
@@ -439,8 +440,8 @@ rebalance(const ThreadData* threadData)
 	int32 coreLoad = core->GetLoad();
 	int32 threadLoad = threadData->GetLoad() / core->CPUCount();
 	if (coreLoad > kHighLoad) {
-		if (sSmallTaskCore == core) {
-			sSmallTaskCore = NULL;
+		if (atomic_pointer_get(&sSmallTaskCore) == core) {
+			atomic_pointer_set(&sSmallTaskCore, (CoreEntry*)NULL);
 			CoreEntry* smallTaskCore = choose_small_task_core();
 
 			if (threadLoad > coreLoad / 3 || smallTaskCore == NULL
