@@ -260,9 +260,22 @@ public:
 	inline				uint64				IdlePackageMask() const;
 	inline				int32				NodeIndex() const { return fNodeID; }
 
+	inline				int32				PackageStartIndex() const
+											{ return fPackageStartIndex; }
+	inline				void				SetPackageStartIndex(int32 start)
+											{ fPackageStartIndex = start; }
+
+	inline				int32				PackageCount() const
+											{ return fPackageCount; }
+	inline				void				SetPackageCount(int32 count)
+											{ fPackageCount = count; }
+
 private:
 						int32				fNodeID;
 						uint64				fIdlePackageMask;
+
+						int32				fPackageStartIndex;
+						int32				fPackageCount;
 } CACHE_LINE_ALIGN;
 
 
@@ -270,7 +283,8 @@ class PackageEntry {
 public:
 											PackageEntry();
 
-						void				Init(int32 id, SchedulerNode* node);
+						void				Init(int32 id, SchedulerNode* node,
+												int32 nodeIndex);
 
 	inline				void				CoreGoesIdle(CoreEntry* core);
 	inline				void				CoreWakesUp(CoreEntry* core);

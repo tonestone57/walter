@@ -832,7 +832,9 @@ CoreEntry::_UnassignThread(Thread* thread, void* data)
 
 SchedulerNode::SchedulerNode()
 	:
-	fIdlePackageMask(0)
+	fIdlePackageMask(0),
+	fPackageStartIndex(0),
+	fPackageCount(0)
 {
 }
 
@@ -842,6 +844,8 @@ SchedulerNode::Init(int32 id)
 {
 	fNodeID = id;
 	fIdlePackageMask = 0;
+	fPackageStartIndex = 0;
+	fPackageCount = 0;
 }
 
 
@@ -856,11 +860,11 @@ PackageEntry::PackageEntry()
 
 
 void
-PackageEntry::Init(int32 id, SchedulerNode* node)
+PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex)
 {
 	fPackageID = id;
 	fNode = node;
-	fNodeIndex = id % 64; // Assuming 64 packages per node max
+	fNodeIndex = nodeIndex;
 	fIdleCoreMask = 0;
 	fEnabledCoreMask = 0;
 	fCoreCount = 0;
@@ -1165,7 +1169,8 @@ dump_idle_cores(int /* argc */, char** /* argv */)
 				int32 packageIndex = __builtin_ctzll(packageMask);
 				packageMask &= ~(1ULL << packageIndex);
 
-				int32 globalPackageIndex = nodeIndex * 64 + packageIndex;
+				int32 globalPackageIndex
+					= gSchedulerNodes[nodeIndex].PackageStartIndex() + packageIndex;
 				if (globalPackageIndex < gPackageCount) {
 					kprintf("%-4" B_PRId32 " ", nodeIndex);
 					DebugDumper::DumpIdleCoresInPackage(&gPackageEntries[globalPackageIndex]);

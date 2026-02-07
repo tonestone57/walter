@@ -23,15 +23,10 @@ search_local_node(SchedulerNode* node, Action action)
 	if (node == NULL)
 		return;
 
-	// SchedulerNode represents a 64-package block in the dense gPackageEntries array.
-	int32 nodeBaseIndex = node->NodeIndex() * 64;
+	int32 nodeBaseIndex = node->PackageStartIndex();
+	int32 packagesInNode = node->PackageCount();
 
-	// Ensure we don't go out of bounds of gPackageEntries
-	if (nodeBaseIndex >= gPackageCount)
-		return;
-
-	int32 packagesInNode = min_c(64, gPackageCount - nodeBaseIndex);
-	if (packagesInNode <= 0)
+	if (nodeBaseIndex >= gPackageCount || packagesInNode <= 0)
 		return;
 
 	const int kMaxLocalAttempts = 4;

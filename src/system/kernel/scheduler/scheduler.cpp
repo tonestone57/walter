@@ -956,11 +956,34 @@ init()
 		return B_NO_MEMORY;
 	ArrayDeleter<PackageEntry> packageEntriesDeleter(gPackageEntries);
 
+	int32 currentNode = -1;
+	int32 currentPackageIndexInNode = 0;
+
 	for (int32 i = 0; i < packageCount; i++) {
 		int32 nodeIndex = sPackageToNode[i];
 		if (nodeIndex >= nodeCount)
 			nodeIndex = 0; // Fallback for edge cases
-		gPackageEntries[i].Init(i, &gSchedulerNodes[nodeIndex]);
+
+		if (nodeIndex != currentNode) {
+			if (currentNode != -1) {
+				gSchedulerNodes[currentNode].SetPackageCount(
+					currentPackageIndexInNode);
+			}
+
+			currentNode = nodeIndex;
+			currentPackageIndexInNode = gSchedulerNodes[currentNode].PackageCount();
+			if (currentPackageIndexInNode == 0)
+				gSchedulerNodes[currentNode].SetPackageStartIndex(i);
+		}
+
+		gPackageEntries[i].Init(i, &gSchedulerNodes[nodeIndex],
+			currentPackageIndexInNode);
+		currentPackageIndexInNode++;
+	}
+
+	if (currentNode != -1) {
+		gSchedulerNodes[currentNode].SetPackageCount(
+			currentPackageIndexInNode);
 	}
 
 	// Map Core to Package and assign index within package

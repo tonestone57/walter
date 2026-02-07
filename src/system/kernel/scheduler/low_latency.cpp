@@ -154,7 +154,8 @@ choose_core(const ThreadData* threadData)
 					int32 packageIndex = __builtin_ctzll(idlePackageMask);
 					idlePackageMask &= ~(1ULL << packageIndex);
 
-					int32 globalPackageIndex = node->NodeIndex() * 64 + packageIndex;
+					int32 globalPackageIndex
+						= node->PackageStartIndex() + packageIndex;
 					if (globalPackageIndex >= gPackageCount)
 						continue;
 
@@ -204,7 +205,8 @@ choose_core(const ThreadData* threadData)
 			int32 packageIndex = __builtin_ctzll(idlePackageMask);
 			idlePackageMask &= ~(1ULL << packageIndex);
 
-			int32 globalPackageIndex = nodeIndex * 64 + packageIndex;
+			int32 globalPackageIndex
+				= node->PackageStartIndex() + packageIndex;
 			// Safety check for bounds, though masks shouldn't be set if out of bounds
 			if (globalPackageIndex >= gPackageCount)
 				continue;
