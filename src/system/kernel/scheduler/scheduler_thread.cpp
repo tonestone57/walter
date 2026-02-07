@@ -410,7 +410,11 @@ ThreadData::_UpdateDeadline()
 	// Virtual Deadline Calculation:
 	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)
 	bigtime_t now = system_time();
-	fVirtualDeadline = now + sVirtualDeadlineSlices[GetPriority()];
+	int32 priority = GetPriority();
+	if (priority > THREAD_MAX_SET_PRIORITY)
+		priority = THREAD_MAX_SET_PRIORITY;
+
+	fVirtualDeadline = now + atomic_get64(&sVirtualDeadlineSlices[priority]);
 
 	_ComputeEffectivePriority(now);
 }
@@ -440,7 +444,11 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		fEffectivePriority = (int32)urgency;
 	}
 
-	fBaseQuantum = atomic_get64(&sQuantumLengths[GetEffectivePriority()]);
+	int32 effectivePriority = GetEffectivePriority();
+	if (effectivePriority > THREAD_MAX_SET_PRIORITY)
+		effectivePriority = THREAD_MAX_SET_PRIORITY;
+
+	fBaseQuantum = atomic_get64(&sQuantumLengths[effectivePriority]);
 }
 
 

@@ -1262,8 +1262,9 @@ _user_estimate_max_scheduling_latency(thread_id id)
 	}
 
 	int32 threadCount = core->ThreadCount();
-	if (core->CPUCount() > 0)
-		threadCount /= core->CPUCount();
+	int32 cpuCount = core->CPUCount();
+	if (cpuCount > 0)
+		threadCount /= cpuCount;
 
 	if (threadData->GetEffectivePriority() > 0) {
 		threadCount -= threadCount * THREAD_MAX_SET_PRIORITY
