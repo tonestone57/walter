@@ -32,6 +32,21 @@
 
 namespace Scheduler {
 
+struct ThreadDataVRuntimeCompare {
+	template<typename ThreadData>
+	bool operator()(const ThreadData* a, const ThreadData* b) const
+	{
+		if (a->IsRealTime()) {
+			if (b->IsRealTime())
+				return false;
+			return true;
+		}
+		if (b->IsRealTime())
+			return false;
+		return a->GetVirtualRuntime() < b->GetVirtualRuntime();
+	}
+};
+
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
 	// 64-bit systems: supports up to 64 L3 domains per node
 	typedef uint64 native_cpu_mask_t;
