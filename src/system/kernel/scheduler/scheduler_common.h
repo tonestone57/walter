@@ -31,6 +31,68 @@
 
 namespace Scheduler {
 
+#if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
+	// 64-bit systems: supports up to 64 L3 domains per node
+	typedef uint64 native_cpu_mask_t;
+	#define SCHEDULER_MASK_IS_64_BIT 1
+#else
+	// 32-bit systems: supports up to 32 L3 domains per node
+	// (Self-limiting: 32-bit OS RAM limits prevent massive topology anyway)
+	typedef uint32 native_cpu_mask_t;
+	#define SCHEDULER_MASK_IS_64_BIT 0
+#endif
+
+// Helpers for atomic operations and bit manipulation on native_cpu_mask_t
+static inline native_cpu_mask_t
+scheduler_atomic_or(native_cpu_mask_t* value, native_cpu_mask_t orValue)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	return (native_cpu_mask_t)atomic_or64((int64*)value, (int64)orValue);
+#else
+	return (native_cpu_mask_t)atomic_or((int32*)value, (int32)orValue);
+#endif
+}
+
+static inline native_cpu_mask_t
+scheduler_atomic_and(native_cpu_mask_t* value, native_cpu_mask_t andValue)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	return (native_cpu_mask_t)atomic_and64((int64*)value, (int64)andValue);
+#else
+	return (native_cpu_mask_t)atomic_and((int32*)value, (int32)andValue);
+#endif
+}
+
+static inline native_cpu_mask_t
+scheduler_atomic_get(native_cpu_mask_t* value)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	return (native_cpu_mask_t)atomic_get64((int64*)value);
+#else
+	return (native_cpu_mask_t)atomic_get((int32*)value);
+#endif
+}
+
+static inline int
+scheduler_popcount(native_cpu_mask_t value)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	return __builtin_popcountll(value);
+#else
+	return __builtin_popcount(value);
+#endif
+}
+
+static inline int
+scheduler_ctz(native_cpu_mask_t value)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	return __builtin_ctzll(value);
+#else
+	return __builtin_ctz(value);
+#endif
+}
+
 
 class CPUEntry;
 class CoreEntry;

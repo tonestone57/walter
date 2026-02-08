@@ -45,10 +45,9 @@ public:
 			int32			fTargetCPU;
 };
 
-// Adjusted to 16 to support finer-grained clustering (clusters of 4 cores).
-// This reduces lock contention and allows L3 domains to be represented as
-// groups of packages (SchedulerNode).
-const int32 kMaxCoresPerPackage = 16;
+// Adjusted to sizeof(native_cpu_mask_t) * 8 to support larger clusters on 64-bit.
+// This allows a single L3 domain to span up to 64 cores.
+const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
@@ -274,7 +273,7 @@ public:
 	inline				void				PackageGoesIdle(PackageEntry* package);
 	inline				void				PackageWakesUp(PackageEntry* package);
 
-	inline				uint64				IdlePackageMask() const;
+	inline				native_cpu_mask_t	IdlePackageMask() const;
 	inline				int32				NodeIndex() const { return fNodeID; }
 
 	inline				int32				PackageStartIndex() const
@@ -289,7 +288,7 @@ public:
 
 private:
 						int32				fNodeID;
-						uint64				fIdlePackageMask;
+						native_cpu_mask_t	fIdlePackageMask;
 
 						int32				fPackageStartIndex;
 						int32				fPackageCount;
@@ -307,7 +306,7 @@ public:
 	inline				void				CoreWakesUp(CoreEntry* core);
 
 						CoreEntry*			GetIdleCore(int32 index = 0) const;
-	inline				uint32				IdleCoreMask() const;
+	inline				native_cpu_mask_t	IdleCoreMask() const;
 	inline				int32				IdleCoreCount() const { return fIdleCoreCount; }
 	inline				CoreEntry*			GetCore(int32 index) const;
 	inline				SchedulerNode*		Node() const { return fNode; }
@@ -337,7 +336,7 @@ private:
 						int32				fNodeIndex;
 
 						CoreEntry*			fCores[kMaxCoresPerPackage];
-						uint32				fIdleCoreMask;
+						native_cpu_mask_t	fIdleCoreMask;
 						int32				fIdleCoreCount;
 						int32				fCoreCount;
 						int32				fRegisteredCoreCount;
@@ -347,7 +346,7 @@ private:
 	mutable				rw_spinlock			fCoreLock;
 
 						int32				fCoreLoads[kMaxCoresPerPackage];
-						uint32				fEnabledCoreMask;
+						native_cpu_mask_t	fEnabledCoreMask;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;

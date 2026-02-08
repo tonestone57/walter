@@ -955,7 +955,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > 8) {
-		uint32 enabledMask = atomic_get((int32*)&fEnabledCoreMask);
+		native_cpu_mask_t enabledMask = scheduler_atomic_get((native_cpu_mask_t*)&fEnabledCoreMask);
 		if (enabledMask == 0)
 			return NULL;
 
@@ -975,7 +975,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 			int32 i = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % registeredCores;
 
 			// Check if this core is enabled
-			if (!((1U << i) & enabledMask))
+			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
 
 			CoreEntry* candidate = fCores[i];
@@ -1003,10 +1003,10 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 	}
 
 	// Linear Scan (Robust Path for small clusters or fallback)
-	uint32 enabledMask = atomic_get((int32*)&fEnabledCoreMask);
+	native_cpu_mask_t enabledMask = scheduler_atomic_get((native_cpu_mask_t*)&fEnabledCoreMask);
 	while (enabledMask != 0) {
-		int32 i = __builtin_ctz(enabledMask);
-		enabledMask &= ~(1U << i);
+		int32 i = scheduler_ctz(enabledMask);
+		enabledMask &= ~((native_cpu_mask_t)1 << i);
 
 		CoreEntry* candidate = fCores[i];
 		if (mask != NULL && !mask->GetBit(candidate->ID()))
@@ -1028,36 +1028,36 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask) const
 	CoreEntry* maxEntry = NULL;
 	int32 maxLoad = -1;
 
-	uint32 enabledMask = atomic_get((int32*)&fEnabledCoreMask);
+	native_cpu_mask_t enabledMask = scheduler_atomic_get((native_cpu_mask_t*)&fEnabledCoreMask);
 	if (enabledMask == 0)
 		return NULL;
 
-	int32 count = __builtin_popcount(enabledMask);
+	int32 count = scheduler_popcount(enabledMask);
 	int32 startBit = 0;
 
 	if (count > 1) {
 		int32 k = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % count;
 		// Find k-th set bit
-		uint32 tempMask = enabledMask;
+		native_cpu_mask_t tempMask = enabledMask;
 		for (int32 j = 0; j < k; j++) {
-			tempMask &= ~(1U << __builtin_ctz(tempMask));
+			tempMask &= ~((native_cpu_mask_t)1 << scheduler_ctz(tempMask));
 		}
-		startBit = __builtin_ctz(tempMask);
+		startBit = scheduler_ctz(tempMask);
 	}
 
 	// Split mask into two parts to randomize start position
-	uint32 upperMask = enabledMask & (~0U << startBit);
-	uint32 lowerMask = enabledMask & ((1U << startBit) - 1);
+	native_cpu_mask_t upperMask = enabledMask & (~(native_cpu_mask_t)0 << startBit);
+	native_cpu_mask_t lowerMask = enabledMask & (((native_cpu_mask_t)1 << startBit) - 1);
 
 	// We iterate twice, but effectively just once over the set bits.
 	// The order of loops determines tie-breaking preference.
 
 	for (int pass = 0; pass < 2; pass++) {
-		uint32 currentMask = (pass == 0) ? upperMask : lowerMask;
+		native_cpu_mask_t currentMask = (pass == 0) ? upperMask : lowerMask;
 
 		while (currentMask != 0) {
-			int32 i = __builtin_ctz(currentMask);
-			currentMask &= ~(1U << i);
+			int32 i = scheduler_ctz(currentMask);
+			currentMask &= ~((native_cpu_mask_t)1 << i);
 
 			CoreEntry* candidate = fCores[i];
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
