@@ -215,14 +215,17 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		targetCore = threadData->Rebalance();
 	}
 
-	const bool rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU);
-
-	TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32 " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
-		thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
-
 	bool wasRunQueueEmpty = false;
 	bool requestPreemption = false;
-	threadData->Enqueue(wasRunQueueEmpty, requestPreemption);
+	bool rescheduleNeeded = false;
+
+	do {
+		rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU);
+
+		TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32 " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
+			thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
+
+	} while (!threadData->Enqueue(wasRunQueueEmpty, requestPreemption));
 
 	// notify listeners
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
@@ -690,11 +693,10 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	dprintf("scheduler: %s CPU %" B_PRId32 "\n",
 		enabled ? "enabling" : "disabling", cpuID);
 
-	InterruptsBigSchedulerLocker _;
-
 	gCurrentMode->set_cpu_enabled(cpuID, enabled);
 
 	CPUEntry* cpu = &gCPUEntries[cpuID];
+	cpu->LockScheduler();
 	CoreEntry* core = cpu->Core();
 
 	ASSERT(core->CPUCount() >= 0);
@@ -740,6 +742,8 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 				SMP_MSG_FLAG_ASYNC);
 		}
 	}
+
+	cpu->UnlockScheduler();
 }
 
 

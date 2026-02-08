@@ -75,7 +75,7 @@ public:
 	SCHEDULER_INLINE	bigtime_t	WentSleepActive() const	{ return fWentSleepActive; }
 
 	SCHEDULER_INLINE	void		PutBack();
-	SCHEDULER_INLINE	void		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption);
+	SCHEDULER_INLINE	bool		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption);
 	SCHEDULER_INLINE	bool		Dequeue();
 
 	SCHEDULER_INLINE	void		UpdateActivity(bigtime_t active);
@@ -438,7 +438,7 @@ ThreadData::PutBack()
 }
 
 
-inline void
+inline bool
 ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 {
 	SCHEDULER_ENTER_FUNCTION();
@@ -467,13 +467,13 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		ASSERT(fThread->previous_cpu != NULL);
 		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
 
-		// If the pinned CPU is disabled, we treat the thread as unpinned
-		// temporarily and let it float in the Core run queue.
-		if (gCPU[cpu->ID()].disabled) {
-			pinned = false;
-		} else {
-			CPURunQueueLocker _(cpu);
+		CPURunQueueLocker locker(cpu);
 
+		// Check if the pinned CPU is disabled under the lock
+		if (gCPU[cpu->ID()].disabled) {
+			locker.Unlock();
+			pinned = false; // float
+		} else {
 			if (!wasReady && !IsRealTime())
 				_UpdateDeadline();
 
@@ -493,7 +493,11 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 	}
 
 	if (!pinned) {
-		CoreRunQueueLocker _(fCore);
+		CoreRunQueueLocker locker(fCore);
+
+		// Check if the Core is still active under the lock
+		if (fCore->CPUCount() == 0)
+			return false;
 
 		if (!wasReady && !IsRealTime())
 			_UpdateDeadline();
@@ -512,6 +516,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 			fCore->PushBack(this, priority);
 	}
 	fQuickStartCredit = false;
+	return true;
 }
 
 
