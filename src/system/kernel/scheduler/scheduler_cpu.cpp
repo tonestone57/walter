@@ -139,22 +139,15 @@ CPUEntry::Stop()
 		int32 irqVector = irq->irq;
 		locker.Unlock();
 
-		status_t status = assign_io_interrupt_to_cpu(irqVector, -1);
-		if (status != B_OK) {
-			dprintf("CPUEntry::Stop: failed to unassign interrupt %" B_PRId32
-				": %s. Trying current CPU.\n", irqVector, strerror(status));
-			status = assign_io_interrupt_to_cpu(irqVector, smp_get_current_cpu());
-		}
+		assign_io_interrupt_to_cpu(irqVector, -1);
 
 		locker.Lock();
 
 		irq_assignment* currentHead
 			= (irq_assignment*)list_get_first_item(&entry->irqs);
 		if (currentHead != NULL && currentHead->irq == irqVector) {
-			if (status == B_OK) {
-				dprintf("CPUEntry::Stop: interrupt %" B_PRId32 " still assigned "
-					"after successful reassignment\n", irqVector);
-			}
+			dprintf("CPUEntry::Stop: interrupt %" B_PRId32 " still assigned "
+				"after successful reassignment\n", irqVector);
 			break;
 		}
 	}

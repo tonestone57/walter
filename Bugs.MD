@@ -1,6 +1,6 @@
 # Scheduler Audit Findings
 
-## 1. Compilation Error: `assign_io_interrupt_to_cpu` Return Type Mismatch
+## 1. Compilation Error: `assign_io_interrupt_to_cpu` Return Type Mismatch [FIXED]
 
 **File:** `src/system/kernel/scheduler/scheduler_cpu.cpp`
 **Function:** `CPUEntry::Stop()`
@@ -18,10 +18,10 @@ if (status != B_OK) {
 }
 ```
 
-**Recommendation:**
-Remove the return value check. Since `assign_io_interrupt_to_cpu` handles reassignment internally (potentially falling back to `assign_cpu()`), the caller cannot easily determine success/failure. If failure detection is needed, `assign_io_interrupt_to_cpu` should be modified to return `status_t`.
+**Resolution:**
+The return value assignment and check were removed. `assign_io_interrupt_to_cpu` is now called as a void function.
 
-## 2. Fragile VTable Wiping in `scheduling_analysis.cpp`
+## 2. Fragile VTable Wiping in `scheduling_analysis.cpp` [FIXED]
 
 **File:** `src/system/kernel/scheduler/scheduling_analysis.cpp`
 **Function:** `SchedulingAnalysisManager::FinishAnalysis()`
@@ -38,10 +38,10 @@ HashObject* next = object->next;
 object = next;
 ```
 
-**Recommendation:**
-Explicitly handle the vptr wiping if intended, or use `object->next = NULL` if the intention was to clear the next pointer. Given the context (exporting to user space), clearing the vptr is likely the hidden goal, but it should be documented or done more robustly.
+**Resolution:**
+Replaced the pointer overwrite with `memset(object, 0, sizeof(HashObject))` to safely and portably clear the base class portion of the object (including vtable pointer and `next` pointer).
 
-## 3. Potential Infinite Loop / Logic Error in `power_saving.cpp`
+## 3. Potential Infinite Loop / Logic Error in `power_saving.cpp` [FIXED]
 
 **File:** `src/system/kernel/scheduler/power_saving.cpp`
 **Function:** `pack_irqs` (called by `rebalance_irqs`)
@@ -50,5 +50,5 @@ Explicitly handle the vptr wiping if intended, or use `object->next = NULL` if t
 The function iterates over IRQs assigned to the current CPU and attempts to move them to a "small task core". It breaks the loop if the IRQ at the head of the list remains the same after an attempt. However, the logic relies on side effects of `assign_io_interrupt_to_cpu` (which is void) to determine progress.
 Also, `pack_irqs` is called directly from `rebalance_irqs` in the idle path, which runs in the scheduler context (interrupts disabled). Calling `assign_io_interrupt_to_cpu` (which acquires spinlocks and performs arch-specific operations) from `reschedule()` is risky and can lead to high latency or deadlocks. In contrast, `low_latency.cpp` and the non-idle path of `power_saving.cpp` use a DPC (`IRQRebalanceDPC`) to perform IRQ reassignment outside the critical scheduler path.
 
-**Recommendation:**
-Move `pack_irqs` logic to a DPC or ensure `assign_io_interrupt_to_cpu` is safe to call from scheduler context.
+**Resolution:**
+The `pack_irqs` function was removed. `rebalance_irqs` was updated to handle the "pack to small task core" case by scheduling an `IRQRebalanceDPC` to move a single IRQ, consistent with the standard rebalancing logic and avoiding execution in the scheduler context.

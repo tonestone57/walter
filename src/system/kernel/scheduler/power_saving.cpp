@@ -487,62 +487,24 @@ rebalance(const ThreadData* threadData)
 }
 
 
-static inline void
-pack_irqs()
-{
-	SCHEDULER_ENTER_FUNCTION();
-
-	CoreEntry* smallTaskCore = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore);
-	if (smallTaskCore == NULL)
-		return;
-
-	cpu_ent* cpu = get_cpu_struct();
-	if (smallTaskCore == CoreEntry::GetCore(cpu->cpu_num))
-		return;
-
-	SpinLocker locker(cpu->irqs_lock);
-	while (true) {
-		irq_assignment* irq = (irq_assignment*)list_get_first_item(&cpu->irqs);
-		if (irq == NULL)
-			break;
-
-		int32 irqVector = irq->irq;
-		locker.Unlock();
-
-		CoreCPUHeapLocker _(smallTaskCore);
-		int32 newCPU = smallTaskCore->CPUHeap()->PeekRoot()->ID();
-		_.Unlock();
-
-		if (newCPU != cpu->cpu_num) {
-			assign_io_interrupt_to_cpu(irqVector, newCPU);
-		} else {
-			locker.Lock();
-			break;
-		}
-
-		locker.Lock();
-
-		irq_assignment* currentHead = (irq_assignment*)list_get_first_item(&cpu->irqs);
-		if (currentHead != NULL && currentHead->irq == irqVector)
-			break;
-	}
-}
-
-
 static void
 rebalance_irqs(bool idle)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (idle && atomic_pointer_get(&sSmallTaskCore) != NULL) {
-		pack_irqs();
-		return;
-	}
+	CoreEntry* smallTaskCore = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore);
+	bool pack = idle && smallTaskCore != NULL;
 
-	if (idle || atomic_pointer_get(&sSmallTaskCore) != NULL)
+	if (idle && !pack)
+		return;
+
+	if (!idle && smallTaskCore != NULL)
 		return;
 
 	cpu_ent* cpu = get_cpu_struct();
+	if (pack && smallTaskCore == CoreEntry::GetCore(cpu->cpu_num))
+		return;
+
 	SpinLocker locker(cpu->irqs_lock);
 
 	irq_assignment* chosen = NULL;
@@ -562,45 +524,49 @@ rebalance_irqs(bool idle)
 
 	locker.Unlock();
 
-	if (chosen == NULL || totalLoad < kLowLoad)
+	if (chosen == NULL || (!pack && totalLoad < kLowLoad))
 		return;
 
 	CoreEntry* other = NULL;
-	int32 bestLoad = -2;
+	if (pack) {
+		other = smallTaskCore;
+	} else {
+		int32 bestLoad = -2;
 
-	// Use random sampling if possible
-	bool tryRandom = gPackageCount > kRandomSearchThreshold;
+		// Use random sampling if possible
+		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-	if (tryRandom) {
-		// Phase 2: Local Node
-		CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
-		if (currentCore != NULL) {
-			SchedulerNode* node = currentCore->Package()->Node();
-			search_local_node(node, [&](PackageEntry* entry) {
+		if (tryRandom) {
+			// Phase 2: Local Node
+			CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
+			if (currentCore != NULL) {
+				SchedulerNode* node = currentCore->Package()->Node();
+				search_local_node(node, [&](PackageEntry* entry) {
+					CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+					return false;
+				});
+			}
+
+			// Phase 3: Global Random
+			search_global_random([&](PackageEntry* entry) {
 				CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
 				return false;
 			});
 		}
 
-		// Phase 3: Global Random
-		search_global_random([&](PackageEntry* entry) {
-			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
-			return false;
-		});
-	}
+		if (other == NULL) {
+			// Limit fallback attempts
+			const int32 kMaxFallbackAttempts = 64;
+			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-	if (other == NULL) {
-		// Limit fallback attempts
-		const int32 kMaxFallbackAttempts = 64;
-		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
-		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
-
-		for (int32 i = 0; i < attempts; i++) {
-			int32 index = startIndex + i;
-			if (index >= gPackageCount)
-				index -= gPackageCount;
-			CheckPackageMinimumLoad(&gPackageEntries[index], NULL, other,
-				bestLoad);
+			for (int32 i = 0; i < attempts; i++) {
+				int32 index = startIndex + i;
+				if (index >= gPackageCount)
+					index -= gPackageCount;
+				CheckPackageMinimumLoad(&gPackageEntries[index], NULL, other,
+					bestLoad);
+			}
 		}
 	}
 
@@ -614,7 +580,7 @@ rebalance_irqs(bool idle)
 	CoreEntry* core = CoreEntry::GetCore(smp_get_current_cpu());
 	if (other == core)
 		return;
-	if (other->GetLoad() + kLoadDifference >= core->GetLoad())
+	if (!pack && other->GetLoad() + kLoadDifference >= core->GetLoad())
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);

@@ -473,7 +473,7 @@ public:
 				}
 
 				HashObject* next = object->next;
-				*(void**)object = NULL;
+				memset(object, 0, sizeof(HashObject));
 				object = next;
 			}
 		}
