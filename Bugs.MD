@@ -52,3 +52,21 @@ Also, `pack_irqs` is called directly from `rebalance_irqs` in the idle path, whi
 
 **Resolution:**
 The `pack_irqs` function was removed. `rebalance_irqs` was updated to handle the "pack to small task core" case by scheduling an `IRQRebalanceDPC` to move a single IRQ, consistent with the standard rebalancing logic and avoiding execution in the scheduler context.
+
+---
+
+## Audit Log
+
+### Deep Dive: Work Stealing & Locking
+**Status:** Verified Safe.
+- **`try_acquire_spinlock` in `_TryStealWork`:** Failure to acquire the lock correctly leads to skipping the victim core, which is the desired behavior to avoid contention or deadlock. No systematic starvation risk detected.
+- **Locking Hierarchy:** The interaction between `scheduler_set_operation_mode` (locks all CPUs) and `scheduler_set_cpu_enabled` (locks single CPU) was analyzed. No circular dependencies were found as granular locks are leaf locks in this context.
+
+### Deep Dive: Scheduler Listeners
+**Status:** Verified Safe.
+- **Recursive Locking:** `SystemProfiler` can trigger recursive calls to `NotifySchedulerListeners` (via `thread_unblock_waker`). The kernel's `rw_spinlock` implementation (reader-biased) allows recursive read acquisition, preventing deadlock in this scenario.
+- **Lock Inversion:** No inversion found between `fLock` (in `SystemProfiler`) and `gSchedulerListenersLock`.
+
+### Deep Dive: Thread Migration
+**Status:** Verified Safe.
+- **Race Conditions:** The interaction between `ChooseCoreAndCPU` and `Enqueue` handles concurrent CPU disabling correctly. The `Enqueue` method re-verifies `fCore->CPUCount()` under the runqueue lock and forces a retry if the core has gone offline.
