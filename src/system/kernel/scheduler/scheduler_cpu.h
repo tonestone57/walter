@@ -228,9 +228,9 @@ private:
 						CPUPriorityHeap	fCPUHeap;
 						spinlock		fCPULock;
 
+						spinlock		fQueueLock;
 						int32			fThreadCount;
 						ThreadRunQueue	fRunQueue;
-						spinlock		fQueueLock;
 
 						bigtime_t		fActiveTime;
 
