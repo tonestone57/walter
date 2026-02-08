@@ -466,7 +466,10 @@ rebalance_irqs(bool idle)
 	if (other->GetLoad() + kLoadDifference >= core->GetLoad())
 		return;
 
-	assign_io_interrupt_to_cpu(chosenIRQ, newCPU);
+	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
+	cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
+	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
+	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
 }
 
 

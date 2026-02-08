@@ -8,6 +8,7 @@
 
 #include <new>
 
+#include <interrupts.h>
 #include <util/AutoLock.h>
 #include <util/Random.h>
 
@@ -75,6 +76,13 @@ ThreadRunQueue::Dump() const
 				thread->name);
 		}
 	}
+}
+
+
+void
+IRQRebalanceDPC::DoDPC(DPCQueue* queue)
+{
+	assign_io_interrupt_to_cpu(fIRQ, fTargetCPU);
 }
 
 

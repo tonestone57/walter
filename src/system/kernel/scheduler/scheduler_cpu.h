@@ -17,6 +17,7 @@
 #include <util/MinMaxHeap.h>
 
 #include <cpufreq.h>
+#include <DPC.h>
 
 #include "RunQueue.h"
 #include "scheduler_common.h"
@@ -35,6 +36,14 @@ class ThreadProcessing;
 class CPUEntry;
 class CoreEntry;
 class PackageEntry;
+
+class IRQRebalanceDPC : public DPCCallback {
+public:
+	virtual	void			DoDPC(DPCQueue* queue);
+
+			int32			fIRQ;
+			int32			fTargetCPU;
+};
 
 // Adjusted to 16 to support finer-grained clustering (clusters of 4 cores).
 // This reduces lock contention and allows L3 domains to be represented as
@@ -130,6 +139,9 @@ private:
 
 						bool			fUpdateLoadEvent;
 						uint32			fRandomState;
+
+public:
+						IRQRebalanceDPC	fRebalanceDPC;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
