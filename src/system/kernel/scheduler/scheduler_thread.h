@@ -151,6 +151,19 @@ public:
 };
 
 
+struct ThreadDataVRuntimeCompare {
+	bool operator()(const ThreadData* a, const ThreadData* b) const
+	{
+		if (a->IsRealTime()) {
+			if (b->IsRealTime())
+				return false;
+			return true;
+		}
+		if (b->IsRealTime())
+			return false;
+		return a->GetVirtualRuntime() < b->GetVirtualRuntime();
+	}
+};
 
 
 inline bool

@@ -54,7 +54,8 @@ const int32 kMaxCoresPerPackage = 16;
 // One queue per schedulable target per core. Additionally, each
 // logical processor has its sPinnedRunQueues used for scheduling
 // pinned threads.
-class ThreadRunQueue : public RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY> {
+class ThreadRunQueue : public RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY,
+	ThreadDataVRuntimeCompare> {
 public:
 						void			Dump() const;
 };

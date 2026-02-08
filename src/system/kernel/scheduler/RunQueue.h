@@ -51,10 +51,10 @@ public:
 };
 
 #define RUN_QUEUE_TEMPLATE_LIST	\
-	template<typename Element, unsigned int MaxPriority, typename GetLink>
-#define RUN_QUEUE_CLASS_NAME	RunQueue<Element, MaxPriority, GetLink>
+	template<typename Element, unsigned int MaxPriority, typename Compare, typename GetLink>
+#define RUN_QUEUE_CLASS_NAME	RunQueue<Element, MaxPriority, Compare, GetLink>
 
-template<typename Element, unsigned int MaxPriority,
+template<typename Element, unsigned int MaxPriority, typename Compare,
 	typename GetLink = RunQueueStandardGetLink<Element> >
 class RunQueue {
 public:
@@ -64,7 +64,7 @@ public:
 	public:
 								ConstIterator();
 								ConstIterator(const RunQueue<Element,
-										MaxPriority, GetLink>* list);
+										MaxPriority, Compare, GetLink>* list);
 
 		inline	ConstIterator&	operator=(const ConstIterator& other);
 
@@ -102,11 +102,8 @@ public:
 
 	/*!
 		Finds the best element in the highest priority non-empty queue.
-		\param compare Functor returning true if the first argument is "better" than the second.
-		\param isOptimal Functor returning true if the element is "good enough" to return immediately (early exit).
 	*/
-	template<typename Compare, typename IsOptimal>
-	Element*	PeekBest(const Compare& compare, const IsOptimal& isOptimal) const;
+	Element*	PeekBest() const;
 
 	template<typename Predicate>
 	Element*	PeekOption(const Predicate& predicate) const;
@@ -119,7 +116,10 @@ private:
 			Element*	fHeads[MaxPriority + 1];
 			Element*	fTails[MaxPriority + 1];
 
+	mutable	Element*	fBest;
+
 	static	GetLink		sGetLink;
+	static	Compare		sCompare;
 };
 
 
@@ -168,7 +168,7 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::ConstIterator()
 
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::ConstIterator::ConstIterator(const RunQueue<Element,
-		MaxPriority, GetLink>* list)
+		MaxPriority, Compare, GetLink>* list)
 	:
 	fList(list)
 {
@@ -271,7 +271,8 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
 	:
-	fInitStatus(B_OK)
+	fInitStatus(B_OK),
+	fBest(NULL)
 {
 	memset(fBitmap, 0, sizeof(fBitmap));
 	memset(fHeads, 0, sizeof(fHeads));
@@ -341,6 +342,14 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		fBitmap[priority / 32] |= (1UL << (priority % 32));
 	}
 	fHeads[priority] = element;
+
+	if (fBest != NULL) {
+		unsigned int bestPriority = sGetLink(fBest)->fPriority;
+		if (priority > bestPriority)
+			fBest = element;
+		else if (priority == bestPriority && sCompare(element, fBest))
+			fBest = element;
+	}
 }
 
 
@@ -370,6 +379,14 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		fBitmap[priority / 32] |= (1UL << (priority % 32));
 	}
 	fTails[priority] = element;
+
+	if (fBest != NULL) {
+		unsigned int bestPriority = sGetLink(fBest)->fPriority;
+		if (priority > bestPriority)
+			fBest = element;
+		else if (priority == bestPriority && sCompare(element, fBest))
+			fBest = element;
+	}
 }
 
 
@@ -403,6 +420,9 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
+
+	if (fBest == element)
+		fBest = NULL;
 }
 
 
@@ -434,10 +454,12 @@ RUN_QUEUE_CLASS_NAME::GetConstIterator() const
 
 
 RUN_QUEUE_TEMPLATE_LIST
-template<typename Compare, typename IsOptimal>
 Element*
-RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare, const IsOptimal& isOptimal) const
+RUN_QUEUE_CLASS_NAME::PeekBest() const
 {
+	if (fBest != NULL)
+		return fBest;
+
 	// Strict priority: only look at the highest priority queue that has threads.
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
@@ -452,12 +474,6 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare, const IsOptimal& isOptima
 			unsigned int priority = i * 32 + bit;
 			Element* current = fHeads[priority];
 
-			// Early Exit Optimization:
-			// If the head of the queue is "good enough" (optimal), return immediately.
-			// This avoids scanning the list in the common case (healthy system).
-			if (isOptimal(current))
-				return current;
-
 			// We found the highest priority. Now find the best candidate
 			// strictly within this priority level.
 			//
@@ -471,16 +487,12 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare& compare, const IsOptimal& isOptima
 			current = sGetLink(current)->fNext;
 
 			for (int j = 1; j < kSearchDepth && current != NULL; j++) {
-				if (compare(current, best))
+				if (sCompare(current, best))
 					best = current;
-
-				// Optional: Check optimization during scan?
-				// Unlikely to be needed if head wasn't optimal, but could be added.
-				if (isOptimal(current))
-					return current;
 
 				current = sGetLink(current)->fNext;
 			}
+			fBest = best;
 			return best;
 		}
 	}
@@ -528,6 +540,9 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 
 RUN_QUEUE_TEMPLATE_LIST
 GetLink RUN_QUEUE_CLASS_NAME::sGetLink;
+
+RUN_QUEUE_TEMPLATE_LIST
+Compare RUN_QUEUE_CLASS_NAME::sCompare;
 
 RUN_QUEUE_TEMPLATE_LIST
 GetLink RUN_QUEUE_CLASS_NAME::ConstIterator::sGetLink;

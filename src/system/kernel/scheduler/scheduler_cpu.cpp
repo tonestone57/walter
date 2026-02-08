@@ -191,50 +191,11 @@ CPUEntry::Remove(ThreadData* thread)
 }
 
 
-struct ThreadDataVRuntimeCompare {
-	bool operator()(const ThreadData* a, const ThreadData* b) const
-	{
-		if (a->IsRealTime()) {
-			if (b->IsRealTime())
-				return false;
-			return true;
-		}
-		if (b->IsRealTime())
-			return false;
-		return a->GetVirtualRuntime() < b->GetVirtualRuntime();
-	}
-};
-
-
-struct ThreadDataOptimal {
-	bool operator()(const ThreadData* thread) const
-	{
-		if (thread->IsRealTime())
-			return true;
-
-		// The logic below was intended to be an early exit optimization:
-		// "If a thread is within 2ms of the minimum virtual runtime, it is fair enough."
-		// However, since fMinVRuntime is derived from the head of the queue (maximum priority,
-		// and often minimum virtual runtime due to insertion order), this check almost always
-		// returns true for the first candidate, effectively disabling the search for a better
-		// candidate (Dynamic Search Depth).
-		//
-		// To ensure we actually scan the run queue (up to kSearchDepth in RunQueue::PeekBest)
-		// to find the thread with the strictly lowest virtual runtime, we must return false here.
-		//
-		// Note: This tradeoff prioritizes fairness (strictly lowest virtual runtime) over
-		// absolute minimum scheduling latency (picking the first available).
-		return false;
-	}
-};
-
-
 ThreadData*
 CoreEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare(),
-		ThreadDataOptimal());
+	return fRunQueue.PeekBest();
 }
 
 
@@ -242,8 +203,7 @@ ThreadData*
 CPUEntry::PeekThread() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return fRunQueue.PeekBest(ThreadDataVRuntimeCompare(),
-		ThreadDataOptimal());
+	return fRunQueue.PeekBest();
 }
 
 
