@@ -91,9 +91,6 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 			}
 		}
 	}
-
-	if (core == NULL)
-		core = CoreEntry::GetCore(smp_get_current_cpu());
 }
 
 
