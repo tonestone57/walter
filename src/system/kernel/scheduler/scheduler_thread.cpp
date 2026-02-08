@@ -226,16 +226,8 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	if (fHomePackage == -1)
 		fHomePackage = targetCore->Package()->ID();
 
-	if (fCore != targetCore) {
-		fLoadMeasurementEpoch = targetCore->LoadMeasurementEpoch() - 1;
-		if (fReady) {
-			if (fCore != NULL)
-				fCore->RemoveLoad(fNeededLoad, true);
-			targetCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, true);
-		}
-	}
-
-	fCore = targetCore;
+	if (fCore != targetCore)
+		MigrateTo(targetCore);
 	return rescheduleNeeded;
 }
 
@@ -485,6 +477,8 @@ ThreadData::MigrateTo(CoreEntry* targetCore)
 	if (fCore == targetCore)
 		return;
 
+	fLoadMeasurementEpoch = targetCore->LoadMeasurementEpoch() - 1;
+
 	if (fReady) {
 		if (gTrackCoreLoad) {
 			if (fCore != NULL)
@@ -493,7 +487,6 @@ ThreadData::MigrateTo(CoreEntry* targetCore)
 		}
 	}
 
-	fLoadMeasurementEpoch = targetCore->LoadMeasurementEpoch() - 1;
 	fCore = targetCore;
 }
 

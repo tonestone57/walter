@@ -317,8 +317,15 @@ rebalance(const ThreadData* threadData)
 	}
 
 	if (other == NULL && !useMask) {
-		for (int32 i = 0; i < gPackageCount; i++) {
-			CheckPackageMinimumLoad(&gPackageEntries[i], NULL, other, bestLoad);
+		const int32 kMaxFallbackAttempts = 64;
+		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+
+		for (int32 i = 0; i < attempts; i++) {
+			int32 index = startIndex + i;
+			if (index >= gPackageCount)
+				index -= gPackageCount;
+			CheckPackageMinimumLoad(&gPackageEntries[index], NULL, other, bestLoad);
 		}
 	}
 

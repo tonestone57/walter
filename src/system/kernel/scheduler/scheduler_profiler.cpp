@@ -114,8 +114,9 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 	int32 stackDepth = fFunctionStackPointers[cpu];
 	// If EnterFunction failed due to stack overflow, it returned early.
 	// In that case, we should not decrement the pointer.
-	// However, we don't track failure state.
-	// But if stackDepth is already 0, we certainly shouldn't decrement.
+	// The RAII Function object tracks whether EnterFunction succeeded,
+	// so ExitFunction should only be called if it did.
+	// However, we still check for underflow to catch manual misuse.
 	if (stackDepth <= 0)
 		return;
 
