@@ -56,7 +56,7 @@ ThreadData::_ChooseCore() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(!gSingleCore);
-	return gCurrentMode->choose_core(this);
+	return Scheduler::ChooseCore(this);
 }
 
 
@@ -241,12 +241,12 @@ ThreadData::ComputeQuantum() const
 		return fBaseQuantum;
 
 	const bigtime_t kMinGranularity = 1200;
-	const bigtime_t kHighLoadQuantum = std::max(gCurrentMode->base_quantum,
+	const bigtime_t kHighLoadQuantum = std::max(Scheduler::BaseQuantum(),
 		kMinGranularity);
-	const bigtime_t kMediumQuantum = gCurrentMode->base_quantum
-		* gCurrentMode->quantum_multipliers[0];
-	const bigtime_t kMaxQuantum = gCurrentMode->maximum_latency;
-	const bigtime_t kDisplayQuantum = std::max(gCurrentMode->minimal_quantum,
+	const bigtime_t kMediumQuantum = Scheduler::BaseQuantum()
+		* Scheduler::QuantumMultiplier(0);
+	const bigtime_t kMaxQuantum = Scheduler::MaximumLatency();
+	const bigtime_t kDisplayQuantum = std::max(Scheduler::MinimalQuantum(),
 		kMinGranularity);
 
 	const int32 kLoadScale = 1024;
@@ -333,14 +333,14 @@ ThreadData::ComputeQuantumLengths()
 	}
 
 	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
-		const bigtime_t kQuantum0 = gCurrentMode->base_quantum;
+		const bigtime_t kQuantum0 = Scheduler::BaseQuantum();
 		if (priority >= B_URGENT_DISPLAY_PRIORITY) {
 			atomic_set64(&sQuantumLengths[priority], kQuantum0);
 			continue;
 		}
 
 		const bigtime_t kQuantum1
-			= kQuantum0 * gCurrentMode->quantum_multipliers[0];
+			= kQuantum0 * Scheduler::QuantumMultiplier(0);
 		if (priority > B_NORMAL_PRIORITY) {
 			atomic_set64(&sQuantumLengths[priority],
 				_ScaleQuantum(kQuantum1, kQuantum0, B_URGENT_DISPLAY_PRIORITY,
@@ -349,7 +349,7 @@ ThreadData::ComputeQuantumLengths()
 		}
 
 		const bigtime_t kQuantum2
-			= kQuantum0 * gCurrentMode->quantum_multipliers[1];
+			= kQuantum0 * Scheduler::QuantumMultiplier(1);
 		atomic_set64(&sQuantumLengths[priority],
 			_ScaleQuantum(kQuantum2, kQuantum1, B_NORMAL_PRIORITY,
 				B_IDLE_PRIORITY, priority));

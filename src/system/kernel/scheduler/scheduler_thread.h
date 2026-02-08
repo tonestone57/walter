@@ -184,7 +184,7 @@ inline bool
 ThreadData::HasCacheExpired() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return gCurrentMode->has_cache_expired(this);
+	return Scheduler::HasCacheExpired(this);
 }
 
 
@@ -210,7 +210,7 @@ ThreadData::Rebalance() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(!gSingleCore);
-	return gCurrentMode->rebalance(this);
+	return Scheduler::Rebalance(this);
 }
 
 
@@ -312,9 +312,9 @@ ThreadData::GetQuantumLeft()
 
 	bigtime_t quantum = ComputeQuantum() - fTimeUsed;
 	quantum += stolenTime;
-	quantum = max_c(quantum, gCurrentMode->minimal_quantum);
-	if (quantum > gCurrentMode->maximum_latency)
-		quantum = gCurrentMode->maximum_latency;
+	quantum = max_c(quantum, Scheduler::MinimalQuantum());
+	if (quantum > Scheduler::MaximumLatency())
+		quantum = Scheduler::MaximumLatency();
 
 	return quantum;
 }
@@ -341,7 +341,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	timeLeft = max_c(bigtime_t(0), timeLeft);
 
 	// too little time left, it's better make the next quantum a bit longer
-	bigtime_t skipTime = gCurrentMode->minimal_quantum / 2;
+	bigtime_t skipTime = Scheduler::MinimalQuantum() / 2;
 	if (hasYielded) {
 		timeLeft = 0;
 	} else if (wasPreempted || timeLeft <= skipTime) {

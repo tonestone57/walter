@@ -47,8 +47,8 @@ public:
 	void		operator()(ThreadData* thread);
 };
 
-scheduler_mode gCurrentModeID;
-scheduler_mode_operations* gCurrentMode;
+scheduler_mode Scheduler::sCurrentModeID;
+scheduler_mode_operations* Scheduler::sCurrentMode;
 
 bool gSingleCore;
 bool gTrackCoreLoad;
@@ -672,9 +672,8 @@ scheduler_set_operation_mode(scheduler_mode mode)
 
 	InterruptsBigSchedulerLocker _;
 
-	gCurrentModeID = mode;
-	gCurrentMode = sSchedulerModes[mode];
-	gCurrentMode->switch_to_mode();
+	Scheduler::SetOperationMode(mode, sSchedulerModes[mode]);
+	Scheduler::SwitchToMode();
 
 	ThreadData::ComputeQuantumLengths();
 
@@ -693,7 +692,7 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	dprintf("scheduler: %s CPU %" B_PRId32 "\n",
 		enabled ? "enabling" : "disabling", cpuID);
 
-	gCurrentMode->set_cpu_enabled(cpuID, enabled);
+	Scheduler::SetCPUEnabled(cpuID, enabled);
 
 	CPUEntry* cpu = &gCPUEntries[cpuID];
 	cpu->LockScheduler();
@@ -1325,9 +1324,9 @@ _user_estimate_max_scheduling_latency(thread_id id)
 		threadCount -= threadCount * priority / THREAD_MAX_SET_PRIORITY;
 	}
 
-	return min_c(max_c(threadCount * gCurrentMode->base_quantum,
-			gCurrentMode->minimal_quantum),
-		gCurrentMode->maximum_latency);
+	return min_c(max_c(threadCount * Scheduler::BaseQuantum(),
+			Scheduler::MinimalQuantum()),
+		Scheduler::MaximumLatency());
 }
 
 
@@ -1345,5 +1344,5 @@ _user_set_scheduler_mode(int32 mode)
 int32
 _user_get_scheduler_mode()
 {
-	return gCurrentModeID;
+	return Scheduler::Mode();
 }

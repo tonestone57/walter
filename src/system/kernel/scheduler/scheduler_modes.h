@@ -36,10 +36,8 @@ extern struct scheduler_mode_operations gSchedulerPowerSavingMode;
 
 namespace Scheduler {
 
-
-extern scheduler_mode gCurrentModeID;
-extern scheduler_mode_operations* gCurrentMode;
-
+class ThreadData;
+class CoreEntry;
 
 }
 

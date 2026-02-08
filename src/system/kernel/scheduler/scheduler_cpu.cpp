@@ -249,7 +249,7 @@ CPUEntry::ComputeLoad()
 		return;
 
 	if (fLoad > kVeryHighLoad)
-		gCurrentMode->rebalance_irqs(false);
+		Scheduler::RebalanceIRQs(false);
 }
 
 
