@@ -40,6 +40,10 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
     *   Limited fallback scans in `choose_core`, `rebalance`, and `rebalance_irqs` to 64 attempts (randomized start).
     *   Updated `search_local_node` and `search_global_random` to use per-CPU RNG and optimized collision detection.
 
+### 9. Static Mode Encapsulation
+*   **Issue:** Global accesses to the scheduler mode configuration (`gCurrentMode`) within `scheduler.cpp` bypassed the `Scheduler` encapsulation and produced compilation errors as `gCurrentMode` was refactored and localized.
+*   **Fix:** Updated the idle thread IRQ rebalancing path to correctly call `Scheduler::RebalanceIRQs(true)` directly, rather than accessing a deleted global variable, restoring proper compilation and ensuring mode isolation.
+
 ## Pending Recommendations
 
 (None)

@@ -117,6 +117,7 @@ Further auditing revealed specific fixes implemented directly within the schedul
 *   **Hot-Unplug Safety:** `CPUEntry::UpdatePriority` (`src/system/kernel/scheduler/scheduler_cpu.cpp`) now explicitly handles updates to `B_IDLE_PRIORITY` even if the CPU is marked as disabled. This prevents kernel panics during CPU hot-unplug operations when a core is being taken offline.
 *   **Locking Correctness:** In `scheduler_set_cpu_enabled`, the methods `AddCPU` and `RemoveCPU` (in `CoreEntry`) are now called without holding `fCPULock`. This logic relies on the caller (`scheduler_set_cpu_enabled`) holding the global `InterruptsBigSchedulerLocker` for serialization, avoiding a potential deadlock or double-lock scenario.
 *   **Profiler Safety:** `Profiler::EnterFunction` (`src/system/kernel/scheduler/scheduler_profiler.cpp`) now enforces strict bounds checks on `fFunctionStackPointers`. This prevents buffer overflows and kernel crashes if the function call stack depth exceeds the profiler's pre-allocated storage.
+*   **Refactoring Correctness:** Fixed an issue in `scheduler.cpp` where the idle thread path incorrectly attempted to directly access `gCurrentMode` (which was removed/refactored into the static `Scheduler::sCurrentMode`). It now safely calls `Scheduler::RebalanceIRQs(true)`.
 
 ## 11. Potential Issues & Future Risks
 
