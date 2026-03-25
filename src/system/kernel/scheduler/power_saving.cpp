@@ -282,47 +282,6 @@ choose_core(const ThreadData* threadData)
 			useMask = false;
 	}
 
-	CoreEntry* previousCore = threadData->PreviousCore();
-	if (previousCore != NULL && !has_cache_expired(threadData)) {
-		if (!useMask || previousCore->CPUMask().Matches(mask)) {
-			// Check if previous core is idle
-			if (previousCore->GetLoad() == 0)
-				return previousCore;
-
-			// Check if previous core is lightly loaded (Soft Affinity)
-			if (previousCore->GetLoad() <= kLoadDifference)
-				return previousCore;
-		}
-
-		// Check sibling cores in the same package (likely sharing L3)
-		PackageEntry* package = previousCore->Package();
-		if (package != NULL) {
-			CoreEntry* sibling = package->GetIdleCore();
-			if (sibling != NULL && (!useMask || sibling->CPUMask().Matches(mask)))
-				return sibling;
-
-			// Check local NUMA node (Super Package) to keep traffic local
-			SchedulerNode* node = package->Node();
-			if (node != NULL) {
-				uint64 idlePackageMask = node->IdlePackageMask();
-				while (idlePackageMask != 0) {
-					int32 packageIndex = __builtin_ctzll(idlePackageMask);
-					idlePackageMask &= ~(1ULL << packageIndex);
-
-					int32 globalPackageIndex
-						= node->PackageStartIndex() + packageIndex;
-					if (globalPackageIndex >= gPackageCount)
-						continue;
-
-					PackageEntry* localPackage = &gPackageEntries[globalPackageIndex];
-					CoreEntry* localSibling = localPackage->GetIdleCore();
-					if (localSibling != NULL && (!useMask || localSibling->CPUMask().Matches(mask)))
-						return localSibling;
-				}
-			}
-		}
-	}
-
 	// try to pack all threads on one core
 	core = choose_small_task_core();
 	if (core != NULL && (useMask && !core->CPUMask().Matches(mask)))
@@ -336,6 +295,8 @@ choose_core(const ThreadData* threadData)
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 		if (tryRandom && !useMask) {
+			CoreEntry* previousCore = threadData->PreviousCore();
+
 			// Phase 1: L3 Domain (Sibling in previous package)
 			if (previousCore != NULL && !has_cache_expired(threadData)) {
 				PackageEntry* package = previousCore->Package();
@@ -423,18 +384,6 @@ choose_core(const ThreadData* threadData)
 		return NULL;
 
 	ASSERT(core != NULL);
-
-	if (previousCore != NULL && !has_cache_expired(threadData)) {
-		if (!useMask || previousCore->CPUMask().Matches(mask)) {
-			if (core != previousCore) {
-				// If the selected core is not significantly less loaded than the
-				// previous core, we prefer the previous core to maintain cache locality.
-				if (core->GetLoad() + kLoadDifference >= previousCore->GetLoad())
-					return previousCore;
-			}
-		}
-	}
-
 	return core;
 }
 
@@ -454,6 +403,7 @@ rebalance(const ThreadData* threadData)
 	const bool useMask = !mask.IsEmpty();
 
 	CoreEntry* core = threadData->Core();
+	ASSERT(core != NULL);
 
 	int32 coreLoad = core->GetLoad();
 	int32 cpuCount = core->CPUCount();
