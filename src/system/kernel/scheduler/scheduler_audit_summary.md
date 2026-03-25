@@ -35,10 +35,12 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Fix:** Cached `system_time()` in a local variable to reduce overhead.
 
 ### 8. Power Saving Mode Parity
-*   **Issue:** `power_saving.cpp` exhibited similar issues to those fixed in `low_latency.cpp`: unbounded linear fallback scans and global RNG contention in internal search functions.
-*   **Fix:** Applied the same optimizations to `power_saving.cpp`:
+*   **Issue:** `power_saving.cpp` exhibited similar issues to those fixed in `low_latency.cpp` (unbounded linear fallback scans, global RNG contention) and additionally lacked Advanced NUMA Support and cache locality checks present in low-latency mode.
+*   **Fix:** Brought `power_saving.cpp` up to full parity with `low_latency.cpp`:
     *   Limited fallback scans in `choose_core`, `rebalance`, and `rebalance_irqs` to 64 attempts (randomized start).
     *   Updated `search_local_node` and `search_global_random` to use per-CPU RNG and optimized collision detection.
+    *   Added Cache Locality Support: Prefer scheduling threads on their `PreviousCore` or local sibling cores (L2/L3 domains).
+    *   Added Advanced NUMA Support: Adjusted migration thresholds in `rebalance` based on `ThreadData::HomePackage()` to incentivize returning threads to their native memory domains.
 
 ## Pending Recommendations
 
@@ -52,4 +54,4 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Clustering:** Verified logic with simulation scripts for various core counts (1, 4, 6, 9, 13, 14, 15).
 
 ## Conclusion
-The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage and bounded search algorithms. The new clustering logic ensures better topology balance. Future work should focus on bringing `power_saving.cpp` up to parity with `low_latency.cpp`.
+The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage and bounded search algorithms. The new clustering logic ensures better topology balance. The power saving mode (`power_saving.cpp`) has been brought up to full architectural parity with the low latency mode.

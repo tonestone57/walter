@@ -55,6 +55,7 @@ The system supports switchable operation modes (`scheduler_modes.h`) to adapt to
 *   **Power Saving Mode:**
     *   **Strategy:** "Pack". Prefers filling up active cores before waking new ones.
     *   **Behavior:** Uses `choose_small_task_core` and `check_package_packing` to colocate threads.
+    *   **Features:** Recently updated to achieve feature parity with Low Latency mode, including Advanced NUMA Support (Home Package migration thresholds) and Cache Locality (Previous Core / Sibling checks), applied as fallbacks when packing is not optimal.
     *   **Quantum:** Longer base quantum (5000us) to reduce context switches and allow deeper CPU sleep states.
 
 ## 6. Locking & Concurrency
