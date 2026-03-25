@@ -308,22 +308,7 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 
 			ASSERT(priority <= MaxPriority);
 			ASSERT(fHeads[priority] != NULL);
-
-			Element* best = fHeads[priority];
-			Element* current = sGetLink(best)->fNext;
-
-			// Intra-Bucket Heuristic: "Best of 8" search
-			// Scan up to 8 threads in the highest priority bucket and pick
-			// the one with the lowest virtual_runtime. This significantly
-			// improves statistical fairness without breaking O(1) bounds.
-			const int kSearchDepth = 8;
-			for (int j = 1; j < kSearchDepth && current != NULL; j++) {
-				if (sCompare(current, best))
-					best = current;
-				current = sGetLink(current)->fNext;
-			}
-
-			return best;
+			return fHeads[priority];
 		}
 	}
 

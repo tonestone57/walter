@@ -106,10 +106,9 @@ While the updated scheduler is highly responsive, its "Statistical Fairness" (bu
     *   **Fairness Improvement:** **Moderate (Rank 2)**. Reduces bucket width from ~5ms to ~2ms, statistically reducing collisions by ~60%.
     *   **Performance Impact:** **Negligible**. Bitmaps grow slightly (from 4 words to 8 words), but `__builtin_ctz` efficiency remains identical.
 
-3.  **Simplified Lag Tracking (Starvation Protection)**
-    *   **Strategy:** Add a `fLag` counter. If a thread is skipped during a "TryLock" failure (work stealing), increment `fLag`. If it exceeds a threshold, forcefully boost its urgency.
-    *   **Fairness Improvement:** **Low (Rank 3)**. Only helps in pathological edge cases (high contention). Most useful for preventing worst-case starvation rather than improving average-case fairness.
-    *   **Performance Impact:** **Very Low**. Simple integer increment/check.
+3.  ~~**Simplified Lag Tracking (Starvation Protection)**~~ - **REJECTED**
+    *   **Strategy:** Add a `fLag` counter to track if a thread is skipped during a `TryLock` failure (work stealing) and forcefully boost its urgency if skipped too often.
+    *   **Status:** Rejected due to fundamental concurrency violations. If a CPU fails to acquire a `RunQueue` lock via `TryLock`, it cannot safely access the threads within that queue to increment a counter. Furthermore, the core Virtual Deadline algorithm inherently protects against starvation as a thread's "urgency" naturally escalates the longer it waits in any queue.
 
 ## 10. Additional Scheduler Refinements
 

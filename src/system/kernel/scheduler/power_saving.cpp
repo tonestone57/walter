@@ -403,7 +403,6 @@ rebalance(const ThreadData* threadData)
 	const bool useMask = !mask.IsEmpty();
 
 	CoreEntry* core = threadData->Core();
-	ASSERT(core != NULL);
 
 	int32 coreLoad = core->GetLoad();
 	int32 cpuCount = core->CPUCount();
@@ -472,29 +471,9 @@ rebalance(const ThreadData* threadData)
 		}
 		ASSERT(other != NULL);
 
-		// Advanced NUMA Support:
-		// If the candidate core 'other' is in the thread's Home Package,
-		// we reduce the migration threshold to encourage returning home.
-		// Conversely, if 'other' is remote and we are currently home, we increase it.
-		int32 homePackageID = threadData->HomePackage();
-		int32 threshold = kLoadDifference >> 1;
-
-		if (homePackageID >= 0) {
-			int32 currentPackageID = core->Package()->ID();
-			int32 otherPackageID = other->Package()->ID();
-
-			if (otherPackageID == homePackageID && currentPackageID != homePackageID) {
-				// Bonus for returning home
-				threshold = 0;
-			} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
-				// Penalty for leaving home
-				threshold *= 2;
-			}
-		}
-
 		int32 coreNewLoad = coreLoad - threadLoad;
 		int32 otherNewLoad = other->GetLoad() + threadLoad;
-		return coreNewLoad - otherNewLoad >= threshold ? other : core;
+		return coreNewLoad - otherNewLoad >= kLoadDifference >> 1 ? other : core;
 	}
 
 	if (coreLoad >= kMediumLoad)

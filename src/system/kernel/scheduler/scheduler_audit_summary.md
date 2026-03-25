@@ -39,11 +39,6 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Fix:** Applied the same optimizations to `power_saving.cpp`:
     *   Limited fallback scans in `choose_core`, `rebalance`, and `rebalance_irqs` to 64 attempts (randomized start).
     *   Updated `search_local_node` and `search_global_random` to use per-CPU RNG and optimized collision detection.
-    *   Added Advanced NUMA Support: Adjusted migration thresholds in `rebalance` based on `ThreadData::HomePackage()` to incentivize returning threads to their native memory domains while preserving the core task packing strategy.
-
-### 9. Statistical Unfairness (Priority Bucket Collisions)
-*   **Issue:** The scheduler maps continuous urgency into 100 discrete priority buckets (0..99). Multiple threads with similar virtual runtimes could collide in the same bucket. `PeekMaximum` strictly used the first thread inserted (FIFO), leading to temporary unfairness and jitter for threads sharing a bucket.
-*   **Fix:** Implemented an "Intra-Bucket Heuristic" in `RunQueue::PeekMaximum`. Instead of strictly returning the head, it now scans up to the first 8 threads ("Best of 8") in the highest-priority non-empty bucket and selects the one with the lowest `virtual_runtime`. This approximates strict deadline sorting while maintaining O(1) performance guarantees.
 
 ## Pending Recommendations
 
@@ -57,4 +52,4 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Clustering:** Verified logic with simulation scripts for various core counts (1, 4, 6, 9, 13, 14, 15).
 
 ## Conclusion
-The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage and bounded search algorithms. The new clustering logic ensures better topology balance. The power saving mode (`power_saving.cpp`) has been brought up to architectural parity with the low latency mode.
+The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage and bounded search algorithms. The new clustering logic ensures better topology balance. Future work should focus on bringing `power_saving.cpp` up to parity with `low_latency.cpp`.
