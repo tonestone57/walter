@@ -384,8 +384,22 @@ choose_core(const ThreadData* threadData)
 		return NULL;
 
 	ASSERT(core != NULL);
+
+	CoreEntry* previousCore = threadData->PreviousCore();
+	if (previousCore != NULL && !has_cache_expired(threadData)) {
+		if (!useMask || previousCore->CPUMask().Matches(mask)) {
+			if (core != previousCore) {
+				// If the selected core is not significantly less loaded than the
+				// previous core, we prefer the previous core to maintain cache locality.
+				if (core->GetLoad() + kLoadDifference >= previousCore->GetLoad())
+					return previousCore;
+			}
+		}
+	}
+
 	return core;
 }
+
 
 
 static CoreEntry*
@@ -403,6 +417,7 @@ rebalance(const ThreadData* threadData)
 	const bool useMask = !mask.IsEmpty();
 
 	CoreEntry* core = threadData->Core();
+	ASSERT(core != NULL);
 
 	int32 coreLoad = core->GetLoad();
 	int32 cpuCount = core->CPUCount();
@@ -471,9 +486,29 @@ rebalance(const ThreadData* threadData)
 		}
 		ASSERT(other != NULL);
 
+		// Advanced NUMA Support:
+		// If the candidate core 'other' is in the thread's Home Package,
+		// we reduce the migration threshold to encourage returning home.
+		// Conversely, if 'other' is remote and we are currently home, we increase it.
+		int32 homePackageID = threadData->HomePackage();
+		int32 threshold = kLoadDifference >> 1;
+
+		if (homePackageID >= 0) {
+			int32 currentPackageID = core->Package()->ID();
+			int32 otherPackageID = other->Package()->ID();
+
+			if (otherPackageID == homePackageID && currentPackageID != homePackageID) {
+				// Bonus for returning home
+				threshold = 0;
+			} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
+				// Penalty for leaving home
+				threshold *= 2;
+			}
+		}
+
 		int32 coreNewLoad = coreLoad - threadLoad;
 		int32 otherNewLoad = other->GetLoad() + threadLoad;
-		return coreNewLoad - otherNewLoad >= kLoadDifference >> 1 ? other : core;
+		return coreNewLoad - otherNewLoad >= threshold ? other : core;
 	}
 
 	if (coreLoad >= kMediumLoad)
@@ -485,6 +520,7 @@ rebalance(const ThreadData* threadData)
 	return smallTaskCore->GetLoad() + threadLoad < kHighLoad
 		? smallTaskCore : core;
 }
+
 
 
 static void
@@ -588,6 +624,7 @@ rebalance_irqs(bool idle)
 	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
 }
+
 
 
 scheduler_mode_operations gSchedulerPowerSavingMode = {
