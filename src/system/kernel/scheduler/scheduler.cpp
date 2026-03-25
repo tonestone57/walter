@@ -573,7 +573,7 @@ reschedule(int32 nextState)
 		if (!nextThreadData->IsIdle())
 			nextThreadData->Continues();
 		else
-			gCurrentMode->rebalance_irqs(true);
+			Scheduler::RebalanceIRQs(true);
 		nextThreadData->StartQuantum();
 
 		modeLocker.Unlock();
