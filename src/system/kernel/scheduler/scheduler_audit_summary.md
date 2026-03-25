@@ -41,6 +41,10 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
     *   Updated `search_local_node` and `search_global_random` to use per-CPU RNG and optimized collision detection.
     *   Added Advanced NUMA Support: Adjusted migration thresholds in `rebalance` based on `ThreadData::HomePackage()` to incentivize returning threads to their native memory domains while preserving the core task packing strategy.
 
+### 9. Statistical Unfairness (Priority Bucket Collisions)
+*   **Issue:** The scheduler maps continuous urgency into 100 discrete priority buckets (0..99). Multiple threads with similar virtual runtimes could collide in the same bucket. `PeekMaximum` strictly used the first thread inserted (FIFO), leading to temporary unfairness and jitter for threads sharing a bucket.
+*   **Fix:** Implemented an "Intra-Bucket Heuristic" in `RunQueue::PeekMaximum`. Instead of strictly returning the head, it now scans up to the first 8 threads ("Best of 8") in the highest-priority non-empty bucket and selects the one with the lowest `virtual_runtime`. This approximates strict deadline sorting while maintaining O(1) performance guarantees.
+
 ## Pending Recommendations
 
 (None)

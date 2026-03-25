@@ -97,10 +97,9 @@ Based on the architectural changes (Virtual Deadlines, O(1) Scalability, Active 
 
 While the updated scheduler is highly responsive, its "Statistical Fairness" (bucketized priority) can theoretically lag behind Linux EEVDF's precise fairness. The following recommendations are ranked by their ability to improve fairness:
 
-1.  **Intra-Bucket Heuristics (Highest Fairness Impact)**
-    *   **Strategy:** Implement a "Best of 4" search within the highest priority bucket instead of taking the first thread (FIFO). The scheduler would peek at the first few threads and pick the one with the absolute lowest `virtual_runtime`.
-    *   **Fairness Improvement:** **High (Rank 1)**. This directly addresses the primary source of unfairness (collisions within the 5ms bucket). It approximates strict deadline sorting.
-    *   **Performance Impact:** **Low**. Requires scanning 3-4 additional pointers in the hot path. O(1) complexity is maintained (bounded scan).
+1.  **Intra-Bucket Heuristics (Highest Fairness Impact) - COMPLETED**
+    *   **Strategy:** Implement a "Best of 8" search within the highest priority bucket instead of taking the first thread (FIFO). The scheduler peeks at the first 8 threads and picks the one with the absolute lowest `virtual_runtime`.
+    *   **Status:** Implemented in `RunQueue::PeekMaximum`. This directly addresses the primary source of unfairness (collisions within the bucket) and approximates strict deadline sorting without breaking O(1) bounds.
 
 2.  **Increase Priority Resolution**
     *   **Strategy:** Expand `THREAD_MAX_SET_PRIORITY` from 99 to 255 (matching one byte).
