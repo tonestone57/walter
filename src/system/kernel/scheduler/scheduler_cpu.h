@@ -37,6 +37,12 @@ class CPUEntry;
 class CoreEntry;
 class PackageEntry;
 
+enum CoreType {
+	CORE_TYPE_UNKNOWN = 0,
+	CORE_TYPE_PERFORMANCE,
+	CORE_TYPE_EFFICIENCY
+};
+
 class IRQRebalanceDPC : public DPCCallback {
 public:
 	virtual	void			DoDPC(DPCQueue* queue);
@@ -67,6 +73,11 @@ public:
 
 	inline				int32			ID() const	{ return fCPUNumber; }
 	inline				CoreEntry*		Core() const	{ return fCore; }
+
+	inline				int32			PerformanceScale() const
+											{ return fPerformanceScale; }
+	inline				void			SetPerformanceScale(int32 scale)
+											{ fPerformanceScale = scale; }
 
 						void			Start();
 						void			Stop();
@@ -134,6 +145,8 @@ private:
 						int32			fThreadCount;
 						int32			fLoad;
 
+						int32			fPerformanceScale;
+
 						bigtime_t		fMeasureActiveTime;
 						bigtime_t		fMeasureTime;
 
@@ -170,6 +183,9 @@ public:
 											{ return atomic_get(const_cast<int32*>(&fCPUCount)); }
 	inline				const CPUSet&	CPUMask() const
 											{ return fCPUSet; }
+
+	inline				CoreType		Type() const	{ return fType; }
+	inline				void			SetType(CoreType type) { fType = type; }
 
 	inline				void			LockCPUHeap();
 	inline				void			UnlockCPUHeap();
@@ -208,6 +224,7 @@ public:
 											bigtime_t activeTime);
 
 	inline				int32			GetLoad() const;
+	inline				int32			GetScore() const;
 	inline				void			SetCapacity(int32 capacity)
 											{ fCapacity = capacity; }
 	inline				int32			Capacity() const { return fCapacity; }
@@ -237,6 +254,8 @@ private:
 						int32			fCoreID;
 						PackageEntry*	fPackage;
 						int32			fPackageIndex;
+
+						CoreType		fType;
 
 						int32			fCPUCount;
 						int32			fCapacity;
@@ -331,9 +350,11 @@ public:
 	inline				void				ReadUnlockCore();
 
 						CoreEntry*			PeekMinimumLoadCore(
-												const CPUSet* mask = NULL) const;
+												const CPUSet* mask = NULL,
+												CoreType type = CORE_TYPE_UNKNOWN) const;
 						CoreEntry*			PeekMaximumLoadCore(
-												const CPUSet* mask = NULL) const;
+												const CPUSet* mask = NULL,
+												CoreType type = CORE_TYPE_UNKNOWN) const;
 
 private:
 						int32				fPackageID;
@@ -534,13 +555,25 @@ CoreEntry::GetLoad() const
 	if (cpuCount <= 0)
 		return kMaxLoad;
 
-	// Optimization: Avoid division and multiplication in the common case.
-	if (cpuCount == 1 && fCapacity == kDefaultCapacity)
+	// Optimization: Avoid division in the common case.
+	if (cpuCount == 1)
 		return min_c(load, kMaxLoad);
 
-	load /= cpuCount;
-	int64 adjustedLoad = (int64)load * kDefaultCapacity / fCapacity;
-	return (int32)min_c(adjustedLoad, (int64)kMaxLoad);
+	return (int32)min_c(load / cpuCount, kMaxLoad);
+}
+
+
+inline int32
+CoreEntry::GetScore() const
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	int32 load = GetLoad();
+
+	// Use weighted score: (load * 1024) / capacity
+	// This makes E-cores (lower capacity) appear "full" faster.
+	int64 score = (int64)load * kDefaultCapacity / fCapacity;
+	return (int32)min_c(score, (int64)kMaxLoad);
 }
 
 

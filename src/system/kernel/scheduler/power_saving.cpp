@@ -57,43 +57,43 @@ has_cache_expired(const ThreadData* threadData)
 
 
 static void
-check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
+check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestScore)
 {
-	// Find the core with highest load that isn't overloaded.
+	// Find the core with highest score that isn't overloaded.
 	// If all are overloaded, we might pick the least loaded later.
 	// For choosing a small task core, we want packing.
 	CoreEntry* candidate = entry->PeekMaximumLoadCore();
 
 	if (candidate != NULL) {
-		if (candidate->GetLoad() >= kHighLoad) {
+		if (candidate->GetScore() >= kHighLoad) {
 			// The busiest is overloaded. Check if there is a less loaded one.
 			candidate = entry->PeekMinimumLoadCore();
 		}
 	}
 
 	if (candidate != NULL) {
-		int32 load = candidate->GetLoad();
+		int32 score = candidate->GetScore();
 		if (core == NULL) {
 			core = candidate;
-			bestLoad = load;
+			bestScore = score;
 		} else {
-			bool bestOverloaded = bestLoad >= kHighLoad;
-			bool candidateOverloaded = load >= kHighLoad;
+			bool bestOverloaded = bestScore >= kHighLoad;
+			bool candidateOverloaded = score >= kHighLoad;
 
 			if (candidateOverloaded) {
 				// If candidate is overloaded, we only pick it if current is ALSO overloaded
 				// AND candidate is LESS loaded (minimize overload).
-				if (bestOverloaded && load < bestLoad) {
+				if (bestOverloaded && score < bestScore) {
 					core = candidate;
-					bestLoad = load;
+					bestScore = score;
 				}
 			} else {
 				// Candidate is NOT overloaded.
 				// If current is overloaded, we definitely switch.
 				// If current is NOT overloaded, we switch if candidate is BUSIER (packing).
-				if (bestOverloaded || load > bestLoad) {
+				if (bestOverloaded || score > bestScore) {
 					core = candidate;
-					bestLoad = load;
+					bestScore = score;
 				}
 			}
 		}
@@ -107,12 +107,12 @@ choose_small_task_core()
 	SCHEDULER_ENTER_FUNCTION();
 
 	CoreEntry* core = NULL;
-	int32 bestLoad = -1;
+	int32 bestScore = -1;
 
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 	if (tryRandom) {
 		search_global_random([&](PackageEntry* entry) {
-			check_package_small_task(entry, core, bestLoad);
+			check_package_small_task(entry, core, bestScore);
 			return false;
 		});
 	}
@@ -128,7 +128,7 @@ choose_small_task_core()
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
 				index -= gPackageCount;
-			check_package_small_task(&gPackageEntries[index], core, bestLoad);
+			check_package_small_task(&gPackageEntries[index], core, bestScore);
 		}
 	}
 
@@ -185,33 +185,34 @@ choose_idle_core()
 
 static void
 check_package_packing(PackageEntry* entry, const CPUSet* mask,
-	CoreEntry*& other, int32& bestLoad, bool& foundNonOverloaded)
+	CoreEntry*& other, int32& bestScore, bool& foundNonOverloaded,
+	CoreType type = CORE_TYPE_UNKNOWN)
 {
-	// We want to pack: find the busiest core that is NOT overloaded (load < kHighLoad).
+	// We want to pack: find the busiest core that is NOT overloaded (score < kHighLoad).
 	// If all active cores are overloaded, pick the least loaded one (to minimize overload).
-	CoreEntry* candidate = entry->PeekMaximumLoadCore(mask);
+	CoreEntry* candidate = entry->PeekMaximumLoadCore(mask, type);
 
 	if (candidate != NULL) {
-		if (candidate->GetLoad() >= kHighLoad) {
+		if (candidate->GetScore() >= kHighLoad) {
 			// The busiest is overloaded. Check if there is a less loaded one.
-			candidate = entry->PeekMinimumLoadCore(mask);
+			candidate = entry->PeekMinimumLoadCore(mask, type);
 		}
 	}
 
 	if (candidate != NULL) {
-		int32 load = candidate->GetLoad();
-		bool isOverloaded = load >= kHighLoad;
+		int32 score = candidate->GetScore();
+		bool isOverloaded = score >= kHighLoad;
 
 		if (other == NULL) {
 			other = candidate;
-			bestLoad = load;
+			bestScore = score;
 			foundNonOverloaded = !isOverloaded;
 		} else if (foundNonOverloaded) {
 			if (!isOverloaded) {
 				// Both are non-overloaded. Pick the BUSIEST (packing).
-				if (load > bestLoad) {
+				if (score > bestScore) {
 					other = candidate;
-					bestLoad = load;
+					bestScore = score;
 				}
 			}
 			// If candidate is overloaded, ignore it (we prefer the existing non-overloaded 'other')
@@ -219,13 +220,13 @@ check_package_packing(PackageEntry* entry, const CPUSet* mask,
 			if (!isOverloaded) {
 				// Found a non-overloaded core! It beats the current overloaded 'other'.
 				other = candidate;
-				bestLoad = load;
+				bestScore = score;
 				foundNonOverloaded = true;
 			} else {
 				// Both are overloaded. Pick the LEAST loaded (spread overload).
-				if (load < bestLoad) {
+				if (score < bestScore) {
 					other = candidate;
-					bestLoad = load;
+					bestScore = score;
 				}
 			}
 		}
@@ -235,7 +236,7 @@ check_package_packing(PackageEntry* entry, const CPUSet* mask,
 
 static void
 check_masked_packages_packing(const CPUSet& mask, CoreEntry*& other,
-	int32& bestLoad, bool& foundNonOverloaded)
+	int32& bestScore, bool& foundNonOverloaded, CoreType type = CORE_TYPE_UNKNOWN)
 {
 	const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 	const int32 cpuCount = smp_get_num_cpus();
@@ -258,7 +259,8 @@ check_masked_packages_packing(const CPUSet& mask, CoreEntry*& other,
 			if (cpuCore != NULL) {
 				PackageEntry* package = cpuCore->Package();
 				if (package != NULL && package != lastPackage) {
-					check_package_packing(package, &mask, other, bestLoad, foundNonOverloaded);
+					check_package_packing(package, &mask, other, bestScore,
+						foundNonOverloaded, type);
 					lastPackage = package;
 				}
 			}
@@ -279,6 +281,10 @@ choose_core(const ThreadData* threadData)
 	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
 
+	// Thread Coloring: High-priority threads prefer P-cores
+	bool preferP = threadData->GetPriority() > B_DISPLAY_PRIORITY;
+	bool preferE = threadData->GetPriority() < B_NORMAL_PRIORITY;
+
 	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
 	if (useMask) {
 		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
@@ -293,15 +299,55 @@ choose_core(const ThreadData* threadData)
 			useMask = false;
 	}
 
+	// Thread Coloring: Search for a core of the preferred type first
+	if (preferP || preferE) {
+		CoreType preferredType = preferP ? CORE_TYPE_PERFORMANCE : CORE_TYPE_EFFICIENCY;
+		int32 bestScore = -1;
+		bool foundNonOverloaded = false;
+		bool tryRandom = gPackageCount > kRandomSearchThreshold;
+
+		if (tryRandom && !useMask) {
+			search_global_random([&](PackageEntry* entry) {
+				check_package_packing(entry, NULL, core, bestScore,
+					foundNonOverloaded, preferredType);
+				return false;
+			});
+		} else if (useMask) {
+			check_masked_packages_packing(mask, core, bestScore,
+				foundNonOverloaded, preferredType);
+		}
+
+		if (core == NULL) {
+			const int32 kMaxFallbackAttempts = 64;
+			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+
+			for (int32 i = 0; i < attempts; i++) {
+				int32 index = startIndex + i;
+				if (index >= gPackageCount)
+					index -= gPackageCount;
+				check_package_packing(&gPackageEntries[index], NULL, core,
+					bestScore, foundNonOverloaded, preferredType);
+			}
+		}
+
+		// For P-cores, respect load threshold (80%).
+		if (preferP && core != NULL && core->GetLoad() > 800)
+			core = NULL;
+
+		if (core != NULL)
+			return core;
+	}
+
 	// try to pack all threads on one core
 	core = choose_small_task_core();
 	if (core != NULL && (useMask && !core->CPUMask().Matches(mask)))
 		core = NULL;
 
-	if (core == NULL || core->GetLoad() + threadData->GetLoad() >= kHighLoad) {
+	if (core == NULL || core->GetScore() + threadData->GetLoad() >= kHighLoad) {
 		// run immediately on already woken core
 		CoreEntry* bestCore = NULL;
-		int32 bestLoad = -1;
+		int32 bestScore = -1;
 
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
@@ -326,18 +372,18 @@ choose_core(const ThreadData* threadData)
 			}
 
 			search_local_node(node, [&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(entry, NULL, bestCore, bestLoad);
+				CheckPackageMinimumLoad(entry, NULL, bestCore, bestScore);
 				return false;
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(entry, NULL, bestCore, bestLoad);
+				CheckPackageMinimumLoad(entry, NULL, bestCore, bestScore);
 				return false;
 			});
 
 		} else if (useMask) {
-			CheckMaskedPackagesMinimumLoad(mask, bestCore, bestLoad);
+			CheckMaskedPackagesMinimumLoad(mask, bestCore, bestScore);
 		}
 
 		// Fallback to full scan
@@ -351,7 +397,7 @@ choose_core(const ThreadData* threadData)
 				if (index >= gPackageCount)
 					index -= gPackageCount;
 				CheckPackageMinimumLoad(&gPackageEntries[index], NULL, bestCore,
-					bestLoad);
+					bestScore);
 			}
 		}
 
@@ -415,10 +461,10 @@ rebalance(const ThreadData* threadData)
 
 	CoreEntry* core = threadData->Core();
 
-	int32 coreLoad = core->GetLoad();
+	int32 coreScore = core->GetScore();
 	int32 cpuCount = core->CPUCount();
 	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
-	if (coreLoad > kHighLoad) {
+	if (coreScore > kHighLoad) {
 		int32 nodeID = core->Package()->Node()->ID();
 		if (sSmallTaskCore != NULL && atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {
 			atomic_pointer_set(&sSmallTaskCore[nodeID], (CoreEntry*)NULL);
@@ -431,11 +477,11 @@ rebalance(const ThreadData* threadData)
 			return coreLoad > kVeryHighLoad ? smallTaskCore : core;
 		}
 
-		if (threadLoad >= coreLoad >> 1)
+		if (threadLoad >= coreScore >> 1)
 			return core;
 
 		CoreEntry* other = NULL;
-		int32 bestLoad = -2;
+		int32 bestScore = -2;
 		bool foundNonOverloaded = false;
 
 		// Use random sampling if possible
@@ -445,20 +491,20 @@ rebalance(const ThreadData* threadData)
 			// Phase 2: Local Node
 			SchedulerNode* node = core->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {
-				check_package_packing(entry, NULL, other, bestLoad,
+				check_package_packing(entry, NULL, other, bestScore,
 					foundNonOverloaded);
 				return false;
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
-				check_package_packing(entry, NULL, other, bestLoad,
+				check_package_packing(entry, NULL, other, bestScore,
 					foundNonOverloaded);
 				return false;
 			});
 
 		} else if (useMask) {
-			check_masked_packages_packing(mask, other, bestLoad, foundNonOverloaded);
+			check_masked_packages_packing(mask, other, bestScore, foundNonOverloaded);
 		}
 
 		if (other == NULL && !useMask) {
@@ -471,7 +517,8 @@ rebalance(const ThreadData* threadData)
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
 					index -= gPackageCount;
-				check_package_packing(&gPackageEntries[index], NULL, other, bestLoad, foundNonOverloaded);
+				check_package_packing(&gPackageEntries[index], NULL, other,
+					bestScore, foundNonOverloaded);
 			}
 		}
 
@@ -483,19 +530,19 @@ rebalance(const ThreadData* threadData)
 		}
 		ASSERT(other != NULL);
 
-		int32 coreNewLoad = coreLoad - threadLoad;
-		int32 otherNewLoad = other->GetLoad() + threadLoad;
-		return coreNewLoad - otherNewLoad >= kLoadDifference >> 1 ? other : core;
+		int32 coreNewScore = coreScore - threadLoad;
+		int32 otherNewScore = other->GetScore() + threadLoad;
+		return coreNewScore - otherNewScore >= kLoadDifference >> 1 ? other : core;
 	}
 
-	if (coreLoad >= kMediumLoad)
+	if (coreScore >= kMediumLoad)
 		return core;
 
 	int32 nodeID = core->Package()->Node()->ID();
 	CoreEntry* smallTaskCore = choose_small_task_core();
 	if (smallTaskCore == NULL || (useMask && !smallTaskCore->CPUMask().Matches(mask)))
 		return core;
-	return smallTaskCore->GetLoad() + threadLoad < kHighLoad
+	return smallTaskCore->GetScore() + threadLoad < kHighLoad
 		? smallTaskCore : core;
 }
 
@@ -612,7 +659,7 @@ rebalance_irqs(bool idle)
 	CoreEntry* core = CoreEntry::GetCore(smp_get_current_cpu());
 	if (other == core)
 		return;
-	if (!pack && other->GetLoad() + kLoadDifference >= core->GetLoad())
+	if (!pack && other->GetScore() + kLoadDifference >= core->GetScore())
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);

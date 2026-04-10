@@ -58,6 +58,10 @@ choose_core(const ThreadData* threadData)
 	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
 
+	// Thread Coloring: High-priority threads prefer P-cores
+	bool preferP = threadData->GetPriority() > B_DISPLAY_PRIORITY;
+	bool preferE = threadData->GetPriority() < B_NORMAL_PRIORITY;
+
 	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
 	// to enable global random sampling instead of slow mask iteration.
 	if (useMask) {
@@ -75,16 +79,22 @@ choose_core(const ThreadData* threadData)
 
 	if (previousCore != NULL && !has_cache_expired(threadData)) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
-			// Check if previous core is idle
-			if (previousCore->GetLoad() == 0)
-				return previousCore;
+			// Respect thread coloring even for cache affinity
+			bool typeMatch = true;
+			if (preferP && previousCore->Type() != CORE_TYPE_PERFORMANCE)
+				typeMatch = false;
+			else if (preferE && previousCore->Type() != CORE_TYPE_EFFICIENCY)
+				typeMatch = false;
 
-			// Check if previous core is lightly loaded (Soft Affinity)
-			// If the load is within the threshold (implying no other core is
-			// significantly better, assuming the best alternative is 0 load),
-			// we stick to it.
-			if (previousCore->GetLoad() <= kLoadDifference)
-				return previousCore;
+			if (typeMatch) {
+				// Check if previous core is idle
+				if (previousCore->GetLoad() == 0)
+					return previousCore;
+
+				// Check if previous core is lightly loaded (Soft Affinity)
+				if (previousCore->GetScore() <= kLoadDifference)
+					return previousCore;
+			}
 		}
 
 		// Check sibling cores in the same package (likely sharing L3)
@@ -118,6 +128,76 @@ choose_core(const ThreadData* threadData)
 	}
 
 	CoreEntry* core = NULL;
+
+	// Thread Coloring: Search for a core of the preferred type first
+	if (preferP || preferE) {
+		CoreType preferredType = preferP ? CORE_TYPE_PERFORMANCE : CORE_TYPE_EFFICIENCY;
+
+		// Try to find an idle core of the preferred type
+		uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
+		while (idleNodeMask != 0) {
+			int32 nodeIndex = __builtin_ctzll(idleNodeMask);
+			idleNodeMask &= ~(1ULL << nodeIndex);
+
+			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
+			uint64 idlePackageMask = node->IdlePackageMask();
+
+			while (idlePackageMask != 0) {
+				int32 packageIndex = __builtin_ctzll(idlePackageMask);
+				idlePackageMask &= ~(1ULL << packageIndex);
+
+				int32 globalPackageIndex = node->PackageStartIndex() + packageIndex;
+				if (globalPackageIndex >= gPackageCount)
+					continue;
+
+				PackageEntry* package = &gPackageEntries[globalPackageIndex];
+				core = package->PeekMinimumLoadCore(&mask, preferredType);
+				if (core != NULL && core->GetLoad() == 0)
+					break;
+				core = NULL;
+			}
+			if (core != NULL)
+				break;
+		}
+
+		if (core == NULL) {
+			// No idle core, try finding a lightly loaded one
+			int32 bestScore = -1;
+			bool tryRandom = gPackageCount > kRandomSearchThreshold;
+			if (tryRandom && !useMask) {
+				search_global_random([&](PackageEntry* entry) {
+					CheckPackageMinimumLoad(entry, NULL, core, bestScore,
+						preferredType);
+					return false;
+				});
+			} else if (useMask) {
+				CheckMaskedPackagesMinimumLoad(mask, core, bestScore,
+					preferredType);
+			}
+
+			if (core == NULL) {
+				const int32 kMaxFallbackAttempts = 64;
+				int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+
+				for (int32 i = 0; i < attempts; i++) {
+					int32 index = startIndex + i;
+					if (index >= gPackageCount)
+						index -= gPackageCount;
+					CheckPackageMinimumLoad(&gPackageEntries[index], NULL, core,
+						bestScore, preferredType);
+				}
+			}
+
+			// For P-cores, respect load threshold (80%).
+			// For E-cores, we just take the best one if we really want E-cores.
+			if (preferP && core != NULL && core->GetLoad() > 800)
+				core = NULL;
+		}
+	}
+
+	if (core != NULL)
+		return core;
 
 	// Check Home Package (NUMA/Memory Affinity)
 	// If the previous core was not suitable (or cache expired), we try to return
@@ -268,7 +348,7 @@ choose_core(const ThreadData* threadData)
 			if (core != previousCore) {
 				// If the selected core is not significantly less loaded than the
 				// previous core, we prefer the previous core to maintain cache locality.
-				if (core->GetLoad() + kLoadDifference >= previousCore->GetLoad())
+				if (core->GetScore() + kLoadDifference >= previousCore->GetScore())
 					return previousCore;
 			}
 		}
@@ -340,8 +420,8 @@ rebalance(const ThreadData* threadData)
 
 	// Check if the least loaded core is significantly less loaded than
 	// the current one.
-	int32 coreLoad = core->GetLoad();
-	int32 otherLoad = other->GetLoad();
+	int32 coreScore = core->GetScore();
+	int32 otherScore = other->GetScore();
 
 	if (other == core)
 		return core;
@@ -373,12 +453,12 @@ rebalance(const ThreadData* threadData)
 		}
 	}
 
-	if (otherLoad + threshold >= coreLoad)
+	if (otherScore + threshold >= coreScore)
 		return core;
 
 	// Check whether migrating the current thread would result in both core
 	// loads become closer to the average.
-	int32 difference = coreLoad - otherLoad - threshold;
+	int32 difference = coreScore - otherScore - threshold;
 	ASSERT(difference > 0);
 
 	int32 cpuCount = core->CPUCount();
@@ -467,7 +547,7 @@ rebalance_irqs(bool idle)
 	CoreEntry* core = CoreEntry::GetCore(cpu->cpu_num);
 	if (other == core)
 		return;
-	if (other->GetLoad() + kLoadDifference >= core->GetLoad())
+	if (other->GetScore() + kLoadDifference >= core->GetScore())
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);

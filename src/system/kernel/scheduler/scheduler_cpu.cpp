@@ -90,6 +90,7 @@ CPUEntry::CPUEntry()
 	:
 	fThreadCount(0),
 	fLoad(0),
+	fPerformanceScale(kDefaultCapacity),
 	fMeasureActiveTime(0),
 	fMeasureTime(0),
 	fUpdateLoadEvent(false),
@@ -619,6 +620,7 @@ CPUPriorityHeap::Dump()
 CoreEntry::CoreEntry()
 	:
 	fPackage(NULL),
+	fType(CORE_TYPE_UNKNOWN),
 	fCPUCount(0),
 	fCapacity(kDefaultCapacity),
 	fIdleCPUCount(0),
@@ -946,7 +948,7 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 
 
 CoreEntry*
-PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
+PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 {
 	CoreEntry* minEntry = NULL;
 	int32 minLoad = -1;
@@ -980,6 +982,8 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 			CoreEntry* candidate = fCores[i];
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
 				continue;
+			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
+				continue;
 
 			int32 load = atomic_get(&fCoreLoads[i]);
 
@@ -1012,6 +1016,8 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 			continue;
 		if (mask != NULL && !mask->GetBit(candidate->ID()))
 			continue;
+		if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
+			continue;
 
 		int32 load = atomic_get(&fCoreLoads[i]);
 		if (minEntry == NULL || load < minLoad) {
@@ -1024,7 +1030,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 
 
 CoreEntry*
-PackageEntry::PeekMaximumLoadCore(const CPUSet* mask) const
+PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
 {
 	CoreEntry* maxEntry = NULL;
 	int32 maxLoad = -1;
@@ -1057,6 +1063,8 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask) const
 
 			CoreEntry* candidate = fCores[i];
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
+				continue;
+			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 				continue;
 
 			int32 load = atomic_get(&fCoreLoads[i]);

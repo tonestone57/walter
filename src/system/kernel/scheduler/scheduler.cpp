@@ -1164,10 +1164,54 @@ init()
 						if (capacity < 128)
 							capacity = 128;
 						core->SetCapacity(capacity);
+
+						if (capacity >= kDefaultCapacity)
+							core->SetType(CORE_TYPE_PERFORMANCE);
+						else
+							core->SetType(CORE_TYPE_EFFICIENCY);
 					}
 				}
 			}
 		}
+	}
+
+	if (coreCount > 8) {
+		// Heuristic workaround for hybrid systems that don't report capacity
+		// through frequencies (e.g., some Intel Alder Lake+ configurations).
+		// We assume that if no heterogeneous capacity was detected but the core
+		// count is high, it's likely a hybrid system where a subset of cores
+		// are E-cores.
+		bool allUnknown = true;
+		for (int32 i = 0; i < coreCount; i++) {
+			if (gCoreEntries[i].Type() != CORE_TYPE_UNKNOWN) {
+				allUnknown = false;
+				break;
+			}
+		}
+
+		if (allUnknown) {
+			// Typical configuration: last 8 or 50% are E-cores.
+			// Let's assume a reasonable default for high core count systems.
+			int32 eCoreCount = coreCount > 16 ? 8 : coreCount / 2;
+			for (int32 i = 0; i < coreCount; i++) {
+				if (i >= coreCount - eCoreCount)
+					gCoreEntries[i].SetType(CORE_TYPE_EFFICIENCY);
+				else
+					gCoreEntries[i].SetType(CORE_TYPE_PERFORMANCE);
+			}
+		}
+	} else {
+		// Small systems: assume all are P-cores if not otherwise detected
+		for (int32 i = 0; i < coreCount; i++) {
+			if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN)
+				gCoreEntries[i].SetType(CORE_TYPE_PERFORMANCE);
+		}
+	}
+
+	for (int32 i = 0; i < cpuCount; i++) {
+		CPUEntry* cpu = &gCPUEntries[i];
+		if (cpu->Core() != NULL)
+			cpu->SetPerformanceScale(cpu->Core()->Capacity());
 	}
 
 	// Calculate dynamic random sampling parameters based on system size
