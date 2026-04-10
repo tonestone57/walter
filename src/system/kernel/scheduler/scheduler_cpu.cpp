@@ -106,8 +106,10 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 	fCPUNumber = id;
 	fCore = core;
 	// Mix id into high bits to avoid correlation if system_time is similar
+	// Step 1: Initial entropy mix
 	uint64 seed = system_time() ^ ((uint64)id << 16) ^ ((uint64)id * 0xBF58476D1CE4E5B9ULL);
-	seed = (seed ^ (seed >> 30)) * 0xBF58476D1CE4E5B9ULL;
+	// Step 2: Final mixing (using a different constant)
+	seed = (seed ^ (seed >> 30)) * 0x94D049BB133111EBULL;
 	uint32 finalSeed = (uint32)(seed ^ (seed >> 32));
 	fRandomState = finalSeed ? finalSeed : 1;
 }
