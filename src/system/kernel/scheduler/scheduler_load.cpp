@@ -38,8 +38,6 @@ _LoadavgUpdate(void *data, int iteration)
 	uint64 threadCount = 0;
 	for (int i = 0; i < gCoreCount; i++)
 		threadCount += gCoreEntries[i].ThreadCount();
-	for (int i = 0; i < smp_get_num_cpus(); i++)
-		threadCount += gCPUEntries[i].ThreadCount();
 
 	InterruptsSpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {

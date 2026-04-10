@@ -78,6 +78,23 @@ public:
 
 typedef AutoLocker<CoreEntry, CoreCPUHeapLocking> CoreCPUHeapLocker;
 
+
+class CoreCPULocking {
+public:
+	inline bool Lock(CoreEntry* core)
+	{
+		core->LockCPU();
+		return true;
+	}
+
+	inline void Unlock(CoreEntry* core)
+	{
+		core->UnlockCPU();
+	}
+};
+
+typedef AutoLocker<CoreEntry, CoreCPULocking> CoreCPULocker;
+
 class SchedulerModeLocking {
 public:
 	bool Lock(int* /* lockable */)

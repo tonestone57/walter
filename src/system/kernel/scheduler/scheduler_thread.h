@@ -478,6 +478,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 	}
 
 	if (!pinned) {
+		CoreCPULocker cpuLocker(fCore);
 		CoreRunQueueLocker locker(fCore);
 
 		// Check if the Core is still active under the lock

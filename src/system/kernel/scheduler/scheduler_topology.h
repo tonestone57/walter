@@ -81,9 +81,12 @@ search_global_random(Action action)
 			if ((visitedBits[word] & (1ULL << bit)) != 0)
 				continue;
 			visitedBits[word] |= (1ULL << bit);
+			samplesTaken++;
 		}
+		// Note: if i >= kStackBitmaskSize, samplesTaken is NOT incremented
+		// so un-deduplicated samples don't count towards the budget.
+		// The loop is strictly bounded by attempts < kMaxAttempts, preventing runaway.
 
-		samplesTaken++;
 		if (action(&gPackageEntries[i]))
 			break;
 	}

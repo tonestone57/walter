@@ -174,6 +174,9 @@ public:
 	inline				void			LockCPUHeap();
 	inline				void			UnlockCPUHeap();
 
+	inline				void			LockCPU();
+	inline				void			UnlockCPU();
+
 	inline				CPUPriorityHeap*	CPUHeap();
 
 	inline				int32			ThreadCount() const;
@@ -444,6 +447,22 @@ CoreEntry::UnlockCPUHeap()
 }
 
 
+inline void
+CoreEntry::LockCPU()
+{
+	SCHEDULER_ENTER_FUNCTION();
+	acquire_spinlock(&fCPULock);
+}
+
+
+inline void
+CoreEntry::UnlockCPU()
+{
+	SCHEDULER_ENTER_FUNCTION();
+	release_spinlock(&fCPULock);
+}
+
+
 inline CPUPriorityHeap*
 CoreEntry::CPUHeap()
 {
@@ -603,8 +622,9 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, -1);
 	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 
-	if ((oldMask & ~(1U << core->PackageIndex())) == 0) {
-		// package wakes up (last core)
+	int32 expectedMask = atomic_get((int32*)&fEnabledCoreMask);
+	if (oldMask == expectedMask) {
+		// package wakes up (first core)
 		fNode->PackageWakesUp(this);
 	}
 }
