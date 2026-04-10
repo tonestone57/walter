@@ -256,6 +256,7 @@ ThreadData::ComputeQuantum() const
 	const int32 kRangeReciprocal = (int32)(((int64)kLoadScale * kLoadScale
 		+ (kMaxLoad - kLowLoad) / 2) / (kMaxLoad - kLowLoad));
 
+	// Approximation is intentional to avoid locking overhead on the fast path
 	int32 load = fCore->GetLoad();
 	int32 threadCount = fCore->ThreadCount();
 	int32 cpuCount = fCore->CPUCount();

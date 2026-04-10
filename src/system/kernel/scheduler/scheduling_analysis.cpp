@@ -473,7 +473,7 @@ public:
 				}
 
 				HashObject* next = object->next;
-				memset(object, 0, sizeof(HashObject));
+				object->next = NULL;
 				object = next;
 			}
 		}

@@ -19,21 +19,28 @@
 using namespace Scheduler;
 
 
-static CoreEntry* sSmallTaskCore;
+static CoreEntry** sSmallTaskCore;
 
 
 static void
 switch_to_mode()
 {
-	atomic_pointer_set(&sSmallTaskCore, (CoreEntry*)NULL);
+	if (sSmallTaskCore == NULL)
+		sSmallTaskCore = new(std::nothrow) CoreEntry*[gNodeCount]();
+	if (sSmallTaskCore != NULL) {
+		for (int32 i = 0; i < gNodeCount; i++)
+			atomic_pointer_set(&sSmallTaskCore[i], (CoreEntry*)NULL);
+	}
 }
 
 
 static void
 set_cpu_enabled(int32 cpu, bool enabled)
 {
-	if (!enabled)
-		atomic_pointer_set(&sSmallTaskCore, (CoreEntry*)NULL);
+	if (!enabled && sSmallTaskCore != NULL) {
+		for (int32 i = 0; i < gNodeCount; i++)
+			atomic_pointer_set(&sSmallTaskCore[i], (CoreEntry*)NULL);
+	}
 }
 
 
@@ -95,7 +102,7 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 
 
 static CoreEntry*
-choose_small_task_core()
+choose_small_task_core(int32 nodeID)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -126,14 +133,17 @@ choose_small_task_core()
 	}
 
 	if (core == NULL)
-		return (CoreEntry*)atomic_pointer_get(&sSmallTaskCore);
+		return sSmallTaskCore != NULL ? (CoreEntry*)atomic_pointer_get(&sSmallTaskCore[nodeID]) : NULL;
 
-	CoreEntry* smallTaskCore
-		= (CoreEntry*)atomic_pointer_test_and_set(&sSmallTaskCore, core,
-			(CoreEntry*)NULL);
-	if (smallTaskCore == NULL)
-		return core;
-	return smallTaskCore;
+	if (sSmallTaskCore != NULL) {
+		CoreEntry* smallTaskCore
+			= (CoreEntry*)atomic_pointer_test_and_set(&sSmallTaskCore[nodeID], core,
+				(CoreEntry*)NULL);
+		if (smallTaskCore == NULL)
+			return core;
+		return smallTaskCore;
+	}
+	return core;
 }
 
 
@@ -408,9 +418,10 @@ rebalance(const ThreadData* threadData)
 	int32 cpuCount = core->CPUCount();
 	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
 	if (coreLoad > kHighLoad) {
-		if (atomic_pointer_get(&sSmallTaskCore) == core) {
-			atomic_pointer_set(&sSmallTaskCore, (CoreEntry*)NULL);
-			CoreEntry* smallTaskCore = choose_small_task_core();
+		int32 nodeID = core->Package()->Node()->ID();
+		if (sSmallTaskCore != NULL && atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {
+			atomic_pointer_set(&sSmallTaskCore[nodeID], (CoreEntry*)NULL);
+			CoreEntry* smallTaskCore = choose_small_task_core(nodeID);
 
 			if (threadLoad > coreLoad / 3 || smallTaskCore == NULL
 					|| (useMask && !smallTaskCore->CPUMask().Matches(mask))) {
@@ -479,7 +490,8 @@ rebalance(const ThreadData* threadData)
 	if (coreLoad >= kMediumLoad)
 		return core;
 
-	CoreEntry* smallTaskCore = choose_small_task_core();
+	int32 nodeID = core->Package()->Node()->ID();
+	CoreEntry* smallTaskCore = choose_small_task_core(nodeID);
 	if (smallTaskCore == NULL || (useMask && !smallTaskCore->CPUMask().Matches(mask)))
 		return core;
 	return smallTaskCore->GetLoad() + threadLoad < kHighLoad
@@ -492,18 +504,32 @@ rebalance_irqs(bool idle)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	CoreEntry* smallTaskCore = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore);
-	bool pack = idle && smallTaskCore != NULL;
+	bool pack = false;
+	bool hasSmallTaskCore = false;
+	if (sSmallTaskCore != NULL) {
+		for (int32 i = 0; i < gNodeCount; i++) {
+			if (atomic_pointer_get(&sSmallTaskCore[i]) != NULL) {
+				hasSmallTaskCore = true;
+				break;
+			}
+		}
+	}
+	pack = idle && hasSmallTaskCore;
 
 	if (idle && !pack)
 		return;
 
-	if (!idle && smallTaskCore != NULL)
+	if (!idle && hasSmallTaskCore)
 		return;
 
 	cpu_ent* cpu = get_cpu_struct();
-	if (pack && smallTaskCore == CoreEntry::GetCore(cpu->cpu_num))
-		return;
+	CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
+
+	if (pack && sSmallTaskCore != NULL && currentCore != NULL) {
+		int32 nodeID = currentCore->Package()->Node()->ID();
+		if (atomic_pointer_get(&sSmallTaskCore[nodeID]) == currentCore)
+			return;
+	}
 
 	SpinLocker locker(cpu->irqs_lock);
 
@@ -529,7 +555,10 @@ rebalance_irqs(bool idle)
 
 	CoreEntry* other = NULL;
 	if (pack) {
-		other = smallTaskCore;
+		if (sSmallTaskCore != NULL && currentCore != NULL) {
+			int32 nodeID = currentCore->Package()->Node()->ID();
+			other = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore[nodeID]);
+		}
 	} else {
 		int32 bestLoad = -2;
 

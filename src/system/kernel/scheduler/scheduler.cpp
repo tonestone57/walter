@@ -919,33 +919,35 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		int32 coresInCurrentNode = 0;
 		const int32 kMaxCoresPerNode = 16;
 
-		for (int32 i = 0; i < coresInL3; i++) {
-			int32 cpuID = cpuList[l3Start + i];
-			int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
+		if (coresInL3 > 0) {
+			for (int32 i = 0; i < coresInL3; i++) {
+				int32 cpuID = cpuList[l3Start + i];
+				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 
-			if (currentPackageSize >= clusterSize) {
-				packageCount++;
-				if (packageCount >= cpuCount) {
-					// Should not happen with valid topology
-					break;
+				if (currentPackageSize >= clusterSize) {
+					packageCount++;
+					if (packageCount >= cpuCount) {
+						// Should not happen with valid topology
+						break;
+					}
+					currentPackageSize = 0;
+					clusterIndex++;
 				}
-				currentPackageSize = 0;
-				clusterIndex++;
-			}
 
-			// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
-			// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
-			if (coresInCurrentNode >= kMaxCoresPerNode) {
-				currentNodeID = nodeCount++;
-				coresInCurrentNode = 0;
-			}
+				// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
+				// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
+				if (coresInCurrentNode >= kMaxCoresPerNode) {
+					currentNodeID = nodeCount++;
+					coresInCurrentNode = 0;
+				}
 
-			sCPUToPackage[cpuID] = packageCount;
-			sPackageToNode[packageCount] = currentNodeID;
-			currentPackageSize++;
-			coresInCurrentNode++;
+				sCPUToPackage[cpuID] = packageCount;
+				sPackageToNode[packageCount] = currentNodeID;
+				currentPackageSize++;
+				coresInCurrentNode++;
+			}
+			packageCount++; // Finish last package in L3
 		}
-		packageCount++; // Finish last package in L3
 		l3Start = l3End;
 	}
 

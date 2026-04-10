@@ -245,11 +245,12 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 	// fPriority is the one we just finished.
 	// We want to check fPriority - 1 down to 0.
 
-	int currentBit = fPriority % 32;
-	if (currentBit > 0) {
-		// Mask bits at currentBit and above, keep bits 0..currentBit-1
-		val &= (1UL << currentBit) - 1;
-	} else {
+	int currentBit = fPriority > 0 ? (fPriority - 1) % 32 : 0;
+
+	if (fPriority > 0 && currentBit != 31) {
+		// Mask bits at currentBit+1 and above, keep bits 0..currentBit
+		val &= (1UL << (currentBit + 1)) - 1;
+	} else if (fPriority == 0) {
 		// If we finished bit 0, this word is done.
 		val = 0;
 	}
@@ -352,6 +353,8 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 			fBest = element;
 		else if (priority == bestPriority && sCompare(element, fBest))
 			fBest = element;
+	} else {
+		fBest = element;
 	}
 }
 
@@ -389,6 +392,8 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 			fBest = element;
 		else if (priority == bestPriority && sCompare(element, fBest))
 			fBest = element;
+	} else {
+		fBest = element;
 	}
 }
 
