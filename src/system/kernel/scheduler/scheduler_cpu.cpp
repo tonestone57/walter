@@ -93,7 +93,7 @@ CPUEntry::CPUEntry()
 	fMeasureActiveTime(0),
 	fMeasureTime(0),
 	fUpdateLoadEvent(false),
-	fRandomState(0x12345678)
+	fRandomState(1)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -106,9 +106,10 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 	fCPUNumber = id;
 	fCore = core;
 	// Mix id into high bits to avoid correlation if system_time is similar
-	fRandomState = (uint32)system_time() ^ (id << 16) ^ (id * 31337) ^ 1;
-	if (fRandomState == 0)
-		fRandomState = 0x12345678;
+	uint64 seed = system_time() ^ ((uint64)id << 16) ^ ((uint64)id * 0xBF58476D1CE4E5B9ULL);
+	seed = (seed ^ (seed >> 30)) * 0xBF58476D1CE4E5B9ULL;
+	uint32 finalSeed = (uint32)(seed ^ (seed >> 32));
+	fRandomState = finalSeed ? finalSeed : 1;
 }
 
 
