@@ -102,7 +102,7 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestLoad)
 
 
 static CoreEntry*
-choose_small_task_core(int32 nodeID)
+choose_small_task_core()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -133,9 +133,10 @@ choose_small_task_core(int32 nodeID)
 	}
 
 	if (core == NULL)
-		return sSmallTaskCore != NULL ? (CoreEntry*)atomic_pointer_get(&sSmallTaskCore[nodeID]) : NULL;
+		return NULL;
 
 	if (sSmallTaskCore != NULL) {
+		int32 nodeID = core->Package()->Node()->ID();
 		CoreEntry* smallTaskCore
 			= (CoreEntry*)atomic_pointer_test_and_set(&sSmallTaskCore[nodeID], core,
 				(CoreEntry*)NULL);
@@ -421,7 +422,7 @@ rebalance(const ThreadData* threadData)
 		int32 nodeID = core->Package()->Node()->ID();
 		if (sSmallTaskCore != NULL && atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {
 			atomic_pointer_set(&sSmallTaskCore[nodeID], (CoreEntry*)NULL);
-			CoreEntry* smallTaskCore = choose_small_task_core(nodeID);
+			CoreEntry* smallTaskCore = choose_small_task_core();
 
 			if (threadLoad > coreLoad / 3 || smallTaskCore == NULL
 					|| (useMask && !smallTaskCore->CPUMask().Matches(mask))) {
@@ -491,7 +492,7 @@ rebalance(const ThreadData* threadData)
 		return core;
 
 	int32 nodeID = core->Package()->Node()->ID();
-	CoreEntry* smallTaskCore = choose_small_task_core(nodeID);
+	CoreEntry* smallTaskCore = choose_small_task_core();
 	if (smallTaskCore == NULL || (useMask && !smallTaskCore->CPUMask().Matches(mask)))
 		return core;
 	return smallTaskCore->GetLoad() + threadLoad < kHighLoad
@@ -569,7 +570,7 @@ rebalance_irqs(bool idle)
 
 		if (tryRandom) {
 			// Phase 2: Local Node
-			CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
+			currentCore = CoreEntry::GetCore(cpu->cpu_num);
 			if (currentCore != NULL) {
 				SchedulerNode* node = currentCore->Package()->Node();
 				search_local_node(node, [&](PackageEntry* entry) {

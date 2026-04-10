@@ -122,7 +122,6 @@ CPUEntry::Start()
 	fLoad = 0;
 	fMeasureTime = system_time();
 	fMeasureActiveTime = 0;
-	fCore->AddCPU(this);
 }
 
 
@@ -695,7 +694,7 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 		if (rawMask.IsEmpty())
 			return true;
 
-		return rawMask.And(gCPUEnabled).IsEmpty();
+		return false;
 	});
 
 	if (thread != NULL) {
@@ -736,7 +735,8 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	atomic_add(&fIdleCPUCount, -1);
+	if (fCPUHeap.GetKey(cpu) == B_IDLE_PRIORITY)
+		atomic_add(&fIdleCPUCount, -1);
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	if (atomic_add(&fCPUCount, -1) == 1) {
 		// unassign threads

@@ -237,7 +237,7 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 
 	const uint32* bitmap = fList->GetBitmap();
 
-	int i = fPriority / 32;
+	int i = (fPriority > 0 ? fPriority - 1 : 0) / 32;
 	uint32 val = bitmap[i];
 
 	// Mask out higher priorities (bits >= current bit index) in current word

@@ -704,6 +704,7 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		{
 			CoreCPUHeapLocker heapLocker(core);
 			cpu->Start();
+			core->AddCPU(cpu);
 		}
 		gCPU[cpuID].disabled = false;
 		gCPUEnabled.SetBitAtomic(cpuID);
@@ -798,6 +799,11 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	int32& nodeCount)
 {
 	cpuCount = smp_get_num_cpus();
+
+	delete[] sCPUToCore;
+	delete[] sCPUToCluster;
+	delete[] sPackageToNode;
+	delete[] sCPUToPackage;
 
 	sCPUToCore = new(std::nothrow) int32[cpuCount];
 	sCPUToCluster = new(std::nothrow) int32[cpuCount];

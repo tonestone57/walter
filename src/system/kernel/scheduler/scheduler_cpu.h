@@ -719,8 +719,8 @@ PackageEntry::GetLeastIdlePackage()
 		const int kMaxAttempts = 4 + (31 - __builtin_clz(gPackageCount));
 
 		while (attempts++ < kMaxAttempts) {
-			int32 i = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-				% gPackageCount;
+			int32 i = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+				* gPackageCount) >> 32);
 			PackageEntry* current = &gPackageEntries[i];
 			int32 currentIdleCoreCount
 				= atomic_get((int32*)&current->fIdleCoreCount);
@@ -739,7 +739,8 @@ PackageEntry::GetLeastIdlePackage()
 	// Fallback to linear scan (limit attempts)
 	const int32 kMaxFallbackAttempts = 64;
 	int32 startIndex = (gPackageCount > kRandomSearchThreshold)
-		? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount
+		? (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+			* gPackageCount) >> 32)
 		: 0;
 	int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
