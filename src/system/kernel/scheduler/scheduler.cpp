@@ -94,7 +94,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	const int kMaxThreadsToCheckPerQueue = 5;
 
 	// Check CPU RunQueue
-	{
+	if (cpu->ThreadCount() > 0) {
 		CPURunQueueLocker locker(cpu);
 		const ThreadRunQueue* runQueue = cpu->RunQueue();
 		const uint32* bitmap = runQueue->GetBitmap();
@@ -133,7 +133,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	}
 
 	// Check Core RunQueue
-	{
+	if (core->CoreRunQueueThreadCount() > 0) {
 		CoreRunQueueLocker locker(core);
 		const ThreadRunQueue* runQueue = core->RunQueue();
 		const uint32* bitmap = runQueue->GetBitmap();

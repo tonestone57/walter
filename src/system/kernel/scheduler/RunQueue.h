@@ -10,6 +10,7 @@
 
 
 #include <util/BitUtils.h>
+#include <util/atomic.h>
 
 #include "scheduler_profiler.h"
 
@@ -299,7 +300,7 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = fBitmap[i];
+		uint32 val = atomic_get((int32*)&fBitmap[i]);
 		if (val != 0) {
 			if (i == kBitmapSize - 1 && (MaxPriority % 32 != 31)) {
 				val &= (1UL << (MaxPriority % 32 + 1)) - 1;
@@ -311,8 +312,13 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 			unsigned int priority = i * 32 + bit;
 
 			ASSERT(priority <= MaxPriority);
-			ASSERT(fHeads[priority] != NULL);
-			return fHeads[priority];
+#if B_HAIKU_64_BIT
+			Element* head = (Element*)atomic_get64((int64*)&fHeads[priority]);
+#else
+			Element* head = (Element*)atomic_get((int32*)&fHeads[priority]);
+#endif
+			ASSERT(head != NULL);
+			return head;
 		}
 	}
 

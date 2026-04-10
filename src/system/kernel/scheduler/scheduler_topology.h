@@ -30,7 +30,8 @@ search_local_node(SchedulerNode* node, Action action)
 		return;
 
 	// Limit attempts to avoid duplicate probes on small nodes
-	const int kMaxLocalAttempts = min_c(4, packagesInNode);
+	const int kMaxLocalAttempts = min_c(packagesInNode,
+		4 + (packagesInNode > 1 ? 31 - __builtin_clz(packagesInNode) : 0));
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
 		// Multiplicative random mapping to avoid expensive modulo

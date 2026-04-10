@@ -1037,13 +1037,8 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask) const
 	int32 startBit = 0;
 
 	if (count > 1) {
-		int32 k = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % count;
-		// Find k-th set bit
-		native_cpu_mask_t tempMask = enabledMask;
-		for (int32 j = 0; j < k; j++) {
-			tempMask &= ~((native_cpu_mask_t)1 << scheduler_ctz(tempMask));
-		}
-		startBit = scheduler_ctz(tempMask);
+		startBit = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+			* kMaxCoresPerPackage) >> 32);
 	}
 
 	// Split mask into two parts to randomize start position

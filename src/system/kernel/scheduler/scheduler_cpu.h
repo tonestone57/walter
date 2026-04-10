@@ -167,7 +167,7 @@ public:
 	inline				int32			PackageIndex() const
 											{ return fPackageIndex; }
 	inline				int32			CPUCount() const
-											{ return fCPUCount; }
+											{ return atomic_get(const_cast<int32*>(&fCPUCount)); }
 	inline				const CPUSet&	CPUMask() const
 											{ return fCPUSet; }
 
@@ -180,6 +180,8 @@ public:
 	inline				CPUPriorityHeap*	CPUHeap();
 
 	inline				int32			ThreadCount() const;
+	inline				int32			CoreRunQueueThreadCount() const
+											{ return atomic_get(const_cast<int32*>(&fThreadCount)); }
 
 	inline				void			LockRunQueue();
 	inline				bool			TryLockRunQueue();
@@ -527,10 +529,10 @@ CoreEntry::GetLoad() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	int32 cpuCount = atomic_get(const_cast<int32*>(&fCPUCount));
+	int32 load = atomic_get(const_cast<int32*>(&fLoad));
+
 	if (cpuCount <= 0)
 		return kMaxLoad;
-
-	int32 load = atomic_get(const_cast<int32*>(&fLoad));
 
 	// Optimization: Avoid division and multiplication in the common case.
 	if (cpuCount == 1 && fCapacity == kDefaultCapacity)
