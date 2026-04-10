@@ -759,6 +759,8 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
 			}
 			sCPUToCore[node->id] = coreID;
 			sCPUToPackage[node->id] = packageID;
+			if (sCPUToCluster != NULL)
+				sCPUToCluster[node->id] = packageID;
 			return;
 
 		case CPU_TOPOLOGY_CORE:
@@ -789,6 +791,8 @@ get_topology_id(int32 cpuID)
 }
 
 
+static int32* sCPUToCluster = NULL;
+
 static status_t
 build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	int32& nodeCount)
@@ -796,21 +800,28 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	cpuCount = smp_get_num_cpus();
 
 	sCPUToCore = new(std::nothrow) int32[cpuCount];
-	if (sCPUToCore == NULL)
+	sCPUToCluster = new(std::nothrow) int32[cpuCount];
+	sPackageToNode = new(std::nothrow) int32[cpuCount];
+	sCPUToPackage = new(std::nothrow) int32[cpuCount];
+
+	if (sCPUToCore == NULL || sCPUToCluster == NULL || sPackageToNode == NULL || sCPUToPackage == NULL) {
+		delete[] sCPUToCore;
+		delete[] sCPUToCluster;
+		delete[] sPackageToNode;
+		delete[] sCPUToPackage;
 		return B_NO_MEMORY;
+	}
+
 	ArrayDeleter<int32> cpuToCoreDeleter(sCPUToCore);
 	memset(sCPUToCore, 0, sizeof(int32) * cpuCount);
 
-	sCPUToPackage = new(std::nothrow) int32[cpuCount];
-	if (sCPUToPackage == NULL)
-		return B_NO_MEMORY;
+	ArrayDeleter<int32> cpuToClusterDeleter(sCPUToCluster);
+	memset(sCPUToCluster, 0, sizeof(int32) * cpuCount);
+
 	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
 	memset(sCPUToPackage, 0, sizeof(int32) * cpuCount);
 
 	// Safe upper bound allocation for mapping packages to nodes
-	sPackageToNode = new(std::nothrow) int32[cpuCount];
-	if (sPackageToNode == NULL)
-		return B_NO_MEMORY;
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
 
 	// First pass: logical topology from ACPI/Device Tree
@@ -824,6 +835,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		for (int32 i = 0; i < cpuCount; i++) {
 			sCPUToCore[i] = i;
 			sCPUToPackage[i] = 0;
+			sCPUToCluster[i] = 0;
 		}
 	}
 
@@ -921,27 +933,27 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 		if (coresInL3 > 0) {
 			for (int32 i = 0; i < coresInL3; i++) {
-				int32 cpuID = cpuList[l3Start + i];
-				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
+			int32 cpuID = cpuList[l3Start + i];
+			int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 
-				if (currentPackageSize >= clusterSize) {
-					packageCount++;
-					if (packageCount >= cpuCount) {
-						// Should not happen with valid topology
-						break;
-					}
-					currentPackageSize = 0;
-					clusterIndex++;
+			if (currentPackageSize >= clusterSize) {
+				packageCount++;
+				if (packageCount >= cpuCount) {
+					// Should not happen with valid topology
+					break;
 				}
+				currentPackageSize = 0;
+				clusterIndex++;
+			}
 
-				// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
-				// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
-				if (coresInCurrentNode >= kMaxCoresPerNode) {
-					currentNodeID = nodeCount++;
-					coresInCurrentNode = 0;
-				}
+			// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
+			// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
+			if (coresInCurrentNode >= kMaxCoresPerNode) {
+				currentNodeID = nodeCount++;
+				coresInCurrentNode = 0;
+			}
 
-				sCPUToPackage[cpuID] = packageCount;
+				sCPUToCluster[cpuID] = packageCount;
 				sPackageToNode[packageCount] = currentNodeID;
 				currentPackageSize++;
 				coresInCurrentNode++;
@@ -953,6 +965,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 	cpuToCoreDeleter.Detach();
 	cpuToPackageDeleter.Detach();
+	cpuToClusterDeleter.Detach();
 	packageToNodeDeleter.Detach();
 	return B_OK;
 }
@@ -971,6 +984,7 @@ init()
 	// These arrays are only used for initialization and can be freed now.
 	ArrayDeleter<int32> cpuToCoreDeleter(sCPUToCore);
 	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
+	ArrayDeleter<int32> cpuToClusterDeleter(sCPUToCluster);
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
 
 	if (packageCount > 4096) {
@@ -1003,18 +1017,18 @@ init()
 		gSchedulerNodes[i].Init(i);
 
 	gCPUEntries = new(std::nothrow) CPUEntry[cpuCount];
-	if (gCPUEntries == NULL)
-		return B_NO_MEMORY;
-	ArrayDeleter<CPUEntry> cpuEntriesDeleter(gCPUEntries);
-
 	gCoreEntries = new(std::nothrow) CoreEntry[coreCount];
-	if (gCoreEntries == NULL)
-		return B_NO_MEMORY;
-	ArrayDeleter<CoreEntry> coreEntriesDeleter(gCoreEntries);
-
 	gPackageEntries = new(std::nothrow) PackageEntry[packageCount];
-	if (gPackageEntries == NULL)
+
+	if (gCPUEntries == NULL || gCoreEntries == NULL || gPackageEntries == NULL) {
+		delete[] gCPUEntries;
+		delete[] gCoreEntries;
+		delete[] gPackageEntries;
 		return B_NO_MEMORY;
+	}
+
+	ArrayDeleter<CPUEntry> cpuEntriesDeleter(gCPUEntries);
+	ArrayDeleter<CoreEntry> coreEntriesDeleter(gCoreEntries);
 	ArrayDeleter<PackageEntry> packageEntriesDeleter(gPackageEntries);
 
 	int32 currentNode = -1;
@@ -1059,14 +1073,14 @@ init()
 	memset(packageCoreCounters, 0, sizeof(int32) * packageCount);
 
 	// Determine package index for each core
-	// We need to iterate cores, but we only have map CPU->Core and CPU->Package
+	// We need to iterate cores, but we only have map CPU->Core and CPU->Cluster
 	int32* coreToPackage = new(std::nothrow) int32[coreCount];
 	if (coreToPackage == NULL)
 		return B_NO_MEMORY;
 	ArrayDeleter<int32> coreToPackageDeleter(coreToPackage);
 
 	for (int32 i = 0; i < cpuCount; i++)
-		coreToPackage[sCPUToCore[i]] = sCPUToPackage[i];
+		coreToPackage[sCPUToCore[i]] = sCPUToCluster[i];
 
 	for (int32 i = 0; i < coreCount; i++) {
 		int32 packageID = coreToPackage[i];
@@ -1171,10 +1185,10 @@ init()
 	dprintf("scheduler: dynamic random sampling set to %" B_PRId32 " (packages: %" B_PRId32 ")\n",
 		gRandomSamples, packageCount);
 
-	packageEntriesDeleter.Detach();
-	coreEntriesDeleter.Detach();
-	cpuEntriesDeleter.Detach();
 	schedulerNodesDeleter.Detach();
+	cpuEntriesDeleter.Detach();
+	coreEntriesDeleter.Detach();
+	packageEntriesDeleter.Detach();
 
 	return B_OK;
 }

@@ -58,7 +58,7 @@ template<typename Element, unsigned int MaxPriority, typename Compare,
 	typename GetLink = RunQueueStandardGetLink<Element> >
 class RunQueue {
 public:
-	static const int kBitmapSize = (MaxPriority / 32) + 1;
+	static const int kBitmapSize = (MaxPriority + 32) / 32;
 
 	class ConstIterator {
 	public:

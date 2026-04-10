@@ -516,11 +516,13 @@ rebalance_irqs(bool idle)
 	}
 	pack = idle && hasSmallTaskCore;
 
-	if (idle && !pack)
-		return;
-
-	if (!idle && hasSmallTaskCore)
-		return;
+	if (idle) {
+		if (!pack)
+			return;
+	} else {
+		if (hasSmallTaskCore)
+			return;
+	}
 
 	cpu_ent* cpu = get_cpu_struct();
 	CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);

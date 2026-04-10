@@ -425,6 +425,9 @@ CPUEntry::_TryStealWork()
 	ThreadData* stolen = NULL;
 
 	search_local_node(node, [&](PackageEntry* entry) {
+		// Note: 'stolen' is captured by reference and acts as a single-threaded
+		// accumulator for this CPU. This is safe because _TryStealWork is only
+		// ever called by the CPU's own rescheduling loop.
 		if (stolen != NULL)
 			return true;
 

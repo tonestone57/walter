@@ -542,6 +542,9 @@ ThreadData::UpdateActivity(bigtime_t active)
 	if (!IsRealTime()) {
 		int32 priority = max_c((int32)1, GetEffectivePriority());
 		fVirtualRuntime += (active * B_URGENT_DISPLAY_PRIORITY) / priority;
+		// Theoretical maximum safe uptime before overflow for a thread using
+		// 100% CPU at priority 1 is approximately 2^63 / (B_URGENT_DISPLAY_PRIORITY / 1) us,
+		// which is roughly ~700 years. Overflow protection is omitted for performance.
 	}
 
 	if (!gTrackCoreLoad)

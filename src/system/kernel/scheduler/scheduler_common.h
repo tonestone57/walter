@@ -122,7 +122,7 @@ const int kVeryHighLoad = (kMaxLoad + kHighLoad) / 2;
 const int kLoadDifference = kMaxLoad * 20 / 100;
 
 const int32 kDefaultCapacity = 1024;
-const int32 kRandomSearchThreshold = 8;
+const int32 kRandomSearchThreshold = 32;
 
 const bigtime_t kCacheExpire = 15000;
 
