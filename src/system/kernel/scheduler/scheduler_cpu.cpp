@@ -1005,6 +1005,8 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask) const
 		enabledMask &= ~((native_cpu_mask_t)1 << i);
 
 		CoreEntry* candidate = fCores[i];
+		if (candidate == NULL)
+			continue;
 		if (mask != NULL && !mask->GetBit(candidate->ID()))
 			continue;
 

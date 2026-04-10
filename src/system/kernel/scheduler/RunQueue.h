@@ -108,6 +108,9 @@ public:
 	template<typename Predicate>
 	Element*	PeekOption(const Predicate& predicate) const;
 
+	template<typename Compare2, typename Predicate>
+	Element*	PeekBest(const Compare2& compare, const Predicate& predicate) const;
+
 private:
 			status_t	fInitStatus;
 
@@ -494,6 +497,50 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 			}
 			fBest = best;
 			return best;
+		}
+	}
+	return NULL;
+}
+
+
+RUN_QUEUE_TEMPLATE_LIST
+template<typename Compare2, typename Predicate>
+Element*
+RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare, const Predicate& predicate) const
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	for (int i = kBitmapSize - 1; i >= 0; i--) {
+		uint32 val = fBitmap[i];
+		if (val != 0) {
+			if (i == kBitmapSize - 1 && (MaxPriority % 32 != 31)) {
+				val &= (1UL << (MaxPriority % 32 + 1)) - 1;
+				if (val == 0)
+					continue;
+			}
+
+			while (val != 0) {
+				int bit = fls(val) - 1;
+				val &= ~(1UL << bit);
+
+				unsigned int priority = i * 32 + bit;
+				Element* current = fHeads[priority];
+
+				const int kSearchDepth = 32;
+				Element* best = NULL;
+
+				for (int j = 0; j < kSearchDepth && current != NULL; j++) {
+					if (predicate(current)) {
+						if (best == NULL || compare(current, best))
+							best = current;
+					}
+
+					current = sGetLink(current)->fNext;
+				}
+
+				if (best != NULL)
+					return best;
+			}
 		}
 	}
 	return NULL;

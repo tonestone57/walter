@@ -481,8 +481,10 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		CoreRunQueueLocker locker(fCore);
 
 		// Check if the Core is still active under the lock
-		if (fCore->CPUCount() == 0)
+		if (fCore->CPUCount() == 0) {
+			fQuickStartCredit = false;
 			return false;
+		}
 
 		if (!wasReady && !IsRealTime())
 			_UpdateDeadline();

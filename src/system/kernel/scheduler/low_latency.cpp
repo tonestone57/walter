@@ -305,11 +305,13 @@ rebalance(const ThreadData* threadData)
 		SchedulerNode* node = core->Package()->Node();
 		search_local_node(node, [&](PackageEntry* entry) {
 			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+			return false;
 		});
 
 		// Phase 3: Global Random
 		search_global_random([&](PackageEntry* entry) {
 			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+			return false;
 		});
 
 	} else if (useMask) {
@@ -429,12 +431,14 @@ rebalance_irqs(bool idle)
 			SchedulerNode* node = currentCore->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {
 				CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+				return false;
 			});
 		}
 
 		// Phase 3: Global Random
 		search_global_random([&](PackageEntry* entry) {
 			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+			return false;
 		});
 	}
 
