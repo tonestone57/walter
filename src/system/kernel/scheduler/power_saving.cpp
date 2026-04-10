@@ -348,7 +348,7 @@ choose_core(const ThreadData* threadData)
 			if (previousCore != NULL && !has_cache_expired(threadData)) {
 				PackageEntry* package = previousCore->Package();
 				if (package != NULL) {
-					CheckPackageMinimumLoad(package, NULL, bestCore, bestLoad);
+					CheckPackageMinimumLoad(package, NULL, bestCore, bestScore);
 				}
 			}
 
@@ -460,11 +460,11 @@ rebalance(const ThreadData* threadData)
 			atomic_pointer_set(&sSmallTaskCore[nodeID], (CoreEntry*)NULL);
 			CoreEntry* smallTaskCore = choose_small_task_core();
 
-			if (threadLoad > coreLoad / 3 || smallTaskCore == NULL
+			if (threadLoad > coreScore / 3 || smallTaskCore == NULL
 					|| (useMask && !smallTaskCore->CPUMask().Matches(mask))) {
 				return core;
 			}
-			return coreLoad > kVeryHighLoad ? smallTaskCore : core;
+			return coreScore > kVeryHighLoad ? smallTaskCore : core;
 		}
 
 		if (threadLoad >= coreScore >> 1)
@@ -600,7 +600,7 @@ rebalance_irqs(bool idle)
 			other = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore[nodeID]);
 		}
 	} else {
-		int32 bestLoad = -2;
+		int32 bestScore = -2;
 
 		// Use random sampling if possible
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
@@ -611,14 +611,14 @@ rebalance_irqs(bool idle)
 			if (currentCore != NULL) {
 				SchedulerNode* node = currentCore->Package()->Node();
 				search_local_node(node, [&](PackageEntry* entry) {
-					CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+					CheckPackageMinimumLoad(entry, NULL, other, bestScore);
 					return false;
 				});
 			}
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+				CheckPackageMinimumLoad(entry, NULL, other, bestScore);
 				return false;
 			});
 		}
@@ -634,7 +634,7 @@ rebalance_irqs(bool idle)
 				if (index >= gPackageCount)
 					index -= gPackageCount;
 				CheckPackageMinimumLoad(&gPackageEntries[index], NULL, other,
-					bestLoad);
+					bestScore);
 			}
 		}
 	}

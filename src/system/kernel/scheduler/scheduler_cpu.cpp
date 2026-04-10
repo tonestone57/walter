@@ -424,7 +424,7 @@ CPUEntry::_TryStealWork()
 	SchedulerNode* node = package->Node();
 	ThreadData* stolen = NULL;
 
-	search_local_node(node, [&](PackageEntry* entry) {
+	search_local_node(node, [this, package, &stolen](PackageEntry* entry) {
 		// Note: 'stolen' is captured by reference and acts as a single-threaded
 		// accumulator for this CPU. This is safe because _TryStealWork is only
 		// ever called by the CPU's own rescheduling loop.
@@ -469,7 +469,7 @@ CPUEntry::_TryStealWork()
 	// Why: This is the last resort. If the local node is empty, you are willing to pay
 	// the high cost to steal from a remote socket to avoid sleeping.
 
-	search_global_random([&](PackageEntry* entry) {
+	search_global_random([this, package, &stolen](PackageEntry* entry) {
 		if (stolen != NULL)
 			return true;
 
@@ -900,7 +900,6 @@ void
 PackageEntry::AddIdleCore(CoreEntry* core)
 {
 	WriteSpinLocker coreLocker(fCoreLock);
-	fCoreCount++;
 	atomic_add(&fIdleCoreCount, 1);
 	int32 oldMask = atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
 
@@ -915,7 +914,6 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 	WriteSpinLocker coreLocker(fCoreLock);
 	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 	atomic_add(&fIdleCoreCount, -1);
-	fCoreCount--;
 
 	if ((oldMask & ~(1U << core->PackageIndex())) == 0)
 		fNode->PackageWakesUp(this);
@@ -949,6 +947,7 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 {
 	ASSERT(index >= 0 && index < kMaxCoresPerPackage);
 	fCores[index] = core;
+	fCoreCount++;
 	fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
 }
 

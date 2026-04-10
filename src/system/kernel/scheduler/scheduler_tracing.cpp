@@ -288,7 +288,6 @@ cmd_scheduler(int argc, char** argv)
 		kprintf("  total:   %" B_PRIdBIGTIME " us\n", totalLatency);
 		kprintf("  average: %#.2f us\n", (double)totalLatency / latencies);
 		kprintf("  min:     %" B_PRIdBIGTIME " us\n", minLatency);
-		kprintf("  max:     %" B_PRIdBIGTIME " us\n", maxLatency);
 		kprintf("  max:     %" B_PRIdBIGTIME " us (at tracing entry %" B_PRId32
 			")\n", maxLatency, maxLatencyEntry);
 	} else

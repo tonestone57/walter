@@ -143,9 +143,15 @@ ThreadData::Init()
 
 	Thread* currentThread = thread_get_current_thread();
 	ThreadData* currentThreadData = currentThread->scheduler_data;
-	fNeededLoad = currentThreadData->fNeededLoad;
-	fVirtualRuntime = currentThreadData->fVirtualRuntime;
-	fHomePackage = currentThreadData->fHomePackage;
+	if (currentThreadData != NULL) {
+		fNeededLoad = currentThreadData->fNeededLoad;
+		fVirtualRuntime = currentThreadData->fVirtualRuntime;
+		fHomePackage = currentThreadData->fHomePackage;
+	} else {
+		fNeededLoad = 0;
+		fVirtualRuntime = 0;
+		fHomePackage = -1;
+	}
 
 	if (!IsRealTime())
 		_ComputeEffectivePriority(system_time());
