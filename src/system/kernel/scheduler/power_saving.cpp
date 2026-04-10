@@ -286,18 +286,8 @@ choose_core(const ThreadData* threadData)
 	bool preferE = threadData->GetPriority() < B_NORMAL_PRIORITY;
 
 	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
-	if (useMask) {
-		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
-		bool allEnabled = true;
-		for (int32 i = 0; i < kCPUSetArraySize; i++) {
-			if (mask.Bits(i) != gCPUEnabled.Bits(i)) {
-				allEnabled = false;
-				break;
-			}
-		}
-		if (allEnabled)
-			useMask = false;
-	}
+	if (useMask && Scheduler::IsAllEnabledMask(mask))
+		useMask = false;
 
 	// Thread Coloring: Search for a core of the preferred type first
 	if (preferP || preferE) {

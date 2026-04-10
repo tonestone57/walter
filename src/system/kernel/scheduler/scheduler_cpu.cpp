@@ -814,23 +814,29 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		return;
 
 	bigtime_t now = system_time();
-	bool intervalEnded = now >= kLoadMeasureInterval + fLastLoadUpdate;
+	bigtime_t lastUpdate = atomic_get64(&fLastLoadUpdate);
+	bool intervalEnded = now >= kLoadMeasureInterval + lastUpdate;
 
-	if (!intervalEnded && !forceUpdate)
+	if (intervalEnded || forceUpdate) {
+		if (atomic_test_and_set64(&fLastLoadUpdate, now, lastUpdate)
+				!= lastUpdate) {
+			return;
+		}
+	} else
 		return;
 
-	if (intervalEnded) {
-		// No locking needed for atomic updates of fLoad.
-		// fCurrentLoad is updated atomically.
-		fLoad = fCurrentLoad;
-		if (cpuCount > 0) {
-			int32 load = fLoad / cpuCount;
-			load = (int64)load * kDefaultCapacity / fCapacity;
-			atomic_set(&fPackage->fCoreLoads[fPackageIndex],
-				std::min(load, kMaxLoad));
-		}
-		atomic_add((int32*)&fLoadMeasurementEpoch, 1);
-		fLastLoadUpdate = now;
+	// Increment epoch first to claim current fCurrentLoad and prevent
+	// concurrent AddLoad from double counting towards fLoad.
+	atomic_add((int32*)&fLoadMeasurementEpoch, 1);
+
+	int32 currentLoad = atomic_get(&fCurrentLoad);
+	atomic_set(&fLoad, currentLoad);
+
+	if (cpuCount > 0) {
+		int32 load = currentLoad / cpuCount;
+		load = (int64)load * kDefaultCapacity / fCapacity;
+		atomic_set(&fPackage->fCoreLoads[fPackageIndex],
+			std::min(load, kMaxLoad));
 	}
 }
 

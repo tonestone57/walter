@@ -78,6 +78,7 @@ static object_cache* sThreadDataCache;
 static int32* sCPUToCore;
 static int32* sCPUToPackage;
 static int32* sPackageToNode;
+static int32* sCPUToCluster = NULL;
 
 
 static void
@@ -791,8 +792,6 @@ get_topology_id(int32 cpuID)
 	return sCPUToPackage[cpuID];
 }
 
-
-static int32* sCPUToCluster = NULL;
 
 static status_t
 build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
