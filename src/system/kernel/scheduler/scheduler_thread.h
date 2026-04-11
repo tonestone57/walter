@@ -470,7 +470,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 			ThreadData* top = cpu->PeekThread();
 			wasRunQueueEmpty = (top == NULL || top->IsIdle());
 
-			bool isForeground = fThread->team->fIsForeground;
+			bool isForeground = fIsForeground;
 
 			if (fQuickStartCredit || isForeground) {
 				cpu->PushFront(this, priority);
@@ -502,7 +502,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		ThreadData* top = fCore->PeekThread();
 		wasRunQueueEmpty = (top == NULL || top->IsIdle());
 
-		bool isForeground = fThread->team->fIsForeground;
+		bool isForeground = fIsForeground;
 
 		if (fQuickStartCredit || isForeground) {
 			fCore->PushFront(this, priority);

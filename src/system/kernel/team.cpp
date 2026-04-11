@@ -1328,6 +1328,8 @@ insert_team_into_group(ProcessGroup* group, Team* team)
 	team->group_id = group->id;
 	team->session_id = group->Session()->id;
 
+	team->fIsForeground = team->group_id == group->Session()->foreground_group;
+
 	group->teams.Add(team, false);
 	group->AcquireReference();
 }
@@ -3007,7 +3009,7 @@ update_team_foreground_status(Team* team, pid_t foregroundGroup)
 static void
 update_session_foreground_status(ProcessSession* session, pid_t foregroundGroup)
 {
-	const int32 kMaxTeamsToCollect = 128;
+	const int32 kMaxTeamsToCollect = 512;
 	Team* teamsToUpdate[kMaxTeamsToCollect];
 	int32 teamCount = 0;
 

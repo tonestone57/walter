@@ -464,7 +464,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		bigtime_t diff = fVirtualDeadline - now;
 
 		// Urgency Bonus: Grant foreground threads a "head start" in priority.
-		if (fThread->team->fIsForeground)
+		if (fIsForeground)
 			diff -= atomic_get64(&Scheduler::gDeadlineBucketSize);
 
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;

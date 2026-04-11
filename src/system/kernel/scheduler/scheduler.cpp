@@ -1512,20 +1512,23 @@ Scheduler::scheduler_on_team_foreground_changed(Team* team)
 		if (threadData == NULL || threadData->IsIdle() || threadData->IsRealTime())
 			continue;
 
-		threadData->fIsForeground = team->fIsForeground;
-
 		if (thread->state == B_THREAD_READY) {
 			// Remove from current run queue, update priority/deadline, and re-enqueue.
 			// This ensures the virtual runtime tree/heap consistency and immediate
 			// application of the urgency bonus.
-			if (threadData->Dequeue()) {
-				threadData->ResetPriorityBoost();
-				enqueue(thread, false, NULL);
-			}
-		} else if (thread->state == B_THREAD_RUNNING) {
-			// For running threads, just update their internal state.
-			// The next reschedule will handle the change.
+			// Dequeue must happen before updating the flag that determines queue position.
+			bool dequeued = threadData->Dequeue();
+			threadData->fIsForeground = team->fIsForeground;
 			threadData->ResetPriorityBoost();
+			if (dequeued)
+				enqueue(thread, false, NULL);
+		} else {
+			threadData->fIsForeground = team->fIsForeground;
+			if (thread->state == B_THREAD_RUNNING) {
+				// For running threads, just update their internal state.
+				// The next reschedule will handle the change.
+				threadData->ResetPriorityBoost();
+			}
 		}
 	}
 }
