@@ -39,8 +39,10 @@ class PackageEntry;
 
 enum CoreType {
 	CORE_TYPE_UNKNOWN = 0,
-	CORE_TYPE_PERFORMANCE,
-	CORE_TYPE_EFFICIENCY
+	CORE_TYPE_LOW,
+	CORE_TYPE_MEDIUM,
+	CORE_TYPE_HIGH,
+	CORE_TYPE_ULTRA
 };
 
 class IRQRebalanceDPC : public DPCCallback {

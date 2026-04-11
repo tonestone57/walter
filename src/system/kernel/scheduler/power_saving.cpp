@@ -283,16 +283,17 @@ choose_core(const ThreadData* threadData)
 
 	// Thread Coloring: High-priority threads prefer P-cores
 	bool isForeground = threadData->IsForeground();
-	bool preferP = threadData->GetPriority() > B_DISPLAY_PRIORITY || isForeground;
-	bool preferE = threadData->GetPriority() < B_NORMAL_PRIORITY && !isForeground;
+	int32 priority = threadData->GetPriority();
+	bool preferMax = priority > B_DISPLAY_PRIORITY || isForeground;
+	bool preferMin = priority < B_NORMAL_PRIORITY && !isForeground;
 
 	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
 	if (useMask && Scheduler::IsAllEnabledMask(mask))
 		useMask = false;
 
 	// Thread Coloring: Search for a core of the preferred type first
-	if (preferP || preferE) {
-		CoreType preferredType = preferP ? CORE_TYPE_PERFORMANCE : CORE_TYPE_EFFICIENCY;
+	if (preferMax || preferMin) {
+		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
 		int32 bestScore = -1;
 		bool foundNonOverloaded = false;
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
@@ -323,7 +324,7 @@ choose_core(const ThreadData* threadData)
 		}
 
 		// For P-cores, respect load threshold (80%).
-		if (preferP && core != NULL && core->GetLoad() > 800)
+		if (preferMax && core != NULL && core->GetLoad() > 800)
 			core = NULL;
 
 		if (core != NULL)

@@ -144,6 +144,9 @@ extern int32 gRandomSamples;
 
 extern int64 gDeadlineBucketSize;
 
+extern CoreType gMinCoreType;
+extern CoreType gMaxCoreType;
+
 
 void init_debug_commands();
 void scheduler_update_interaction_state();

@@ -59,6 +59,9 @@ int32 gRandomSamples;
 
 int64 gDeadlineBucketSize = 5000;
 
+CoreType gMinCoreType = CORE_TYPE_UNKNOWN;
+CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
+
 static timer sInteractionTimer;
 static int64 sLastInteractionTime;
 
@@ -1237,21 +1240,65 @@ init()
 			if (heterogeneous) {
 				dprintf("scheduler: heterogeneous CPUs detected (max frequency: %"
 					B_PRIu64 ")\n", maxFreq);
+
+				// Collect unique capacities
+				int32 uniqueCapacities[SMP_MAX_CPUS];
+				int32 uniqueCapacityCount = 0;
+
+				for (int32 i = 0; i < cpuCount; i++) {
+					if (cpuFreqs[i] == 0)
+						continue;
+					int32 capacity = (cpuFreqs[i] * kDefaultCapacity) / maxFreq;
+					if (capacity < 128)
+						capacity = 128;
+
+					bool found = false;
+					for (int32 j = 0; j < uniqueCapacityCount; j++) {
+						if (uniqueCapacities[j] == capacity) {
+							found = true;
+							break;
+						}
+					}
+					if (!found)
+						uniqueCapacities[uniqueCapacityCount++] = capacity;
+				}
+
+				// Sort capacities (bubble sort is fine for few types)
+				for (int32 i = 0; i < uniqueCapacityCount - 1; i++) {
+					for (int32 j = 0; j < uniqueCapacityCount - i - 1; j++) {
+						if (uniqueCapacities[j] > uniqueCapacities[j + 1]) {
+							int32 temp = uniqueCapacities[j];
+							uniqueCapacities[j] = uniqueCapacities[j + 1];
+							uniqueCapacities[j + 1] = temp;
+						}
+					}
+				}
+
 				for (int32 i = 0; i < cpuCount; i++) {
 					int32 coreID = sCPUToCore[i];
 					CoreEntry* core = &gCoreEntries[coreID];
 					if (cpuFreqs[i] != 0) {
 						int32 capacity = (cpuFreqs[i] * kDefaultCapacity)
 							/ maxFreq;
-						// Enforce a minimum capacity to avoid division by zero anomalies
 						if (capacity < 128)
 							capacity = 128;
 						core->SetCapacity(capacity);
 
-						if (capacity >= kDefaultCapacity)
-							core->SetType(CORE_TYPE_PERFORMANCE);
-						else
-							core->SetType(CORE_TYPE_EFFICIENCY);
+						// Map capacity to core type
+						for (int32 j = 0; j < uniqueCapacityCount; j++) {
+							if (uniqueCapacities[j] == capacity) {
+								CoreType type = (CoreType)(CORE_TYPE_LOW + j);
+								if (type > CORE_TYPE_ULTRA)
+									type = CORE_TYPE_ULTRA;
+								core->SetType(type);
+
+								if (gMinCoreType == CORE_TYPE_UNKNOWN || type < gMinCoreType)
+									gMinCoreType = type;
+								if (gMaxCoreType == CORE_TYPE_UNKNOWN || type > gMaxCoreType)
+									gMaxCoreType = type;
+								break;
+							}
+						}
 					}
 				}
 			}
@@ -1278,17 +1325,28 @@ init()
 			int32 eCoreCount = coreCount > 16 ? 8 : coreCount / 2;
 			for (int32 i = 0; i < coreCount; i++) {
 				if (i >= coreCount - eCoreCount)
-					gCoreEntries[i].SetType(CORE_TYPE_EFFICIENCY);
+					gCoreEntries[i].SetType(CORE_TYPE_LOW);
 				else
-					gCoreEntries[i].SetType(CORE_TYPE_PERFORMANCE);
+					gCoreEntries[i].SetType(CORE_TYPE_MEDIUM);
 			}
 		}
 	} else {
-		// Small systems: assume all are P-cores if not otherwise detected
+		// Small systems: assume all are medium cores if not otherwise detected
 		for (int32 i = 0; i < coreCount; i++) {
 			if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN)
-				gCoreEntries[i].SetType(CORE_TYPE_PERFORMANCE);
+				gCoreEntries[i].SetType(CORE_TYPE_MEDIUM);
 		}
+	}
+
+	// Update gMinCoreType and gMaxCoreType based on assigned types
+	for (int32 i = 0; i < coreCount; i++) {
+		CoreType type = gCoreEntries[i].Type();
+		if (type == CORE_TYPE_UNKNOWN)
+			continue;
+		if (gMinCoreType == CORE_TYPE_UNKNOWN || type < gMinCoreType)
+			gMinCoreType = type;
+		if (gMaxCoreType == CORE_TYPE_UNKNOWN || type > gMaxCoreType)
+			gMaxCoreType = type;
 	}
 
 	for (int32 i = 0; i < cpuCount; i++) {

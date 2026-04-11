@@ -60,8 +60,9 @@ choose_core(const ThreadData* threadData)
 
 	// Thread Coloring: High-priority threads prefer P-cores
 	bool isForeground = threadData->IsForeground();
-	bool preferP = threadData->GetPriority() > B_DISPLAY_PRIORITY || isForeground;
-	bool preferE = threadData->GetPriority() < B_NORMAL_PRIORITY && !isForeground;
+	int32 priority = threadData->GetPriority();
+	bool preferMax = priority > B_DISPLAY_PRIORITY || isForeground;
+	bool preferMin = priority < B_NORMAL_PRIORITY && !isForeground;
 
 	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
 	// to enable global random sampling instead of slow mask iteration.
@@ -72,9 +73,9 @@ choose_core(const ThreadData* threadData)
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
 			// Respect thread coloring even for cache affinity
 			bool typeMatch = true;
-			if (preferP && previousCore->Type() != CORE_TYPE_PERFORMANCE)
+			if (preferMax && previousCore->Type() != gMaxCoreType)
 				typeMatch = false;
-			else if (preferE && previousCore->Type() != CORE_TYPE_EFFICIENCY)
+			else if (preferMin && previousCore->Type() != gMinCoreType)
 				typeMatch = false;
 
 			if (typeMatch) {
@@ -121,8 +122,8 @@ choose_core(const ThreadData* threadData)
 	CoreEntry* core = NULL;
 
 	// Thread Coloring: Search for a core of the preferred type first
-	if (preferP || preferE) {
-		CoreType preferredType = preferP ? CORE_TYPE_PERFORMANCE : CORE_TYPE_EFFICIENCY;
+	if (preferMax || preferMin) {
+		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
 
 		// Try to find an idle core of the preferred type
 		uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
@@ -182,7 +183,7 @@ choose_core(const ThreadData* threadData)
 
 			// For P-cores, respect load threshold (80%).
 			// For E-cores, we just take the best one if we really want E-cores.
-			if (preferP && core != NULL && core->GetLoad() > 800)
+			if (preferMax && core != NULL && core->GetLoad() > 800)
 				core = NULL;
 		}
 	}
