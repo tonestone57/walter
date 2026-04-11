@@ -1302,11 +1302,6 @@ init()
 										type = CORE_TYPE_STANDARD;
 								}
 								core->SetType(type);
-
-								if (gMinCoreType == CORE_TYPE_UNKNOWN || type < gMinCoreType)
-									gMinCoreType = type;
-								if (gMaxCoreType == CORE_TYPE_UNKNOWN || type > gMaxCoreType)
-									gMaxCoreType = type;
 								break;
 							}
 						}
