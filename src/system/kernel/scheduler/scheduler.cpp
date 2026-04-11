@@ -713,6 +713,12 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		gCPU[cpuID].disabled = true;
 		gCPUEnabled.ClearBitAtomic(cpuID);
 
+		// If this is the last CPU in the core, we need to unassign threads from
+		// the core. We do this before acquiring any scheduler locks to avoid
+		// holding them for too long (thread_map is O(threads)).
+		if (core->CPUCount() == 1)
+			thread_map(CoreEntry::_UnassignThread, core);
+
 		ThreadEnqueuer enqueuer;
 
 		// flush CPU run queue
@@ -942,11 +948,11 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 			int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 
 			if (currentPackageSize >= clusterSize) {
-				packageCount++;
-				if (packageCount >= cpuCount) {
+				if (packageCount + 1 >= cpuCount) {
 					// Should not happen with valid topology
 					break;
 				}
+				packageCount++;
 				currentPackageSize = 0;
 				clusterIndex++;
 			}
@@ -963,6 +969,9 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 				currentPackageSize++;
 				coresInCurrentNode++;
 			}
+
+			if (packageCount + 1 >= cpuCount)
+				break;
 			packageCount++; // Finish last package in L3
 		}
 		l3Start = l3End;

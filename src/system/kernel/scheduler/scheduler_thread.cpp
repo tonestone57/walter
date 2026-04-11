@@ -109,14 +109,8 @@ ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
 	}
 
 	CPUEntry* cpu = bestCPU;
-	if (cpu == NULL) {
-		// Should not happen if the core mask intersection is valid
-		// Fallback to the first CPU in the core if possible, or panic?
-		// ChooseCoreAndCPU logic implies valid intersection.
-		// If useMask is true, we must have found something.
-		// If useMask is false, we definitely found something (root).
-		panic("scheduler: no valid CPU found in core %" B_PRId32, core->ID());
-	}
+	if (cpu == NULL)
+		return NULL;
 
 	if (bestKey < threadPriority) {
 		cpu->UpdatePriority(threadPriority);
@@ -216,12 +210,22 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 
 	if (targetCore == NULL && targetCPU != NULL)
 		targetCore = targetCPU->Core();
-	else if (targetCore != NULL && targetCPU == NULL)
+	else if (targetCore != NULL && targetCPU == NULL) {
 		targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
-	else if (targetCore == NULL && targetCPU == NULL) {
+		if (targetCPU == NULL)
+			targetCore = NULL;
+	}
+
+	if (targetCore == NULL && targetCPU == NULL) {
 		targetCore = _ChooseCore();
 		ASSERT(!useMask || mask.Matches(targetCore->CPUMask()));
 		targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
+		if (targetCPU == NULL) {
+			// This can happen if the core selection was based on a stale
+			// CPUMask. Retry with a fresh selection.
+			targetCore = NULL;
+			return ChooseCoreAndCPU(targetCore, targetCPU);
+		}
 	}
 
 	ASSERT(targetCore != NULL);

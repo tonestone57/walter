@@ -741,9 +741,6 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		atomic_add(&fIdleCPUCount, -1);
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	if (atomic_add(&fCPUCount, -1) == 1) {
-		// unassign threads
-		thread_map(CoreEntry::_UnassignThread, this);
-
 		// core has been disabled
 		atomic_and((int32*)&fPackage->fEnabledCoreMask, ~(1U << fPackageIndex));
 		fPackage->RemoveIdleCore(this);
