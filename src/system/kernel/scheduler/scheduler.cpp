@@ -1495,3 +1495,43 @@ _user_get_scheduler_mode()
 {
 	return Scheduler::Mode();
 }
+
+void
+Scheduler::scheduler_on_team_foreground_changed(Team* team)
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	// Note: Caller must hold the team's thread list lock (team->fLock via TeamLocker).
+	// We iterate through all threads of the team and re-enqueue them if they are ready.
+
+	for (Thread* thread = team->thread_list.First(); thread != NULL;
+			thread = team->thread_list.GetNext(thread)) {
+		InterruptsSpinLocker locker(thread->scheduler_lock);
+		ThreadData* threadData = thread->scheduler_data;
+
+		if (threadData == NULL || threadData->IsIdle() || threadData->IsRealTime())
+			continue;
+
+		threadData->fIsForeground = team->fIsForeground;
+
+		if (thread->state == B_THREAD_READY) {
+			// Remove from current run queue, update priority/deadline, and re-enqueue.
+			// This ensures the virtual runtime tree/heap consistency and immediate
+			// application of the urgency bonus.
+			if (threadData->Dequeue()) {
+				threadData->ResetPriorityBoost();
+				enqueue(thread, false, NULL);
+			}
+		} else if (thread->state == B_THREAD_RUNNING) {
+			// For running threads, just update their internal state.
+			// The next reschedule will handle the change.
+			threadData->ResetPriorityBoost();
+		}
+	}
+}
+
+extern "C" void
+scheduler_on_team_foreground_changed(Team* team)
+{
+	Scheduler::scheduler_on_team_foreground_changed(team);
+}

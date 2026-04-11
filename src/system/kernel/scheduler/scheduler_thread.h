@@ -120,6 +120,7 @@ private:
 			bool		fEnqueuedInCPURunQueue;
 			bool		fReady;
 			bool		fQuickStartCredit;
+			bool		fIsForeground;
 
 			Thread*		fThread;
 

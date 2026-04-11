@@ -86,6 +86,7 @@ void scheduler_set_cpu_enabled(int32 cpu, bool enabled);
 void scheduler_add_listener(struct SchedulerListener* listener);
 void scheduler_remove_listener(struct SchedulerListener* listener);
 
+void scheduler_on_team_foreground_changed(Team* team);
 void scheduler_set_foreground_team(team_id teamID);
 
 void scheduler_init(void);

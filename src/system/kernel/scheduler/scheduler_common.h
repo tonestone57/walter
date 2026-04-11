@@ -32,6 +32,8 @@
 
 namespace Scheduler {
 
+const bigtime_t kForegroundVRuntimeOffset = 5000;
+
 struct ThreadDataVRuntimeCompare {
 	template<typename ThreadData>
 	bool operator()(const ThreadData* a, const ThreadData* b) const
@@ -43,7 +45,16 @@ struct ThreadDataVRuntimeCompare {
 		}
 		if (b->IsRealTime())
 			return false;
-		return a->GetVirtualRuntime() < b->GetVirtualRuntime();
+
+		bigtime_t aRuntime = a->GetVirtualRuntime();
+		if (a->fIsForeground)
+			aRuntime -= kForegroundVRuntimeOffset;
+
+		bigtime_t bRuntime = b->GetVirtualRuntime();
+		if (b->fIsForeground)
+			bRuntime -= kForegroundVRuntimeOffset;
+
+		return aRuntime < bRuntime;
 	}
 };
 
@@ -135,6 +146,7 @@ extern int64 gDeadlineBucketSize;
 
 
 void init_debug_commands();
+void scheduler_on_team_foreground_changed(Team* team);
 void scheduler_update_interaction_state();
 
 
@@ -211,6 +223,8 @@ public:
 		}
 		return true;
 	}
+
+	static void scheduler_on_team_foreground_changed(Team* team);
 
 private:
 	static scheduler_mode sCurrentModeID;

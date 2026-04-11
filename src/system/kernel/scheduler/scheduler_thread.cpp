@@ -46,6 +46,8 @@ ThreadData::_InitBase()
 
 	fVirtualRuntime = 0;
 	fVirtualDeadline = 0;
+
+	fIsForeground = fThread->team->fIsForeground;
 }
 
 
@@ -459,9 +461,15 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		// If Deadline is Now (or passed), Urgency is Max.
 		// If Deadline is far, Urgency is 0.
 
+		bigtime_t diff = fVirtualDeadline - now;
+
+		// Urgency Bonus: Grant foreground threads a "head start" in priority.
+		if (fThread->team->fIsForeground)
+			diff -= atomic_get64(&Scheduler::gDeadlineBucketSize);
+
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
 		bigtime_t urgency = kMaxDynamicPriority
-			- (fVirtualDeadline - now) / atomic_get64(&Scheduler::gDeadlineBucketSize);
+			- diff / atomic_get64(&Scheduler::gDeadlineBucketSize);
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
 

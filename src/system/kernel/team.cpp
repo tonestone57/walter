@@ -2998,6 +2998,38 @@ update_team_foreground_status(Team* team, pid_t foregroundGroup)
 		return;
 
 	team->fIsForeground = isForeground;
+
+	// team->fLock must be held by caller (TeamLocker)
+	scheduler_on_team_foreground_changed(team);
+}
+
+
+static void
+update_session_foreground_status(ProcessSession* session, pid_t foregroundGroup)
+{
+	const int32 kMaxTeamsToCollect = 128;
+	Team* teamsToUpdate[kMaxTeamsToCollect];
+	int32 teamCount = 0;
+
+	{
+		InterruptsReadSpinLocker teamsLocker(sTeamHashLock);
+		for (TeamTable::Iterator it = sTeamHash.GetIterator(); Team* t = it.Next();) {
+			if (t->group->Session() == session) {
+				if (teamCount < kMaxTeamsToCollect) {
+					t->AcquireReference();
+					teamsToUpdate[teamCount++] = t;
+				}
+			}
+		}
+	}
+
+	for (int32 i = 0; i < teamCount; i++) {
+		Team* t = teamsToUpdate[i];
+		TeamLocker teamLocker(t);
+		update_team_foreground_status(t, foregroundGroup);
+		teamLocker.Unlock();
+		t->ReleaseReference();
+	}
 }
 
 
@@ -3064,13 +3096,7 @@ team_set_foreground_process_group(void* tty, pid_t processGroupID)
 
 	session->foreground_group = processGroupID;
 
-	// Update all teams in the session
-	InterruptsReadSpinLocker teamsLocker(sTeamHashLock);
-	for (TeamTable::Iterator it = sTeamHash.GetIterator(); Team* team = it.Next();) {
-		if (team->group->Session() == session) {
-			update_team_foreground_status(team, processGroupID);
-		}
-	}
+	update_session_foreground_status(session, processGroupID);
 
 	return B_OK;
 }
@@ -3079,21 +3105,17 @@ team_set_foreground_process_group(void* tty, pid_t processGroupID)
 void
 scheduler_set_foreground_team(team_id teamID)
 {
-	InterruptsReadSpinLocker teamsLocker(sTeamHashLock);
-	Team* team = sTeamHash.Lookup(teamID);
-	if (team != NULL) {
-		ProcessSession* session = team->group->Session();
-		AutoLocker<ProcessSession> sessionLocker(session);
+	Team* team = Team::Get(teamID);
+	if (team == NULL)
+		return;
+	BReference<Team> teamReference(team, true);
 
-		session->foreground_group = team->group_id;
+	ProcessSession* session = team->group->Session();
+	AutoLocker<ProcessSession> sessionLocker(session);
 
-		// Update all teams in the session
-		for (TeamTable::Iterator it = sTeamHash.GetIterator(); Team* t = it.Next();) {
-			if (t->group->Session() == session) {
-				update_team_foreground_status(t, team->group_id);
-			}
-		}
-	}
+	session->foreground_group = team->group_id;
+
+	update_session_foreground_status(session, team->group_id);
 }
 
 
