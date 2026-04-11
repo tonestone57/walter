@@ -151,9 +151,9 @@ enum ScheduleState {
 	UNKNOWN
 };
 
-}
-
 int cmd_scheduler(int argc, char** argv);
+
+}
 
 #endif	// SCHEDULER_TRACING
 

@@ -109,17 +109,12 @@ ScheduleThread::Name() const
 	return fName;
 }
 
-}	// namespace SchedulerTracing
-
-
 // #pragma mark -
 
 
 int
 cmd_scheduler(int argc, char** argv)
 {
-	using namespace SchedulerTracing;
-
 	int64 threadID;
 	if (argc != 2
 		|| !evaluate_debug_expression(argv[1], (uint64*)&threadID, true)) {
@@ -311,5 +306,7 @@ cmd_scheduler(int argc, char** argv)
 
 	return 0;
 }
+
+}	// namespace SchedulerTracing
 
 #endif	// SCHEDULER_TRACING

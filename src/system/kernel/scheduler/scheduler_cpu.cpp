@@ -94,7 +94,8 @@ CPUEntry::CPUEntry()
 	fMeasureActiveTime(0),
 	fMeasureTime(0),
 	fUpdateLoadEvent(false),
-	fRandomState(1)
+	fRandomState(1),
+	fRescheduleCount(0)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -629,7 +630,8 @@ CoreEntry::CoreEntry()
 	fLoad(0),
 	fCurrentLoad(0),
 	fLoadMeasurementEpoch(0),
-	fLastLoadUpdate(0)
+	fLastLoadUpdate(0),
+	fScoreFactor(1 << 16)
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -641,6 +643,8 @@ CoreEntry::Init(int32 id, PackageEntry* package)
 {
 	fCoreID = id;
 	fPackage = package;
+
+	fScoreFactor = (kDefaultCapacity << 16) / fCapacity;
 
 	fCPUHeap.~CPUPriorityHeap();
 	new(&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
@@ -802,6 +806,14 @@ CoreEntry::GetMinVirtualRuntime() const
 
 
 void
+CoreEntry::SetCapacity(int32 capacity)
+{
+	fCapacity = capacity;
+	fScoreFactor = (kDefaultCapacity << 16) / fCapacity;
+}
+
+
+void
 CoreEntry::_UpdateLoad(bool forceUpdate)
 {
 	SCHEDULER_ENTER_FUNCTION();
@@ -831,9 +843,9 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 
 	if (cpuCount > 0) {
 		int32 load = currentLoad / cpuCount;
-		load = (int64)load * kDefaultCapacity / fCapacity;
+		load = ((int64)load * fScoreFactor) >> 16;
 		atomic_set(&fPackage->fCoreLoads[fPackageIndex],
-			std::min(load, kMaxLoad));
+			std::min(load, (int32)kMaxLoad));
 	}
 }
 
@@ -975,7 +987,8 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 
 		while (attempts++ < kMaxAttempts) {
 			// Select a random bit index based on registered cores to avoid sparse array slots
-			int32 i = CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % registeredCores;
+			int32 i = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+				* registeredCores) >> 32);
 
 			// Check if this core is enabled
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))

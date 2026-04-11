@@ -54,6 +54,8 @@ public:
 // Adjusted to sizeof(native_cpu_mask_t) * 8 to support larger clusters on 64-bit.
 // This allows a single L3 domain to span up to 64 cores.
 const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
+static_assert(kMaxCoresPerPackage <= sizeof(native_cpu_mask_t) * 8,
+	"kMaxCoresPerPackage exceeds native_cpu_mask_t capacity");
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
@@ -153,6 +155,8 @@ private:
 						bool			fUpdateLoadEvent;
 						uint32			fRandomState;
 
+						uint32			fRescheduleCount;
+
 public:
 						IRQRebalanceDPC	fRebalanceDPC;
 
@@ -225,8 +229,7 @@ public:
 
 	inline				int32			GetLoad() const;
 	inline				int32			GetScore() const;
-	inline				void			SetCapacity(int32 capacity)
-											{ fCapacity = capacity; }
+						void			SetCapacity(int32 capacity);
 	inline				int32			Capacity() const { return fCapacity; }
 						bigtime_t		GetMinVirtualRuntime() const;
 	inline				uint32			LoadMeasurementEpoch() const
@@ -274,6 +277,8 @@ private:
 						int32			fCurrentLoad;
 						uint32			fLoadMeasurementEpoch;
 						bigtime_t		fLastLoadUpdate;
+
+						uint32			fScoreFactor;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
@@ -572,7 +577,8 @@ CoreEntry::GetScore() const
 
 	// Use weighted score: (load * 1024) / capacity
 	// This makes E-cores (lower capacity) appear "full" faster.
-	int64 score = (int64)load * kDefaultCapacity / fCapacity;
+	// Optimization: replaced division with multiplicative factor (fixed point 1.16)
+	int64 score = ((int64)load * fScoreFactor) >> 16;
 	return (int32)min_c(score, (int64)kMaxLoad);
 }
 

@@ -66,8 +66,14 @@ search_global_random(Action action)
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
 	int32 packagesToCheck = min_c(gPackageCount, kStackBitmaskSize);
-	int32 wordsToClear = (packagesToCheck + 63) / 64;
-	memset(visitedBits, 0, wordsToClear * sizeof(uint64));
+	if (packagesToCheck > 0) {
+		if (packagesToCheck <= 64)
+			visitedBits[0] = 0;
+		else {
+			int32 wordsToClear = (packagesToCheck + 63) / 64;
+			memset(visitedBits, 0, wordsToClear * sizeof(uint64));
+		}
+	}
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 		// Multiplicative random mapping to avoid expensive modulo

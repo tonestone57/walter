@@ -86,6 +86,10 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Throttle: only run the boost scan every 10 context switches to reduce overhead.
+	if (cpu->fRescheduleCount++ % 10 != 0)
+		return;
+
 	// Scalable Priority Boosting:
 	// Instead of scanning all threads (O(N)), we scan only the heads of
 	// priority queues (O(1) relative to thread count).
@@ -1286,7 +1290,7 @@ scheduler_init()
 	init_debug_commands();
 
 #if SCHEDULER_TRACING
-	add_debugger_command_etc("scheduler", &cmd_scheduler,
+	add_debugger_command_etc("scheduler", &SchedulerTracing::cmd_scheduler,
 		"Analyze scheduler tracing information",
 		"<thread>\n"
 		"Analyzes scheduler tracing information for a given thread.\n"

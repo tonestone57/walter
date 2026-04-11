@@ -436,7 +436,7 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fNext = NULL;
 
 	if (fBest == element)
-		fBest = NULL;
+		fBest = fHeads[priority];
 }
 
 
