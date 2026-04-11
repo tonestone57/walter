@@ -664,9 +664,8 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, -1);
 	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 
-	int32 expectedMask = atomic_get((int32*)&fEnabledCoreMask);
-	if (oldMask == expectedMask) {
-		// package wakes up (first core)
+	if ((oldMask & ~(1U << core->PackageIndex())) == 0) {
+		// package wakes up (last core)
 		fNode->PackageWakesUp(this);
 	}
 }

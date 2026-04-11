@@ -42,7 +42,7 @@ _LoadavgUpdate(void *data, int iteration)
 	InterruptsSpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {
 		sAverageRunnable.ldavg[i]
-			= (sCExp[i] * sAverageRunnable.ldavg[i] + threadCount * kFScale * (kFScale - sCExp[i]))
+			= (sCExp[i] * sAverageRunnable.ldavg[i] + threadCount * (kFScale - sCExp[i]))
 			>> kFShift;
 	}
 }

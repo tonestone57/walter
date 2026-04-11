@@ -334,7 +334,7 @@ ThreadData::ComputeQuantum() const
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
 	quantum = quantum * (1500 - fInteractivityScore) / 1000;
 
-	return std::max(quantum, kMinGranularity);
+	return std::max(quantum, floorQuantum);
 }
 
 

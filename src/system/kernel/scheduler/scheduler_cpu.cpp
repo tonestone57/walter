@@ -741,8 +741,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	if (fCPUHeap.GetKey(cpu) == B_IDLE_PRIORITY)
-		atomic_add(&fIdleCPUCount, -1);
+	atomic_add(&fIdleCPUCount, -1);
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	if (atomic_add(&fCPUCount, -1) == 1) {
 		// core has been disabled

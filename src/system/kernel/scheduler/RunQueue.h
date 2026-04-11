@@ -250,7 +250,7 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 
 	if (fPriority > 0 && currentBit != 31) {
 		// Mask bits at currentBit+1 and above, keep bits 0..currentBit
-		val &= (1UL << (currentBit + 1)) - 1;
+		val &= (uint32)((1ULL << (currentBit + 1)) - 1);
 	} else if (fPriority == 0) {
 		// If we finished bit 0, this word is done.
 		val = 0;
