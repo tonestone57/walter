@@ -1287,9 +1287,20 @@ init()
 						// Map capacity to core type
 						for (int32 j = 0; j < uniqueCapacityCount; j++) {
 							if (uniqueCapacities[j] == capacity) {
-								CoreType type = (CoreType)(CORE_TYPE_LOW + j);
-								if (type > CORE_TYPE_ULTRA)
-									type = CORE_TYPE_ULTRA;
+								CoreType type;
+								if (uniqueCapacityCount == 1)
+									type = CORE_TYPE_STANDARD;
+								else if (uniqueCapacityCount == 2)
+									type = (j == 0) ? CORE_TYPE_EFFICIENCY : CORE_TYPE_PERFORMANCE;
+								else {
+									// 3 or more types (clamp to max 3)
+									if (j == 0)
+										type = CORE_TYPE_EFFICIENCY;
+									else if (j == uniqueCapacityCount - 1)
+										type = CORE_TYPE_PERFORMANCE;
+									else
+										type = CORE_TYPE_STANDARD;
+								}
 								core->SetType(type);
 
 								if (gMinCoreType == CORE_TYPE_UNKNOWN || type < gMinCoreType)
@@ -1325,16 +1336,16 @@ init()
 			int32 eCoreCount = coreCount > 16 ? 8 : coreCount / 2;
 			for (int32 i = 0; i < coreCount; i++) {
 				if (i >= coreCount - eCoreCount)
-					gCoreEntries[i].SetType(CORE_TYPE_LOW);
+					gCoreEntries[i].SetType(CORE_TYPE_EFFICIENCY);
 				else
-					gCoreEntries[i].SetType(CORE_TYPE_MEDIUM);
+					gCoreEntries[i].SetType(CORE_TYPE_PERFORMANCE);
 			}
 		}
 	} else {
-		// Small systems: assume all are medium cores if not otherwise detected
+		// Small systems: assume all are standard cores if not otherwise detected
 		for (int32 i = 0; i < coreCount; i++) {
 			if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN)
-				gCoreEntries[i].SetType(CORE_TYPE_MEDIUM);
+				gCoreEntries[i].SetType(CORE_TYPE_STANDARD);
 		}
 	}
 
