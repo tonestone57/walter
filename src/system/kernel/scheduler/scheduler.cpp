@@ -1321,7 +1321,7 @@ init()
 		// through frequencies (e.g., some Intel Alder Lake+ configurations).
 		// We assume that if no heterogeneous capacity was detected but the core
 		// count is high, it's likely a hybrid system where a subset of cores
-		// are E-cores.
+		// are Efficiency cores.
 		bool allUnknown = true;
 		for (int32 i = 0; i < coreCount; i++) {
 			if (gCoreEntries[i].Type() != CORE_TYPE_UNKNOWN) {
@@ -1331,7 +1331,7 @@ init()
 		}
 
 		if (allUnknown) {
-			// Typical configuration: last 8 or 50% are E-cores.
+			// Typical configuration: last 8 or 50% are Efficiency cores.
 			// Let's assume a reasonable default for high core count systems.
 			int32 eCoreCount = coreCount > 16 ? 8 : coreCount / 2;
 			for (int32 i = 0; i < coreCount; i++) {

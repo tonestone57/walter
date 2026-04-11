@@ -577,7 +577,7 @@ CoreEntry::GetScore() const
 	int32 load = GetLoad();
 
 	// Use weighted score: (load * 1024) / capacity
-	// This makes E-cores (lower capacity) appear "full" faster.
+	// This makes Efficiency cores (lower capacity) appear "full" faster.
 	// Optimization: replaced division with multiplicative factor (fixed point 1.16)
 	int64 score = ((int64)load * fScoreFactor) >> 16;
 	return (int32)min_c(score, (int64)kMaxLoad);

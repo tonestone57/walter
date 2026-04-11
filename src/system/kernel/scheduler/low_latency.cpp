@@ -58,7 +58,7 @@ choose_core(const ThreadData* threadData)
 	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
 
-	// Thread Coloring: High-priority threads prefer P-cores
+	// Thread Coloring: High-priority threads prefer Performance cores
 	bool isForeground = threadData->IsForeground();
 	int32 priority = threadData->GetPriority();
 	bool preferMax = priority > B_DISPLAY_PRIORITY || isForeground;
@@ -181,8 +181,8 @@ choose_core(const ThreadData* threadData)
 				}
 			}
 
-			// For P-cores, respect load threshold (80%).
-			// For E-cores, we just take the best one if we really want E-cores.
+			// For Performance cores, respect load threshold (80%).
+			// For Efficiency cores, we just take the best one if we really want Efficiency cores.
 			if (preferMax && core != NULL && core->GetLoad() > 800)
 				core = NULL;
 		}
