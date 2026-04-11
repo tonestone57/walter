@@ -282,8 +282,9 @@ choose_core(const ThreadData* threadData)
 	bool useMask = !mask.IsEmpty();
 
 	// Thread Coloring: High-priority threads prefer P-cores
-	bool preferP = threadData->GetPriority() > B_DISPLAY_PRIORITY;
-	bool preferE = threadData->GetPriority() < B_NORMAL_PRIORITY;
+	bool isForeground = threadData->GetThread()->team->fIsForeground;
+	bool preferP = threadData->GetPriority() > B_DISPLAY_PRIORITY || isForeground;
+	bool preferE = threadData->GetPriority() < B_NORMAL_PRIORITY && !isForeground;
 
 	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
 	if (useMask && Scheduler::IsAllEnabledMask(mask))

@@ -131,8 +131,11 @@ extern bool gTrackCoreLoad;
 extern bool gTrackCPULoad;
 extern int32 gRandomSamples;
 
+extern int64 gDeadlineBucketSize;
+
 
 void init_debug_commands();
+void scheduler_update_interaction_state();
 
 
 class Scheduler {

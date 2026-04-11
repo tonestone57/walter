@@ -30,6 +30,8 @@
 #include <util/Random.h>
 #include <slab/Slab.h>
 
+#include <DPC.h>
+
 #include "scheduler_common.h"
 #include "scheduler_cpu.h"
 #include "scheduler_locking.h"
@@ -54,6 +56,67 @@ bool gSingleCore;
 bool gTrackCoreLoad;
 bool gTrackCPULoad;
 int32 gRandomSamples;
+
+int64 gDeadlineBucketSize = 5000;
+
+static timer sInteractionTimer;
+static int64 sLastInteractionTime;
+
+
+static void
+update_quantum_lengths_dpc(void* /* arg */)
+{
+	InterruptsBigSchedulerLocker locker;
+	if (atomic_get64(&gDeadlineBucketSize) != 1000) {
+		atomic_set64(&gDeadlineBucketSize, 1000);
+		ThreadData::ComputeQuantumLengths();
+	}
+}
+
+
+static status_t
+interaction_timer_hook(struct timer* timer)
+{
+	// We want to avoid holding a big lock in a timer interrupt if possible,
+	// but ComputeQuantumLengths needs to be atomic across all entries.
+	// Since it's only called when resolution actually changes, it's rare.
+	InterruptsBigSchedulerLocker locker;
+	if (atomic_get64(&gDeadlineBucketSize) != 5000) {
+		atomic_set64(&gDeadlineBucketSize, 5000);
+		ThreadData::ComputeQuantumLengths();
+	}
+	return B_HANDLED_INTERRUPT;
+}
+
+
+void
+scheduler_update_interaction_state()
+{
+	bigtime_t now = system_time();
+	if (now - atomic_get64(&sLastInteractionTime) < 50000)
+		return;
+
+	atomic_set64(&sLastInteractionTime, now);
+
+	if (atomic_get64(&gDeadlineBucketSize) == 1000) {
+		cancel_timer(&sInteractionTimer);
+		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
+			B_ONE_SHOT_RELATIVE_TIMER);
+		return;
+	}
+
+	// This part is called rarely (only when scaling up resolution)
+	// We must not hold scheduler locks here!
+	// scheduler_update_interaction_state is called from Enqueue, which HOLDS
+	// scheduler locks.
+	DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
+		&update_quantum_lengths_dpc, NULL);
+
+	cancel_timer(&sInteractionTimer);
+	add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
+		B_ONE_SHOT_RELATIVE_TIMER);
+}
+
 
 }	// namespace Scheduler
 

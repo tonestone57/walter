@@ -13,7 +13,6 @@
 using namespace Scheduler;
 
 
-static const bigtime_t kDeadlineBucketSize = 5000;
 static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1];
 static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1];
 
@@ -350,7 +349,7 @@ ThreadData::ComputeQuantumLengths()
 	SCHEDULER_ENTER_FUNCTION();
 
 	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
-		const bigtime_t kBaseSlice = kDeadlineBucketSize;
+		const bigtime_t kBaseSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
 		const int32 kBaseWeight = 10;
 		int32 taskWeight = max_c(1, priority);
 
@@ -462,7 +461,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
 		bigtime_t urgency = kMaxDynamicPriority
-			- (fVirtualDeadline - now) / kDeadlineBucketSize;
+			- (fVirtualDeadline - now) / atomic_get64(&Scheduler::gDeadlineBucketSize);
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
 

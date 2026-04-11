@@ -505,6 +505,8 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 	gid_t			effective_gid;
 	BReference<GroupsArray> supplementary_groups;
 
+	bool			fIsForeground;
+
 	// Exit status information. Set when the first terminal event occurs,
 	// immutable afterwards. Protected by fLock.
 	struct {

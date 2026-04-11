@@ -503,6 +503,7 @@ Team::Team(team_id id, bool kernel)
 
 	fQueuedSignalsCounter = new(std::nothrow) BKernel::QueuedSignalsCounter(
 		kernel ? -1 : MAX_QUEUED_SIGNALS);
+	fIsForeground = false;
 	memset(fSignalActions, 0, sizeof(fSignalActions));
 	fUserDefinedTimerCount = 0;
 
@@ -2989,6 +2990,17 @@ team_set_controlling_tty(void* tty)
 }
 
 
+static void
+update_team_foreground_status(Team* team, pid_t foregroundGroup)
+{
+	bool isForeground = team->group_id == foregroundGroup;
+	if (team->fIsForeground == isForeground)
+		return;
+
+	team->fIsForeground = isForeground;
+}
+
+
 void*
 team_get_controlling_tty()
 {
@@ -3052,7 +3064,36 @@ team_set_foreground_process_group(void* tty, pid_t processGroupID)
 
 	session->foreground_group = processGroupID;
 
+	// Update all teams in the session
+	InterruptsReadSpinLocker teamsLocker(sTeamHashLock);
+	for (TeamTable::Iterator it = sTeamHash.GetIterator(); Team* team = it.Next();) {
+		if (team->group->Session() == session) {
+			update_team_foreground_status(team, processGroupID);
+		}
+	}
+
 	return B_OK;
+}
+
+
+void
+scheduler_set_foreground_team(team_id teamID)
+{
+	InterruptsReadSpinLocker teamsLocker(sTeamHashLock);
+	Team* team = sTeamHash.Lookup(teamID);
+	if (team != NULL) {
+		ProcessSession* session = team->group->Session();
+		AutoLocker<ProcessSession> sessionLocker(session);
+
+		session->foreground_group = team->group_id;
+
+		// Update all teams in the session
+		for (TeamTable::Iterator it = sTeamHash.GetIterator(); Team* t = it.Next();) {
+			if (t->group->Session() == session) {
+				update_team_foreground_status(t, team->group_id);
+			}
+		}
+	}
 }
 
 
