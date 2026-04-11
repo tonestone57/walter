@@ -3016,7 +3016,7 @@ update_session_foreground_status(ProcessSession* session, pid_t foregroundGroup)
 	{
 		InterruptsReadSpinLocker teamsLocker(sTeamHashLock);
 		for (TeamTable::Iterator it = sTeamHash.GetIterator(); Team* t = it.Next();) {
-			if (t->group->Session() == session) {
+			if (t->group != NULL && t->group->Session() == session) {
 				if (teamCount < kMaxTeamsToCollect) {
 					t->AcquireReference();
 					teamsToUpdate[teamCount++] = t;
@@ -3098,6 +3098,9 @@ team_set_foreground_process_group(void* tty, pid_t processGroupID)
 
 	session->foreground_group = processGroupID;
 
+	sessionLocker.Unlock();
+	teamLocker.Unlock();
+
 	update_session_foreground_status(session, processGroupID);
 
 	return B_OK;
@@ -3112,12 +3115,23 @@ scheduler_set_foreground_team(team_id teamID)
 		return;
 	BReference<Team> teamReference(team, true);
 
-	ProcessSession* session = team->group->Session();
+	ProcessSession* session;
+	pid_t groupID;
+	{
+		TeamLocker teamLocker(team);
+		if (team->group == NULL)
+			return;
+		session = team->group->Session();
+		session->AcquireReference();
+		groupID = team->group_id;
+	}
+	BReference<ProcessSession> sessionReference(session, true);
+
 	AutoLocker<ProcessSession> sessionLocker(session);
+	session->foreground_group = groupID;
+	sessionLocker.Unlock();
 
-	session->foreground_group = team->group_id;
-
-	update_session_foreground_status(session, team->group_id);
+	update_session_foreground_status(session, groupID);
 }
 
 
