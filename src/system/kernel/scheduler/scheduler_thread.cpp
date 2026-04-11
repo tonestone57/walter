@@ -47,6 +47,8 @@ ThreadData::_InitBase()
 	fVirtualRuntime = 0;
 	fVirtualDeadline = 0;
 
+	fInteractivityScore = 500;
+
 	fIsForeground = fThread->team->fIsForeground;
 }
 
@@ -179,6 +181,7 @@ ThreadData::Dump() const
 	kprintf("\tneeded_load:\t\t%" B_PRId32 "%%\n", fNeededLoad / 10);
 	kprintf("\twent_sleep:\t\t%" B_PRId64 "\n", fWentSleep);
 	kprintf("\twent_sleep_active:\t%" B_PRId64 "\n", fWentSleepActive);
+	kprintf("\tinteractivity_score:\t%" B_PRId32 "\n", fInteractivityScore);
 	kprintf("\tcore:\t\t\t%" B_PRId32 "\n",
 		fCore != NULL ? fCore->ID() : -1);
 	if (fCore != NULL && HasCacheExpired())
@@ -328,6 +331,9 @@ ThreadData::ComputeQuantum() const
 
 	bigtime_t quantum = targetQuantum;
 
+	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
+	quantum = quantum * (1500 - fInteractivityScore) / 1000;
+
 	return std::max(quantum, kMinGranularity);
 }
 
@@ -440,7 +446,12 @@ ThreadData::_UpdateDeadline()
 	if (priority > THREAD_MAX_SET_PRIORITY)
 		priority = THREAD_MAX_SET_PRIORITY;
 
-	fVirtualDeadline = now + atomic_get64(&sVirtualDeadlineSlices[priority]);
+	bigtime_t slice = atomic_get64(&sVirtualDeadlineSlices[priority]);
+
+	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
+	slice = slice * (1500 - fInteractivityScore) / 1000;
+
+	fVirtualDeadline = now + slice;
 
 	_ComputeEffectivePriority(now);
 }
@@ -463,9 +474,19 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 
 		bigtime_t diff = fVirtualDeadline - now;
 
+		// Adaptive Urgency Boost: give bursty threads higher urgency.
+		bigtime_t urgencyBoost = (fInteractivityScore
+			* atomic_get64(&Scheduler::gDeadlineBucketSize)) / 1000;
+		diff -= urgencyBoost;
+
 		// Urgency Bonus: Grant foreground threads a "head start" in priority.
-		if (fIsForeground)
+		if (fIsForeground) {
 			diff -= atomic_get64(&Scheduler::gDeadlineBucketSize);
+
+			// Display-Awareness: Additional boost for interactive foreground threads
+			if (fInteractivityScore > 750)
+				diff -= atomic_get64(&Scheduler::gDeadlineBucketSize) / 2;
+		}
 
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
 		bigtime_t urgency = kMaxDynamicPriority

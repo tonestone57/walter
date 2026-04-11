@@ -147,6 +147,8 @@ private:
 			bigtime_t	fVirtualRuntime;
 			bigtime_t	fVirtualDeadline;
 
+			int32		fInteractivityScore;
+
 			CoreEntry*	fCore;
 };
 
@@ -329,9 +331,13 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	bigtime_t skipTime = Scheduler::MinimalQuantum() / 2;
 	if (hasYielded) {
 		timeLeft = 0;
+		fInteractivityScore = min_c(fInteractivityScore + 50, 1000);
 	} else if (wasPreempted || timeLeft <= skipTime) {
 		fStolenTime += timeLeft;
 		timeLeft = 0;
+
+		if (!wasPreempted)
+			fInteractivityScore = max_c(fInteractivityScore - 20, 0);
 	}
 
 	if (timeLeft == 0) {
@@ -362,8 +368,10 @@ ThreadData::GoesAway()
 
 	ASSERT(fReady);
 
-	if (!HasQuantumEnded(false, false))
+	if (!HasQuantumEnded(false, false)) {
 		fQuickStartCredit = true;
+		fInteractivityScore = min_c(fInteractivityScore + 10, 1000);
+	}
 
 	fLastInterruptTime = 0;
 
