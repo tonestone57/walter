@@ -696,12 +696,12 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	Scheduler::SetCPUEnabled(cpuID, enabled);
 
 	CPUEntry* cpu = &gCPUEntries[cpuID];
-	cpu->LockScheduler();
 	CoreEntry* core = cpu->Core();
 
 	ASSERT(core->CPUCount() >= 0);
 
 	if (enabled) {
+		cpu->LockScheduler();
 		{
 			CoreCPUHeapLocker heapLocker(core);
 			cpu->Start();
@@ -709,15 +709,18 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		}
 		gCPU[cpuID].disabled = false;
 		gCPUEnabled.SetBitAtomic(cpuID);
+		cpu->UnlockScheduler();
 	} else {
-		gCPU[cpuID].disabled = true;
-		gCPUEnabled.ClearBitAtomic(cpuID);
-
 		// If this is the last CPU in the core, we need to unassign threads from
 		// the core. We do this before acquiring any scheduler locks to avoid
 		// holding them for too long (thread_map is O(threads)).
 		if (core->CPUCount() == 1)
 			thread_map(CoreEntry::_UnassignThread, core);
+
+		cpu->LockScheduler();
+
+		gCPU[cpuID].disabled = true;
+		gCPUEnabled.ClearBitAtomic(cpuID);
 
 		ThreadEnqueuer enqueuer;
 
@@ -748,9 +751,9 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 			smp_send_ici(cpuID, SMP_MSG_RESCHEDULE, 0, 0, 0, NULL,
 				SMP_MSG_FLAG_ASYNC);
 		}
-	}
 
-	cpu->UnlockScheduler();
+		cpu->UnlockScheduler();
+	}
 }
 
 
@@ -804,6 +807,9 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	int32& nodeCount)
 {
 	cpuCount = smp_get_num_cpus();
+	coreCount = 0;
+	packageCount = 0;
+	nodeCount = 0;
 
 	delete[] sCPUToCore;
 	delete[] sCPUToCluster;
@@ -944,28 +950,30 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 		if (coresInL3 > 0) {
 			for (int32 i = 0; i < coresInL3; i++) {
-			int32 cpuID = cpuList[l3Start + i];
-			int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
+				int32 cpuID = cpuList[l3Start + i];
+				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 
-			if (currentPackageSize >= clusterSize) {
-				if (packageCount + 1 >= cpuCount) {
-					// Should not happen with valid topology
-					break;
+				if (currentPackageSize >= clusterSize) {
+					if (packageCount + 1 >= cpuCount) {
+						// Should not happen with valid topology
+						break;
+					}
+					packageCount++;
+					currentPackageSize = 0;
+					clusterIndex++;
 				}
-				packageCount++;
-				currentPackageSize = 0;
-				clusterIndex++;
-			}
 
-			// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
-			// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
-			if (coresInCurrentNode >= kMaxCoresPerNode) {
-				currentNodeID = nodeCount++;
-				coresInCurrentNode = 0;
-			}
+				// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
+				// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
+				if (coresInCurrentNode >= kMaxCoresPerNode) {
+					currentNodeID = nodeCount++;
+					coresInCurrentNode = 0;
+				}
 
-				sCPUToCluster[cpuID] = packageCount;
-				sPackageToNode[packageCount] = currentNodeID;
+				if (packageCount < cpuCount) {
+					sCPUToCluster[cpuID] = packageCount;
+					sPackageToNode[packageCount] = currentNodeID;
+				}
 				currentPackageSize++;
 				coresInCurrentNode++;
 			}

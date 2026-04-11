@@ -196,49 +196,64 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	bool rescheduleNeeded = false;
-
 	CPUSet mask = GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
-	if (targetCore != NULL && (useMask
-			&& GetCPUMask().And(targetCore->CPUMask()).IsEmpty())) {
-		targetCore = NULL;
-	}
-	if (targetCPU != NULL && (useMask && !mask.GetBit(targetCPU->ID())))
-		targetCPU = NULL;
+	for (int32 retry = 0; retry < 5; retry++) {
+		bool rescheduleNeeded = false;
 
-	if (targetCore == NULL && targetCPU != NULL)
-		targetCore = targetCPU->Core();
-	else if (targetCore != NULL && targetCPU == NULL) {
-		targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
-		if (targetCPU == NULL)
+		if (targetCore != NULL && (useMask
+				&& GetCPUMask().And(targetCore->CPUMask()).IsEmpty())) {
 			targetCore = NULL;
-	}
-
-	if (targetCore == NULL && targetCPU == NULL) {
-		targetCore = _ChooseCore();
-		ASSERT(!useMask || mask.Matches(targetCore->CPUMask()));
-		targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
-		if (targetCPU == NULL) {
-			// This can happen if the core selection was based on a stale
-			// CPUMask. Retry with a fresh selection.
-			targetCore = NULL;
-			return ChooseCoreAndCPU(targetCore, targetCPU);
 		}
+		if (targetCPU != NULL && (useMask && !mask.GetBit(targetCPU->ID())))
+			targetCPU = NULL;
+
+		if (targetCore == NULL && targetCPU != NULL)
+			targetCore = targetCPU->Core();
+		else if (targetCore != NULL && targetCPU == NULL) {
+			targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
+			if (targetCPU == NULL)
+				targetCore = NULL;
+		}
+
+		if (targetCore == NULL && targetCPU == NULL) {
+			targetCore = _ChooseCore();
+			ASSERT(!useMask || mask.Matches(targetCore->CPUMask()));
+			targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
+			if (targetCPU == NULL) {
+				// This can happen if the core selection was based on a stale
+				// CPUMask. Retry with a fresh selection.
+				targetCore = NULL;
+				continue;
+			}
+		}
+
+		if (targetCPU == NULL) {
+			targetCore = NULL;
+			continue;
+		}
+
+		ASSERT(targetCore != NULL);
+		ASSERT(targetCPU != NULL);
+		ASSERT(targetCPU->Core() == targetCore);
+
+		// First touch: assign home package if not yet assigned
+		if (fHomePackage == -1)
+			fHomePackage = targetCore->Package()->ID();
+
+		if (fCore != targetCore)
+			MigrateTo(targetCore);
+		return rescheduleNeeded;
 	}
 
-	ASSERT(targetCore != NULL);
-	ASSERT(targetCPU != NULL);
-	ASSERT(targetCPU->Core() == targetCore);
-
-	// First touch: assign home package if not yet assigned
-	if (fHomePackage == -1)
-		fHomePackage = targetCore->Package()->ID();
+	// Final fallback: current CPU
+	targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
+	targetCore = targetCPU->Core();
 
 	if (fCore != targetCore)
 		MigrateTo(targetCore);
-	return rescheduleNeeded;
+	return false;
 }
 
 
