@@ -1497,7 +1497,7 @@ _user_get_scheduler_mode()
 }
 
 void
-Scheduler::scheduler_on_team_foreground_changed(Team* team)
+scheduler_on_team_foreground_changed(Team* team)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -1518,12 +1518,12 @@ Scheduler::scheduler_on_team_foreground_changed(Team* team)
 			// application of the urgency bonus.
 			// Dequeue must happen before updating the flag that determines queue position.
 			bool dequeued = threadData->Dequeue();
-			threadData->fIsForeground = team->fIsForeground;
+			threadData->SetForeground(team->fIsForeground);
 			threadData->ResetPriorityBoost();
 			if (dequeued)
 				enqueue(thread, false, NULL);
 		} else {
-			threadData->fIsForeground = team->fIsForeground;
+			threadData->SetForeground(team->fIsForeground);
 			if (thread->state == B_THREAD_RUNNING) {
 				// For running threads, just update their internal state.
 				// The next reschedule will handle the change.
@@ -1531,10 +1531,4 @@ Scheduler::scheduler_on_team_foreground_changed(Team* team)
 			}
 		}
 	}
-}
-
-extern "C" void
-scheduler_on_team_foreground_changed(Team* team)
-{
-	Scheduler::scheduler_on_team_foreground_changed(team);
 }

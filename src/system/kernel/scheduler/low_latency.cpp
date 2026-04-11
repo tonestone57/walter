@@ -59,7 +59,7 @@ choose_core(const ThreadData* threadData)
 	bool useMask = !mask.IsEmpty();
 
 	// Thread Coloring: High-priority threads prefer P-cores
-	bool isForeground = threadData->fIsForeground;
+	bool isForeground = threadData->IsForeground();
 	bool preferP = threadData->GetPriority() > B_DISPLAY_PRIORITY || isForeground;
 	bool preferE = threadData->GetPriority() < B_NORMAL_PRIORITY && !isForeground;
 

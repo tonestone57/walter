@@ -47,11 +47,11 @@ struct ThreadDataVRuntimeCompare {
 			return false;
 
 		bigtime_t aRuntime = a->GetVirtualRuntime();
-		if (a->fIsForeground)
+		if (a->IsForeground())
 			aRuntime -= kForegroundVRuntimeOffset;
 
 		bigtime_t bRuntime = b->GetVirtualRuntime();
-		if (b->fIsForeground)
+		if (b->IsForeground())
 			bRuntime -= kForegroundVRuntimeOffset;
 
 		return aRuntime < bRuntime;
@@ -146,7 +146,6 @@ extern int64 gDeadlineBucketSize;
 
 
 void init_debug_commands();
-void scheduler_on_team_foreground_changed(Team* team);
 void scheduler_update_interaction_state();
 
 
@@ -223,8 +222,6 @@ public:
 		}
 		return true;
 	}
-
-	static void scheduler_on_team_foreground_changed(Team* team);
 
 private:
 	static scheduler_mode sCurrentModeID;

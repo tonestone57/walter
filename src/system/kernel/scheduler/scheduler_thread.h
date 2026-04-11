@@ -52,7 +52,7 @@ public:
 	SCHEDULER_INLINE	void		StartCPUTime();
 	SCHEDULER_INLINE	void		StopCPUTime();
 
-	SCHEDULER_INLINE	void		ResetPriorityBoost();
+			void		ResetPriorityBoost();
 
 			bool		ChooseCoreAndCPU(CoreEntry*& targetCore,
 							CPUEntry*& targetCPU);
@@ -90,6 +90,12 @@ public:
 	}
 
 	SCHEDULER_INLINE	int32		GetLoad() const	{ return fNeededLoad; }
+
+	SCHEDULER_INLINE	bool		IsForeground() const	{ return fIsForeground; }
+	SCHEDULER_INLINE	void		SetForeground(bool foreground)
+	{
+		fIsForeground = foreground;
+	}
 
 	SCHEDULER_INLINE	CoreEntry*	Core() const	{ return fCore; }
 			void		UnassignCore(bool running = false);
@@ -269,13 +275,6 @@ ThreadData::StopCPUTime()
 }
 
 
-inline void
-ThreadData::ResetPriorityBoost()
-{
-	SCHEDULER_ENTER_FUNCTION();
-
-	_ComputeEffectivePriority(system_time());
-}
 
 
 inline void

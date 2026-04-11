@@ -528,3 +528,11 @@ ThreadProcessing::~ThreadProcessing()
 {
 }
 
+
+void
+ThreadData::ResetPriorityBoost()
+{
+	SCHEDULER_ENTER_FUNCTION();
+
+	_ComputeEffectivePriority(system_time());
+}
