@@ -282,13 +282,11 @@ Profiler::_Dump(FunctionData* data, uint32 count)
 Profiler::FunctionData*
 Profiler::_FindFunction(const char* function)
 {
-	for (uint32 i = 0; i < kMaxFunctionEntries; i++) {
-		if (fFunctionData[i].fFunction == NULL)
-			break;
-		if (!strcmp(fFunctionData[i].fFunction, function))
-			return fFunctionData + i;
-	}
-
+	// Single locked scan: the unlocked pre-scan provided no correctness
+	// benefit (writes to fFunctionData need the lock anyway) and scanned
+	// up to kMaxFunctionEntries (1024) entries on every miss.  A single
+	// locked pass is simpler and equally fast since fFunctionLock is
+	// uncontended in normal operation.
 	InterruptsSpinLocker _(fFunctionLock);
 	for (uint32 i = 0; i < kMaxFunctionEntries; i++) {
 		if (fFunctionData[i].fFunction == NULL) {

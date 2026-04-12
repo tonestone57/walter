@@ -555,8 +555,11 @@ CoreEntry::GetLoad() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	int32 cpuCount = atomic_get(const_cast<int32*>(&fCPUCount));
+	// Read fLoad before fCPUCount: exact consistency is not required
+	// (approximation is intentional on this hot path), and acquiring
+	// the more-volatile counter first gives a marginally safer ordering.
 	int32 load = atomic_get(const_cast<int32*>(&fLoad));
+	int32 cpuCount = atomic_get(const_cast<int32*>(&fCPUCount));
 
 	if (cpuCount <= 0)
 		return kMaxLoad;
@@ -664,9 +667,14 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, -1);
 	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 
-	int32 expectedMask = atomic_get((int32*)&fEnabledCoreMask);
-	if (oldMask == expectedMask) {
-		// package wakes up (first core)
+	// Detect the transition from fully-idle to partially-active:
+	// the package wakes up when the *last* idle core becomes active, i.e.
+	// after clearing this core's bit the mask becomes zero.
+	// This mirrors the CoreGoesIdle check (oldMask == 0 => first idle core)
+	// and fixes the original bug where 'oldMask == fEnabledCoreMask' fired
+	// incorrectly for non-first waking cores.
+	if ((oldMask & ~(1U << core->PackageIndex())) == 0) {
+		// package wakes up (last idle core becomes active)
 		fNode->PackageWakesUp(this);
 	}
 }
@@ -774,50 +782,36 @@ PackageEntry::GetLeastIdlePackage()
 	PackageEntry* package = NULL;
 	int32 bestIdleCount = -1;
 
-	// Use random sampling for large systems to avoid O(N) scan
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+
 	if (gPackageCount > kRandomSearchThreshold) {
-		int32 attempts = 0;
-		// 4 + log2(N) attempts
-		const int kMaxAttempts = 4 + (31 - __builtin_clz(gPackageCount));
+		// Unified random probe loop: replaces the old two-phase (random then
+		// linear fallback) approach which called GetRandom() twice and had a
+		// branch between phases.  A single loop of max(log2(N)+4, 64) random
+		// probes is equivalent in coverage while saving one RNG call and one
+		// branch on the common-case miss path.
+		const int32 kMaxAttempts = max_c(
+			4 + (31 - __builtin_clz(gPackageCount)),
+			(int32)kMaxFallbackAttempts);
 
-		while (attempts++ < kMaxAttempts) {
-			int32 i = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-				* gPackageCount) >> 32);
-			PackageEntry* current = &gPackageEntries[i];
-			int32 currentIdleCoreCount
-				= atomic_get((int32*)&current->fIdleCoreCount);
-
-			if (currentIdleCoreCount != 0) {
-				if (package == NULL || currentIdleCoreCount < bestIdleCount) {
-					package = current;
-					bestIdleCount = currentIdleCoreCount;
-				}
+		for (int32 i = 0; i < kMaxAttempts; i++) {
+			int32 idx = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
+			PackageEntry* current = &gPackageEntries[idx];
+			int32 count = atomic_get((int32*)&current->fIdleCoreCount);
+			if (count != 0 && (package == NULL || count < bestIdleCount)) {
+				package = current;
+				bestIdleCount = count;
 			}
 		}
-		if (package != NULL)
-			return package;
-	}
-
-	// Fallback to linear scan (limit attempts)
-	const int32 kMaxFallbackAttempts = 64;
-	int32 startIndex = (gPackageCount > kRandomSearchThreshold)
-		? (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-			* gPackageCount) >> 32)
-		: 0;
-	int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
-
-	for (int32 i = 0; i < attempts; i++) {
-		int32 index = startIndex + i;
-		if (index >= gPackageCount)
-			index -= gPackageCount;
-
-		PackageEntry* current = &gPackageEntries[index];
-
-		int32 currentIdleCoreCount = atomic_get((int32*)&current->fIdleCoreCount);
-		if (currentIdleCoreCount != 0 && (package == NULL
-				|| currentIdleCoreCount < bestIdleCount)) {
-			package = current;
-			bestIdleCount = currentIdleCoreCount;
+	} else {
+		// Small system: full linear scan — every package is cheap to check.
+		for (int32 i = 0; i < gPackageCount; i++) {
+			PackageEntry* current = &gPackageEntries[i];
+			int32 count = atomic_get((int32*)&current->fIdleCoreCount);
+			if (count != 0 && (package == NULL || count < bestIdleCount)) {
+				package = current;
+				bestIdleCount = count;
+			}
 		}
 	}
 

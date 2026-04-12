@@ -334,7 +334,12 @@ ThreadData::ComputeQuantum() const
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
 	quantum = quantum * (1500 - fInteractivityScore) / 1000;
 
-	return std::max(quantum, kMinGranularity);
+	// Clamp: when displayReady=true floorQuantum==maxAllowed==kDisplayQuantum;
+	// the interactivity multiplier can reduce quantum below that floor,
+	// defeating the display-responsiveness guarantee. Always return at least
+	// floorQuantum in the display-ready path.
+	const bigtime_t kResultFloor = displayReady ? floorQuantum : kMinGranularity;
+	return std::max(quantum, kResultFloor);
 }
 
 
@@ -475,22 +480,24 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		bigtime_t diff = fVirtualDeadline - now;
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
-		bigtime_t urgencyBoost = (fInteractivityScore
-			* atomic_get64(&Scheduler::gDeadlineBucketSize)) / 1000;
+		// Cache bucket size: avoids 3-4 atomic reads per call on this hot path.
+		// The value is effectively constant within a scheduling decision.
+		const bigtime_t bucketSize = atomic_get64(&Scheduler::gDeadlineBucketSize);
+
+		bigtime_t urgencyBoost = (fInteractivityScore * bucketSize) / 1000;
 		diff -= urgencyBoost;
 
 		// Urgency Bonus: Grant foreground threads a "head start" in priority.
 		if (fIsForeground) {
-			diff -= atomic_get64(&Scheduler::gDeadlineBucketSize);
+			diff -= bucketSize;
 
 			// Display-Awareness: Additional boost for interactive foreground threads
 			if (fInteractivityScore > 750)
-				diff -= atomic_get64(&Scheduler::gDeadlineBucketSize) / 2;
+				diff -= bucketSize / 2;
 		}
 
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
-		bigtime_t urgency = kMaxDynamicPriority
-			- diff / atomic_get64(&Scheduler::gDeadlineBucketSize);
+		bigtime_t urgency = kMaxDynamicPriority - diff / bucketSize;
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
 

@@ -741,8 +741,10 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	if (fCPUHeap.GetKey(cpu) == B_IDLE_PRIORITY)
-		atomic_add(&fIdleCPUCount, -1);
+	// Decrement fIdleCPUCount unconditionally: AddCPU always increments it
+	// (every CPU starts idle), so RemoveCPU must balance it regardless of
+	// whether the CPU is currently idle or running at removal time.
+	atomic_add(&fIdleCPUCount, -1);
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	if (atomic_add(&fCPUCount, -1) == 1) {
 		// core has been disabled
@@ -1002,20 +1004,14 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 
 			int32 load = atomic_get(&fCoreLoads[i]);
 
-			if (firstIndex == -1) {
-				// First choice
-				firstIndex = i;
-				minEntry = candidate;
+			// Track the best core across all attempts (Power-of-N-Choices).
+			if (minEntry == NULL || load < minLoad) {
 				minLoad = load;
-			} else if (i != firstIndex) {
-				// Second choice: compare and return the better one
-				if (load < minLoad)
-					return candidate;
-				return minEntry;
+				minEntry = candidate;
 			}
 		}
 
-		// Fallback to linear scan if sampling failed to find 2 valid cores quickly
+		// Use the best sampled core if any were found
 		if (minEntry != NULL)
 			return minEntry;
 	}

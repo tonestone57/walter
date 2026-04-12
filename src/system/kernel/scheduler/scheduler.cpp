@@ -1048,7 +1048,11 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 				coresInCurrentNode++;
 			}
 
-			if (packageCount + 1 >= cpuCount)
+			// Use strict > (not >=): for a single-CPU system (cpuCount==1)
+			// the >= form fires when packageCount==0 (0+1>=1==true), preventing
+			// the final packageCount++ and leaving packageCount==0, which causes
+			// a zero-size gPackageEntries allocation.
+			if (packageCount + 1 > cpuCount)
 				break;
 			packageCount++; // Finish last package in L3
 		}
