@@ -633,8 +633,7 @@ CoreEntry::CoreEntry()
 	fThreadCount(0),
 	fActiveTime(0),
 	fLoad(0),
-	fCurrentLoad(0),
-	fLoadMeasurementEpoch(0),
+	fCombinedLoad(0),
 	fLastLoadUpdate(0),
 	fScoreFactor(1 << 16)
 {
@@ -726,7 +725,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	if (atomic_add(&fCPUCount, 1) == 0) {
 		// core has been reenabled
 		fLoad = 0;
-		fCurrentLoad = 0;
+		atomic_set64(&fCombinedLoad, 0);
 
 		atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
 		atomic_or((int32*)&fPackage->fEnabledCoreMask, 1U << fPackageIndex);
@@ -847,25 +846,27 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	} else
 		return;
 
-	// Snapshot fCurrentLoad BEFORE bumping the epoch.
-	//
-	// If the epoch is incremented first, a concurrent AddLoad whose stored
-	// epoch now mismatches will add to fLoad *and* fCurrentLoad. Our
-	// subsequent atomic_set(&fLoad, currentLoad) then overwrites fLoad,
-	// silently discarding that contribution. By snapshotting currentLoad
-	// first, any AddLoad that runs after the epoch bump writes directly to
-	// fLoad and is not clobbered (it executes after our atomic_set).
-	//
-	// TODO: There is a residual double-count race: an AddLoad that (a) runs
-	// before this snapshot but (b) has a stored epoch that later mismatches
-	// (because it was recorded before a *previous* epoch bump) will add its
-	// delta to both fCurrentLoad (captured here) and fLoad (via the mismatch
-	// path in AddLoad).  The correct fix requires replacing the snapshot-and-
-	// set pattern with a CAS-based delta accumulation, or moving to a
-	// generation-counter design.  This is tracked as a known issue.
-	int32 currentLoad = atomic_get(&fCurrentLoad);
-	atomic_add((int32*)&fLoadMeasurementEpoch, 1);
-	atomic_set(&fLoad, currentLoad);
+	// Combined Epoch and Load Update:
+	// We use a 64-bit atomic to store both the current load (upper 32 bits)
+	// and the measurement epoch (lower 32 bits). This allows us to atomically
+	// increment the epoch and reset the current load, ensuring that concurrent
+	// AddLoad calls either contribute to the old epoch (and are manually
+	// added to fLoad) or the new epoch (and are captured in the next snapshot),
+	// with no double-counting or loss.
+	int64 oldCombined = atomic_get64(&fCombinedLoad);
+	while (true) {
+		int32 currentLoad = (int32)(oldCombined >> 32);
+		uint32 nextEpoch = (uint32)oldCombined + 1;
+		int64 newCombined = (int64)nextEpoch; // Load reset to 0
+
+		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
+			oldCombined);
+		if (actual == oldCombined) {
+			atomic_set(&fLoad, currentLoad);
+			break;
+		}
+		oldCombined = actual;
+	}
 
 	if (cpuCount > 0) {
 		int32 load = currentLoad / cpuCount;
@@ -1148,8 +1149,8 @@ DebugDumper::DumpCoreEntryLoad(CoreEntry* entry)
 
 	kprintf("%4" B_PRId32 " %11" B_PRId32 "%% %11" B_PRId32 "%% %11" B_PRId32
 		"%% %7" B_PRId32 " %5" B_PRIu32 "\n", entry->ID(), entry->fLoad / 10,
-		entry->fCurrentLoad / 10, threadsData.fLoad, entry->ThreadCount(),
-		entry->fLoadMeasurementEpoch);
+		entry->CurrentLoad() / 10, threadsData.fLoad, entry->ThreadCount(),
+		entry->LoadMeasurementEpoch());
 }
 
 

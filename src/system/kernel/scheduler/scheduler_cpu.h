@@ -234,7 +234,9 @@ public:
 	inline				int32			Capacity() const { return fCapacity; }
 						bigtime_t		GetMinVirtualRuntime() const;
 	inline				uint32			LoadMeasurementEpoch() const
-											{ return atomic_get((int32*)&fLoadMeasurementEpoch); }
+											{ return (uint32)atomic_get64((int64*)&fCombinedLoad); }
+	inline				int32			CurrentLoad() const
+											{ return (int32)(atomic_get64((int64*)&fCombinedLoad) >> 32); }
 
 	inline				void			AddLoad(int32 load, uint32 epoch,
 											bool updateLoad);
@@ -275,8 +277,10 @@ private:
 						bigtime_t		fActiveTime;
 
 						int32			fLoad;
-						int32			fCurrentLoad;
-						uint32			fLoadMeasurementEpoch;
+
+						// bits 32-63: Current Load, bits 0-31: Epoch
+						int64			fCombinedLoad;
+
 						bigtime_t		fLastLoadUpdate;
 
 						uint32			fScoreFactor;
@@ -595,8 +599,8 @@ CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad)
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	atomic_add(&fCurrentLoad, load);
-	if (atomic_get((int32*)&fLoadMeasurementEpoch) != epoch)
+	int64 oldCombined = atomic_add64(&fCombinedLoad, (int64)load << 32);
+	if ((uint32)oldCombined != epoch)
 		atomic_add(&fLoad, load);
 
 	if (updateLoad)
@@ -612,13 +616,13 @@ CoreEntry::RemoveLoad(int32 load, bool force)
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	atomic_add(&fCurrentLoad, -load);
+	int64 oldCombined = atomic_add64(&fCombinedLoad, (int64)(-load) << 32);
 	if (force) {
 		atomic_add(&fLoad, -load);
 
 		_UpdateLoad(true);
 	}
-	return atomic_get((int32*)&fLoadMeasurementEpoch);
+	return (uint32)oldCombined;
 }
 
 
@@ -631,7 +635,7 @@ CoreEntry::ChangeLoad(int32 delta)
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 
 	if (delta != 0) {
-		atomic_add(&fCurrentLoad, delta);
+		atomic_add64(&fCombinedLoad, (int64)delta << 32);
 		atomic_add(&fLoad, delta);
 	}
 
