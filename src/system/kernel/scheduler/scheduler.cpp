@@ -67,11 +67,13 @@ static int64 sLastInteractionTime;
 
 
 static void
-update_quantum_lengths_dpc(void* /* arg */)
+update_quantum_lengths_dpc(void* arg)
 {
+	int64 targetResolution = (int64)(addr_t)arg;
+
 	InterruptsBigSchedulerLocker locker;
-	if (atomic_get64(&gDeadlineBucketSize) != 1000) {
-		atomic_set64(&gDeadlineBucketSize, 1000);
+	if (atomic_get64(&gDeadlineBucketSize) != targetResolution) {
+		atomic_set64(&gDeadlineBucketSize, targetResolution);
 		ThreadData::ComputeQuantumLengths();
 	}
 }
@@ -80,14 +82,13 @@ update_quantum_lengths_dpc(void* /* arg */)
 static status_t
 interaction_timer_hook(struct timer* timer)
 {
-	// We want to avoid holding a big lock in a timer interrupt if possible,
-	// but ComputeQuantumLengths needs to be atomic across all entries.
-	// Since it's only called when resolution actually changes, it's rare.
-	InterruptsBigSchedulerLocker locker;
-	if (atomic_get64(&gDeadlineBucketSize) != 5000) {
-		atomic_set64(&gDeadlineBucketSize, 5000);
-		ThreadData::ComputeQuantumLengths();
-	}
+	// Offload resolution scaling to a DPC to avoid deadlock risk.
+	// Holding InterruptsBigSchedulerLocker (which acquires multiple write locks)
+	// in an interrupt context is unsafe if any CPU already holds a scheduler
+	// read lock.
+	DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
+		&update_quantum_lengths_dpc, (void*)(addr_t)5000);
+
 	return B_HANDLED_INTERRUPT;
 }
 
@@ -113,7 +114,7 @@ scheduler_update_interaction_state()
 	// scheduler_update_interaction_state is called from Enqueue, which HOLDS
 	// scheduler locks.
 	DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
-		&update_quantum_lengths_dpc, NULL);
+		&update_quantum_lengths_dpc, (void*)(addr_t)1000);
 
 	cancel_timer(&sInteractionTimer);
 	add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
