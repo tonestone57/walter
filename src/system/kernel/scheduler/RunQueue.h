@@ -236,30 +236,30 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 {
 	ASSERT(fList != NULL);
 
+	// Nothing exists below priority 0.
+	if (fPriority == 0) {
+		fNext = NULL;
+		return;
+	}
+
 	const uint32* bitmap = fList->GetBitmap();
 
-	int i = (fPriority > 0 ? fPriority - 1 : 0) / 32;
-	uint32 val = bitmap[i];
+	// Highest priority we may consider is (fPriority - 1), which lives in
+	// word 'i' at bit 'topBit'.
+	int i = (int)(fPriority - 1) / 32;
+	int topBit = (int)(fPriority - 1) % 32;  // 0..31
 
-	// Mask out higher priorities (bits >= current bit index) in current word
-	// because we are looking for the *next* priority lower than fPriority.
-	// fPriority is the one we just finished.
-	// We want to check fPriority - 1 down to 0.
-
-	int currentBit = fPriority > 0 ? (fPriority - 1) % 32 : 0;
-
-	if (fPriority > 0 && currentBit != 31) {
-		// Mask bits at currentBit+1 and above, keep bits 0..currentBit
-		val &= (1UL << (currentBit + 1)) - 1;
-	} else if (fPriority == 0) {
-		// If we finished bit 0, this word is done.
-		val = 0;
-	}
+	// Keep only bits 0..topBit in the starting word.  We use a 64-bit
+	// literal (2ULL << topBit) instead of (1UL << (topBit + 1)) to avoid
+	// undefined behaviour when topBit == 31: shifting a 32-bit value by
+	// 32 is UB on 32-bit targets even though the old guard (currentBit != 31)
+	// prevented it from being evaluated, because the guard itself was fragile.
+	uint32 val = bitmap[i] & (uint32)((2ULL << topBit) - 1);
 
 	while (true) {
 		if (val != 0) {
 			int bit = fls(val) - 1;
-			fPriority = i * 32 + bit;
+			fPriority = (unsigned int)(i * 32 + bit);
 			fNext = fList->GetHead(fPriority);
 			return;
 		}

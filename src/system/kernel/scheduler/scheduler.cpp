@@ -188,10 +188,13 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 				int count = 0;
 
 				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
+					// Capture successor BEFORE _UpdatePriorityBoost(): that call
+					// may Remove(thread) + PushBack(thread, newPriority), clearing
+					// thread->fNext.  'next' remains valid because:
+					//  - We hold CPURunQueueLocker (no concurrent mutation).
+					//  - Only thread's own link fields change; next is unaffected.
 					ThreadData* next = thread->GetRunQueueLink()->fNext;
 					thread->_UpdatePriorityBoost();
-					// If thread moved, it was removed from this queue.
-					// 'next' is correct either way.
 					thread = next;
 				}
 
@@ -227,6 +230,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 				int count = 0;
 
 				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
+					// See CPU RunQueue loop above for why 'next' is captured first.
 					ThreadData* next = thread->GetRunQueueLink()->fNext;
 					thread->_UpdatePriorityBoost();
 					thread = next;

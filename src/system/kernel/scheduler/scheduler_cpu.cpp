@@ -465,6 +465,11 @@ CPUEntry::_TryStealWork()
 		return stolen;
 
 	// Phase 3: The Global Hail Mary (Random)
+	// stolen is guaranteed NULL by the early return above, but reset it
+	// explicitly so the phase boundary is self-documenting and safe against
+	// future refactoring that might restructure or inline the guard.
+	stolen = NULL;
+
 	// Target: Any core in the system (4096 cores).
 	// Method: Logarithmic Formula
 	// Why: This is the last resort. If the local node is empty, you are willing to pay

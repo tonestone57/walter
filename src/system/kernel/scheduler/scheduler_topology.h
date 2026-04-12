@@ -83,16 +83,20 @@ search_global_random(Action action)
 		int32 word = i / 64;
 		int32 bit = i % 64;
 
-		// Only check collision if within our stack bitmask range
+		// Deduplication: skip packages already probed this call (within the
+		// stack bitmask range).  For indices beyond kStackBitmaskSize we
+		// cannot deduplicate cheaply, but we still count the probe towards
+		// the budget so the loop terminates in at most kMaxAttempts steps
+		// regardless of gPackageCount.  Previously, indices >= kStackBitmaskSize
+		// never incremented samplesTaken, causing the loop to always run the
+		// full kMaxAttempts (2x samplesToTake) on systems with > 1024 packages.
 		if (i < kStackBitmaskSize) {
 			if ((visitedBits[word] & (1ULL << bit)) != 0)
 				continue;
 			visitedBits[word] |= (1ULL << bit);
-			samplesTaken++;
 		}
-		// Note: if i >= kStackBitmaskSize, samplesTaken is NOT incremented
-		// so un-deduplicated samples don't count towards the budget.
-		// The loop is strictly bounded by attempts < kMaxAttempts, preventing runaway.
+		// Always count towards the budget (with or without deduplication).
+		samplesTaken++;
 
 		if (action(&gPackageEntries[i]))
 			break;
