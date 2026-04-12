@@ -872,7 +872,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		int32 load = currentLoad / cpuCount;
 		load = ((int64)load * fScoreFactor) >> 16;
 		atomic_set(&fPackage->fCoreLoads[fPackageIndex],
-			std::min(load, (int32)kMaxLoad));
+			min_c(load, (int32)kMaxLoad));
 	}
 }
 

@@ -257,6 +257,13 @@ private:
 	static				void			_UnassignThread(Thread* thread,
 											void* core);
 
+						bigtime_t		fActiveTime;
+
+						// bits 32-63: Current Load, bits 0-31: Epoch
+						int64			fCombinedLoad;
+
+						bigtime_t		fLastLoadUpdate;
+
 						int32			fCoreID;
 						PackageEntry*	fPackage;
 						int32			fPackageIndex;
@@ -274,14 +281,7 @@ private:
 						int32			fThreadCount;
 						ThreadRunQueue	fRunQueue;
 
-						bigtime_t		fActiveTime;
-
 						int32			fLoad;
-
-						// bits 32-63: Current Load, bits 0-31: Epoch
-						int64			fCombinedLoad;
-
-						bigtime_t		fLastLoadUpdate;
 
 						uint32			fScoreFactor;
 

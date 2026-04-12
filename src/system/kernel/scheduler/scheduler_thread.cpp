@@ -282,12 +282,12 @@ ThreadData::ComputeQuantum() const
 		return fBaseQuantum;
 
 	const bigtime_t kMinGranularity = 1200;
-	const bigtime_t kHighLoadQuantum = std::max(Scheduler::BaseQuantum(),
+	const bigtime_t kHighLoadQuantum = max_c(Scheduler::BaseQuantum(),
 		kMinGranularity);
 	const bigtime_t kMediumQuantum = Scheduler::BaseQuantum()
 		* Scheduler::QuantumMultiplier(0);
 	const bigtime_t kMaxQuantum = Scheduler::MaximumLatency();
-	const bigtime_t kDisplayQuantum = std::max(Scheduler::MinimalQuantum(),
+	const bigtime_t kDisplayQuantum = max_c(Scheduler::MinimalQuantum(),
 		kMinGranularity);
 
 	// Approximation is intentional to avoid locking overhead on the fast path
@@ -351,7 +351,7 @@ ThreadData::ComputeQuantum() const
 	// defeating the display-responsiveness guarantee. Always return at least
 	// floorQuantum in the display-ready path.
 	const bigtime_t kResultFloor = displayReady ? floorQuantum : kMinGranularity;
-	return std::max(quantum, kResultFloor);
+	return max_c(quantum, kResultFloor);
 }
 
 
