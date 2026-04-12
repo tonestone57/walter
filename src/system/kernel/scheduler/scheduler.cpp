@@ -1286,7 +1286,7 @@ init()
 							break;
 						}
 					}
-					if (!found)
+					if (!found && uniqueCapacityCount < SMP_MAX_CPUS)
 						uniqueCapacities[uniqueCapacityCount++] = capacity;
 				}
 
@@ -1343,26 +1343,29 @@ init()
 	// boost frequency for all entries). The heuristic assumes the last 8 or
 	// 50% of cores (whichever is smaller) are Efficiency cores.
 	//
-	// IMPORTANT: Only apply this when the frequency API actually confirmed
-	// heterogeneity (detectedHeterogeneous == true) but left some cores
-	// unclassified (cpu_frequency() returned 0 for them). If the API
-	// reported identical frequencies for every core, this is a genuinely
-	// homogeneous system and the heuristic must not fire — it would
-	// incorrectly split a 16-core Xeon or 64-core EPYC into fake P/E
+	// IMPORTANT: Only apply this when the frequency API either returned no
+	// data at all (maxFreq == 0) OR confirmed heterogeneity
+	// (detectedHeterogeneous == true) but left some cores unclassified.
+	// If the API reported identical frequencies for every core, this is a
+	// genuinely homogeneous system and the heuristic must not fire — it
+	// would incorrectly split a 16-core Xeon or 64-core EPYC into fake P/E
 	// clusters, causing artificial load imbalance and misguided thread
 	// coloring with no performance benefit.
-	if (detectedHeterogeneous && coreCount > 8) {
-		bool allUnknown = true;
+	if ((maxFreq == 0 || detectedHeterogeneous) && coreCount > 8) {
+		bool anyUnknown = false;
 		for (int32 i = 0; i < coreCount; i++) {
-			if (gCoreEntries[i].Type() != CORE_TYPE_UNKNOWN) {
-				allUnknown = false;
+			if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN) {
+				anyUnknown = true;
 				break;
 			}
 		}
 
-		if (allUnknown) {
+		if (anyUnknown) {
 			int32 eCoreCount = coreCount > 16 ? 8 : coreCount / 2;
 			for (int32 i = 0; i < coreCount; i++) {
+				if (gCoreEntries[i].Type() != CORE_TYPE_UNKNOWN)
+					continue;
+
 				if (i >= coreCount - eCoreCount)
 					gCoreEntries[i].SetType(CORE_TYPE_EFFICIENCY);
 				else

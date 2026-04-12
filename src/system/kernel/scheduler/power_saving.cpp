@@ -621,6 +621,8 @@ rebalance(const ThreadData* threadData)
 		}
 		ASSERT(other != NULL);
 
+		int32 threshold = kLoadDifference >> 1;
+
 		// Type-affinity guard: resist cross-type migration on heterogeneous
 		// systems to preserve the placement made by choose_core. Without this,
 		// a high-priority thread on a P-core is immediately rebalanced to a
@@ -642,17 +644,13 @@ rebalance(const ThreadData* threadData)
 				// Require double the normal load difference before accepting a
 				// cross-type migration. A severely overloaded P-core can still
 				// shed threads; a mildly overloaded one cannot.
-				int32 adjustment = kLoadDifference;
-				int32 coreNewScore = coreScore - threadLoad;
-				int32 otherNewScore = other->GetScore() + threadLoad;
-				if (coreNewScore - otherNewScore < (kLoadDifference >> 1) + adjustment)
-					return core;
+				threshold += kLoadDifference;
 			}
 		}
 
 		int32 coreNewScore = coreScore - threadLoad;
 		int32 otherNewScore = other->GetScore() + threadLoad;
-		return coreNewScore - otherNewScore >= kLoadDifference >> 1 ? other : core;
+		return coreNewScore - otherNewScore >= threshold ? other : core;
 	}
 
 	if (coreScore >= kMediumLoad)
