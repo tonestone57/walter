@@ -42,8 +42,8 @@ _LoadavgUpdate(void *data, int iteration)
 	InterruptsSpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {
 		sAverageRunnable.ldavg[i]
-			= (sCExp[i] * sAverageRunnable.ldavg[i] + threadCount * (kFScale - sCExp[i]))
-			>> kFShift;
+			= (sCExp[i] * (uint64)sAverageRunnable.ldavg[i]
+				+ (uint64)threadCount * (kFScale - sCExp[i]) * kFScale) >> kFShift;
 	}
 }
 
@@ -52,7 +52,7 @@ status_t
 scheduler_loadavg_init()
 {
 	register_kernel_daemon(_LoadavgUpdate, NULL, 5000);
-		// run the daemon once five second
+		// run the daemon every five seconds
 
 	return B_OK;
 }
