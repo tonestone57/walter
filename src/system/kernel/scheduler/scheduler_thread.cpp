@@ -14,6 +14,18 @@ using namespace Scheduler;
 
 
 static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1];
+
+
+// ComputeQuantum load-scaling constants.  Placed at file scope so the
+// compiler evaluates them once at startup rather than re-deriving them on
+// every call to the scheduling hot path.  All three values are compile-time
+// constants; static storage enforces that.
+static const int32 kLoadScale = 1024;
+static const int32 kLoadScaleShift = 10;
+// kRangeReciprocal = kLoadScale / (kMaxLoad - kLowLoad) * kLoadScale
+// 1024 / 800 * 1024 = 1310.72 ~= 1311
+static const int32 kRangeReciprocal = (int32)(((int64)kLoadScale * kLoadScale
+	+ (kMaxLoad - kLowLoad) / 2) / (kMaxLoad - kLowLoad));
 static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1];
 
 
@@ -277,13 +289,6 @@ ThreadData::ComputeQuantum() const
 	const bigtime_t kMaxQuantum = Scheduler::MaximumLatency();
 	const bigtime_t kDisplayQuantum = std::max(Scheduler::MinimalQuantum(),
 		kMinGranularity);
-
-	const int32 kLoadScale = 1024;
-	const int32 kLoadScaleShift = 10;
-	// kRangeReciprocal = kLoadScale / (kMaxLoad - kLowLoad) * kLoadScale
-	// 1024 / 800 * 1024 = 1310.72 ~= 1311
-	const int32 kRangeReciprocal = (int32)(((int64)kLoadScale * kLoadScale
-		+ (kMaxLoad - kLowLoad) / 2) / (kMaxLoad - kLowLoad));
 
 	// Approximation is intentional to avoid locking overhead on the fast path
 	int32 load = fCore->GetLoad();

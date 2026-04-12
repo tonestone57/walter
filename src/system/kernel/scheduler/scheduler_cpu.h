@@ -741,9 +741,17 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	int32 cpuCount = atomic_get(&fCPUCount);
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
-	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
+
+	// Capture the old idle count atomically, then read fCPUCount afterwards.
+	// Reading fCPUCount before the atomic_add creates a window where a
+	// concurrent RemoveCPU can decrement fCPUCount between our read and our
+	// add, producing a stale comparison.  Reading it after narrows the window:
+	// if RemoveCPU has already decremented fCPUCount it will call
+	// RemoveIdleCore directly, so missing the CoreWakesUp transition here is
+	// safe.
+	int32 oldIdleCount = atomic_add(&fIdleCPUCount, -1);
+	if (oldIdleCount == atomic_get(&fCPUCount))
 		fPackage->CoreWakesUp(this);
 }
 

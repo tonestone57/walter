@@ -357,8 +357,9 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		unsigned int bestPriority = sGetLink(fBest)->fPriority;
 		if (priority > bestPriority)
 			fBest = element;
-		else if (priority == bestPriority && sCompare(element, fBest))
-			fBest = element;
+		else if (priority == bestPriority)
+			fBest = NULL;	// Invalidate: fVirtualRuntime is mutable so the
+							// cached winner may be stale. PeekBest will rescan.
 	} else {
 		fBest = element;
 	}
@@ -396,8 +397,9 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		unsigned int bestPriority = sGetLink(fBest)->fPriority;
 		if (priority > bestPriority)
 			fBest = element;
-		else if (priority == bestPriority && sCompare(element, fBest))
-			fBest = element;
+		else if (priority == bestPriority)
+			fBest = NULL;	// Invalidate: fVirtualRuntime is mutable so the
+							// cached winner may be stale. PeekBest will rescan.
 	} else {
 		fBest = element;
 	}

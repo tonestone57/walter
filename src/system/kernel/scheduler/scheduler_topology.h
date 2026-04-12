@@ -110,10 +110,15 @@ search_global_random(Action action)
 		// full kMaxAttempts (2x samplesToTake) on systems with > 1024 packages.
 		if (i < kStackBitmaskSize) {
 			if ((visitedBits[word] & (1ULL << bit)) != 0)
-				continue;
+				continue;	// Duplicate within bitmask range: do NOT count.
 			visitedBits[word] |= (1ULL << bit);
 		}
-		// Always count towards the budget (with or without deduplication).
+		// Count this probe towards the budget.  For i < kStackBitmaskSize,
+		// only non-duplicate packages reach this line (duplicates hit the
+		// continue above, so the "distinct probes" invariant is maintained).
+		// For i >= kStackBitmaskSize deduplication is skipped and every probe
+		// counts, bounding the loop to at most kMaxAttempts iterations on any
+		// system size.
 		samplesTaken++;
 
 		if (action(&gPackageEntries[i]))

@@ -131,12 +131,11 @@ choose_small_task_core()
 		}
 
 		if (eCore == NULL) {
-			const int32 kMaxFallback = kMaxFallbackAttempts;
 			int32 start = tryRandom
 				? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
 					% gPackageCount
 				: 0;
-			for (int32 i = 0; i < min_c(gPackageCount, kMaxFallback); i++) {
+			for (int32 i = 0; i < min_c(gPackageCount, kMaxFallbackAttempts); i++) {
 				int32 idx = start + i;
 				if (idx >= gPackageCount) idx -= gPackageCount;
 				CoreEntry* candidate
@@ -176,7 +175,7 @@ choose_small_task_core()
 	// Fallback to full scan if random sampling failed to find a candidate
 	// or if system is small.
 	if (core == NULL) {
-		const int32 kMaxFallbackAttempts = 64;
+		// Use the global kMaxFallbackAttempts constant from scheduler_common.h.
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 
@@ -371,7 +370,6 @@ choose_core(const ThreadData* threadData)
 		}
 
 		if (core == NULL) {
-			const int32 kMaxFallbackAttempts = 64;
 			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
@@ -479,7 +477,6 @@ choose_core(const ThreadData* threadData)
 
 		// Fallback to full scan
 		if (bestCore == NULL && !useMask) {
-			const int32 kMaxFallbackAttempts = 64;
 			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
@@ -600,7 +597,6 @@ rebalance(const ThreadData* threadData)
 
 		if (other == NULL && !useMask) {
 			// Phase 4: Limited Global Scan (Fallback)
-			const int32 kMaxFallbackAttempts = 64;
 			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
@@ -753,7 +749,6 @@ rebalance_irqs(bool idle)
 
 		if (other == NULL) {
 			// Limit fallback attempts
-			const int32 kMaxFallbackAttempts = 64;
 			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 

@@ -772,7 +772,13 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 			threadPostProcessing(threadData);
 		}
 
-		atomic_set(&fThreadCount, 0);
+		// Do NOT zero fThreadCount here.  Each Remove() call above already
+		// decrements it, and once fCPUCount reaches zero enqueue() refuses to
+		// add new threads to this core (CPUCount() == 0 guard), so the count
+		// is already zero after the drain loop.  Forcing it to zero here would
+		// clobber any threads that race in between Remove() and this line,
+		// even though in practice that cannot happen today, removing this line
+		// eliminates the latent hazard.
 	}
 
 	fCPUHeap.ModifyKey(cpu, -1);
@@ -849,6 +855,14 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	// silently discarding that contribution. By snapshotting currentLoad
 	// first, any AddLoad that runs after the epoch bump writes directly to
 	// fLoad and is not clobbered (it executes after our atomic_set).
+	//
+	// TODO: There is a residual double-count race: an AddLoad that (a) runs
+	// before this snapshot but (b) has a stored epoch that later mismatches
+	// (because it was recorded before a *previous* epoch bump) will add its
+	// delta to both fCurrentLoad (captured here) and fLoad (via the mismatch
+	// path in AddLoad).  The correct fix requires replacing the snapshot-and-
+	// set pattern with a CAS-based delta accumulation, or moving to a
+	// generation-counter design.  This is tracked as a known issue.
 	int32 currentLoad = atomic_get(&fCurrentLoad);
 	atomic_add((int32*)&fLoadMeasurementEpoch, 1);
 	atomic_set(&fLoad, currentLoad);
@@ -933,8 +947,13 @@ void
 PackageEntry::RemoveIdleCore(CoreEntry* core)
 {
 	WriteSpinLocker coreLocker(fCoreLock);
-	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
+	// Decrement the count BEFORE clearing the mask bit.  A concurrent reader
+	// (e.g. GetLeastIdlePackage) checks fIdleCoreCount as a fast pre-filter
+	// before inspecting fIdleCoreMask.  If the mask is cleared first, the
+	// reader can observe fIdleCoreCount > 0 with an empty mask and then
+	// dereference a NULL core from GetIdleCore().
 	atomic_add(&fIdleCoreCount, -1);
+	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
 
 	if ((oldMask & ~(1U << core->PackageIndex())) == 0)
 		fNode->PackageWakesUp(this);

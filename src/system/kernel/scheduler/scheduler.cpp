@@ -904,7 +904,13 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 	sCPUToCore = new(std::nothrow) int32[cpuCount];
 	sCPUToCluster = new(std::nothrow) int32[cpuCount];
-	sPackageToNode = new(std::nothrow) int32[cpuCount];
+	// Allocate cpuCount + 1 elements: in the degenerate case of one core per
+	// package the final packageCount equals cpuCount and the last package's
+	// node mapping is written at index packageCount before the post-loop
+	// increment.  The extra element prevents a potential one-past-the-end
+	// write on systems where the topology detection produces packageCount ==
+	// cpuCount entries.
+	sPackageToNode = new(std::nothrow) int32[cpuCount + 1];
 	sCPUToPackage = new(std::nothrow) int32[cpuCount];
 
 	if (sCPUToCore == NULL || sCPUToCluster == NULL || sPackageToNode == NULL || sCPUToPackage == NULL) {
@@ -1606,6 +1612,14 @@ void
 scheduler_on_team_foreground_changed(Team* team)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	// Lock-ordering note: the caller holds team->fLock (via TeamLocker).  We
+	// acquire thread->scheduler_lock (a leaf-level spinlock) inside the loop.
+	// No code path within enqueue() or Dequeue() attempts to acquire a team
+	// lock, so there is no circular dependency.  If that ever changes this
+	// function must be refactored to release team->fLock before calling into
+	// the scheduler, or the lock ordering must be globally documented and
+	// enforced.
 
 	// Note: Caller must hold the team's thread list lock (team->fLock via TeamLocker).
 	// We iterate through all threads of the team and re-enqueue them if they are ready.
