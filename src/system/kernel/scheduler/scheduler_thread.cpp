@@ -294,6 +294,13 @@ ThreadData::ComputeQuantum() const
 	bool overload = threadCount > (cpuCount << 1);
 	bool displayReady = false;
 
+	// PeekHead is called without holding the core run queue lock. This is
+	// intentionally racy for performance: (a) a queued thread's ThreadData
+	// remains valid until the thread is destroyed (which requires removal from
+	// all run queues first), so the returned pointer is safe to dereference,
+	// and (b) fEffectivePriority is an int32 that is read and written
+	// atomically on all supported architectures. The result is advisory only
+	// and a stale read merely causes a suboptimal quantum choice for one slice.
 	ThreadData* next = fCore->PeekHead();
 	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
 		displayReady = true;

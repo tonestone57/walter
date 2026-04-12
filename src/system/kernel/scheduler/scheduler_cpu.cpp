@@ -841,11 +841,16 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	} else
 		return;
 
-	// Increment epoch first to claim current fCurrentLoad and prevent
-	// concurrent AddLoad from double counting towards fLoad.
-	atomic_add((int32*)&fLoadMeasurementEpoch, 1);
-
+	// Snapshot fCurrentLoad BEFORE bumping the epoch.
+	//
+	// If the epoch is incremented first, a concurrent AddLoad whose stored
+	// epoch now mismatches will add to fLoad *and* fCurrentLoad. Our
+	// subsequent atomic_set(&fLoad, currentLoad) then overwrites fLoad,
+	// silently discarding that contribution. By snapshotting currentLoad
+	// first, any AddLoad that runs after the epoch bump writes directly to
+	// fLoad and is not clobbered (it executes after our atomic_set).
 	int32 currentLoad = atomic_get(&fCurrentLoad);
+	atomic_add((int32*)&fLoadMeasurementEpoch, 1);
 	atomic_set(&fLoad, currentLoad);
 
 	if (cpuCount > 0) {

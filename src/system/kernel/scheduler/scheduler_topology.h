@@ -29,18 +29,38 @@ search_local_node(SchedulerNode* node, Action action)
 	if (nodeBaseIndex >= gPackageCount || packagesInNode <= 0)
 		return;
 
-	// Limit attempts to avoid duplicate probes on small nodes
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+
+	// For small nodes (≤8 packages), pure random sampling wastes most probes
+	// on duplicates at small N (e.g., a 2-package node hit the same package
+	// ~50% of the time). A linear scan from a random start visits every
+	// package exactly once, providing complete coverage with zero wasted
+	// probes and the same O(N) bound.
+	if (packagesInNode <= 8) {
+		int32 start = (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
+		for (int32 i = 0; i < packagesInNode; i++) {
+			int32 offset = start + i;
+			if (offset >= packagesInNode)
+				offset -= packagesInNode;
+			int32 index = nodeBaseIndex + offset;
+			if (index >= gPackageCount)
+				continue;
+			if (action(&gPackageEntries[index]))
+				break;
+		}
+		return;
+	}
+
+	// For larger nodes use logarithmic random sampling. Duplicate probes
+	// become statistically rare once N is large enough that the birthday
+	// probability over log(N) draws is low.
 	const int kMaxLocalAttempts = min_c(packagesInNode,
 		4 + (packagesInNode > 1 ? 31 - __builtin_clz(packagesInNode) : 0));
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
-		// Multiplicative random mapping to avoid expensive modulo
 		int32 index = nodeBaseIndex
 			+ (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
-
 		if (index >= gPackageCount)
 			continue;
-
 		if (action(&gPackageEntries[index]))
 			break;
 	}
@@ -65,15 +85,13 @@ search_global_random(Action action)
 	const int32 kStackBitmaskSize = 1024;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
-	int32 packagesToCheck = min_c(gPackageCount, kStackBitmaskSize);
-	if (packagesToCheck > 0) {
-		if (packagesToCheck <= 64)
-			visitedBits[0] = 0;
-		else {
-			int32 wordsToClear = (packagesToCheck + 63) / 64;
-			memset(visitedBits, 0, wordsToClear * sizeof(uint64));
-		}
-	}
+	// Always zero the entire array. The conditional initialization above
+	// only cleared as many words as needed for gPackageCount, leaving words
+	// beyond that range uninitialized. Any subsequent access with an index
+	// in [cleared_range, kStackBitmaskSize) read garbage, causing spurious
+	// "already visited" skips. Zeroing all 128 bytes unconditionally is
+	// negligible on the scheduler hot path.
+	memset(visitedBits, 0, sizeof(visitedBits));
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 		// Multiplicative random mapping to avoid expensive modulo

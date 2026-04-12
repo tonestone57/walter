@@ -135,6 +135,11 @@ const int kLoadDifference = kMaxLoad * 20 / 100;
 const int32 kDefaultCapacity = 1024;
 const int32 kRandomSearchThreshold = 32;
 
+// Maximum number of packages to scan in O(1)-bounded fallback paths.
+// Referenced by GetLeastIdlePackage (scheduler_cpu.h) and the choose_core /
+// rebalance / rebalance_irqs functions in low_latency.cpp and power_saving.cpp.
+const int32 kMaxFallbackAttempts = 64;
+
 const bigtime_t kCacheExpire = 15000;
 
 extern bool gSingleCore;

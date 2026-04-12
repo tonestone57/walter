@@ -435,8 +435,13 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
 
-	if (fBest == element)
-		fBest = fHeads[priority];
+	if (fBest == element) {
+		// Unconditionally invalidate the cache. Setting fBest to
+		// fHeads[priority] is incorrect when a higher-priority queue is
+		// non-empty, or when the next element at this level is not the
+		// lowest-virtual-runtime candidate. Force a full rescan in PeekBest.
+		fBest = NULL;
+	}
 }
 
 

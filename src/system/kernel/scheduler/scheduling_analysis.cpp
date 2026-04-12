@@ -479,7 +479,12 @@ public:
 		}
 
 		fAnalysis.threads = threads;
-dprintf("scheduling analysis: free bytes: %lu/%lu\n", fRemainingBytes, fSize);
+#if SCHEDULING_ANALYSIS_TRACING
+		// Development diagnostic: report buffer utilisation. Gated so it
+		// does not pollute the kernel log in production builds.
+		dprintf("scheduling analysis: free bytes: %lu/%lu\n",
+			fRemainingBytes, fSize);
+#endif
 		return B_OK;
 	}
 

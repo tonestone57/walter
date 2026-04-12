@@ -238,8 +238,14 @@ ThreadData::_UpdatePriorityBoost()
 
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			fCore->Remove(this);
-			fCore->PushBack(this, newPriority);
+			// Snapshot fCore before use. The caller holds either
+			// CPURunQueueLocker or CoreRunQueueLocker, but neither prevents
+			// a concurrent MigrateTo (which runs under a different lock) from
+			// altering fCore between the Remove and PushBack calls. Using a
+			// local snapshot ensures both operations target the same object.
+			CoreEntry* core = fCore;
+			core->Remove(this);
+			core->PushBack(this, newPriority);
 
 			fEnqueuedInCPURunQueue = false;
 		}
@@ -493,9 +499,11 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		CoreCPULocker cpuLocker(fCore);
 		CoreRunQueueLocker locker(fCore);
 
-		// Check if the Core is still active under the lock
+		// Check if the Core is still active under the lock.
 		if (fCore->CPUCount() == 0) {
-			fQuickStartCredit = false;
+			// Do NOT consume fQuickStartCredit here. The enqueue will be
+			// retried via ChooseCoreAndCPU on a live core; the interactive
+			// boost credit should survive that retry.
 			return false;
 		}
 
@@ -558,10 +566,16 @@ ThreadData::UpdateActivity(bigtime_t active)
 
 	if (!IsRealTime()) {
 		int32 priority = max_c((int32)1, GetEffectivePriority());
-		fVirtualRuntime += (active * B_URGENT_DISPLAY_PRIORITY) / priority;
-		// Theoretical maximum safe uptime before overflow for a thread using
-		// 100% CPU at priority 1 is approximately 2^63 / (B_URGENT_DISPLAY_PRIORITY / 1) us,
-		// which is roughly ~700 years. Overflow protection is omitted for performance.
+		bigtime_t delta = (active * B_URGENT_DISPLAY_PRIORITY) / priority;
+		// Saturate at INT64_MAX to prevent signed wraparound. A wrapped
+		// fVirtualRuntime would appear younger than every other thread and
+		// permanently dominate scheduling decisions until system reboot.
+		// The 700-year overflow horizon makes this purely theoretical in
+		// practice, but costs only a single compare on the hot path.
+		if (fVirtualRuntime <= INT64_MAX - delta)
+			fVirtualRuntime += delta;
+		else
+			fVirtualRuntime = INT64_MAX;
 	}
 
 	if (!gTrackCoreLoad)
