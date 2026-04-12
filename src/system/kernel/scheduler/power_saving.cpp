@@ -106,6 +106,62 @@ choose_small_task_core()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// On heterogeneous systems, small-task packing should prefer E-cores
+	// (gMinCoreType) to keep P-cores available for high-priority foreground
+	// work. On homogeneous systems packType is UNKNOWN and we fall through to
+	// the general packing logic.
+	if (sSmallTaskCore != NULL && gMinCoreType != gMaxCoreType) {
+		CoreEntry* eCore = NULL;
+		int32 eBestScore = -1;
+
+		bool tryRandom = gPackageCount > kRandomSearchThreshold;
+		if (tryRandom) {
+			search_global_random([&](PackageEntry* entry) {
+				CoreEntry* candidate
+					= entry->PeekMaximumLoadCore(NULL, gMinCoreType);
+				if (candidate != NULL && candidate->GetScore() < kHighLoad) {
+					int32 score = candidate->GetScore();
+					if (eCore == NULL || score > eBestScore) {
+						eCore = candidate;
+						eBestScore = score;
+					}
+				}
+				return false;
+			});
+		}
+
+		if (eCore == NULL) {
+			const int32 kMaxFallback = kMaxFallbackAttempts;
+			int32 start = tryRandom
+				? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+					% gPackageCount
+				: 0;
+			for (int32 i = 0; i < min_c(gPackageCount, kMaxFallback); i++) {
+				int32 idx = start + i;
+				if (idx >= gPackageCount) idx -= gPackageCount;
+				CoreEntry* candidate
+					= gPackageEntries[idx].PeekMaximumLoadCore(NULL, gMinCoreType);
+				if (candidate != NULL && candidate->GetScore() < kHighLoad) {
+					int32 score = candidate->GetScore();
+					if (eCore == NULL || score > eBestScore) {
+						eCore = candidate;
+						eBestScore = score;
+					}
+				}
+			}
+		}
+
+		// If a suitable E-core was found, pin sSmallTaskCore to it and return.
+		// Fall through to the general packing logic only when no E-core has
+		// capacity (all E-cores are already heavily loaded).
+		if (eCore != NULL) {
+			int32 nodeID = eCore->Package()->Node()->ID();
+			CoreEntry* smallTaskCore = (CoreEntry*)atomic_pointer_test_and_set(
+				&sSmallTaskCore[nodeID], eCore, (CoreEntry*)NULL);
+			return smallTaskCore == NULL ? eCore : smallTaskCore;
+		}
+	}
+
 	CoreEntry* core = NULL;
 	int32 bestScore = -1;
 
@@ -281,11 +337,16 @@ choose_core(const ThreadData* threadData)
 	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
 
-	// Thread Coloring: High-priority threads prefer Performance cores
+	// Thread Coloring: only meaningful on heterogeneous systems.
+	// Skip on homogeneous systems where gMinCoreType == gMaxCoreType to avoid
+	// a redundant type-filtered search that returns the same result as the
+	// general packing logic below.
 	bool isForeground = threadData->IsForeground();
 	int32 priority = threadData->GetPriority();
-	bool preferMax = priority > B_DISPLAY_PRIORITY || isForeground;
-	bool preferMin = priority < B_NORMAL_PRIORITY && !isForeground;
+	bool preferMax = (priority > B_DISPLAY_PRIORITY || isForeground)
+		&& (gMinCoreType != gMaxCoreType);
+	bool preferMin = (priority < B_NORMAL_PRIORITY && !isForeground)
+		&& (gMinCoreType != gMaxCoreType);
 
 	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
 	if (useMask && Scheduler::IsAllEnabledMask(mask))
@@ -323,9 +384,47 @@ choose_core(const ThreadData* threadData)
 			}
 		}
 
-		// For Performance cores, respect load threshold (80%).
+		// Prevent overloading E-cores: if the best E-core is already heavily
+		// utilized, fall through rather than pile more background threads on.
+		if (preferMin && core != NULL && core->GetScore() > kHighLoad)
+			core = NULL;
+
+		// For P-cores, respect the 80% raw-load ceiling.
 		if (preferMax && core != NULL && core->GetLoad() > 800)
 			core = NULL;
+
+		// 3-type intermediate fallback: P overloaded → try STANDARD before
+		// giving up type preference and falling to the general packing search.
+		if (preferMax && core == NULL && gHasStandardCores) {
+			int32 stdBestScore = -1;
+			bool foundNonOverloadedStd = false;
+			bool tryRandomStd = gPackageCount > kRandomSearchThreshold;
+
+			if (tryRandomStd && !useMask) {
+				search_global_random([&](PackageEntry* entry) {
+					check_package_packing(entry, NULL, core, stdBestScore,
+						foundNonOverloadedStd, CORE_TYPE_STANDARD);
+					return false;
+				});
+			} else if (useMask) {
+				check_masked_packages_packing(mask, core, stdBestScore,
+					foundNonOverloadedStd, CORE_TYPE_STANDARD);
+			}
+
+			if (core == NULL) {
+				int32 startIndex = tryRandomStd
+					? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+						% gPackageCount
+					: 0;
+				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+				for (int32 i = 0; i < attempts; i++) {
+					int32 index = startIndex + i;
+					if (index >= gPackageCount) index -= gPackageCount;
+					check_package_packing(&gPackageEntries[index], NULL, core,
+						stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD);
+				}
+			}
+		}
 
 		if (core != NULL)
 			return core;
@@ -521,6 +620,35 @@ rebalance(const ThreadData* threadData)
 			return core; // Fallback
 		}
 		ASSERT(other != NULL);
+
+		// Type-affinity guard: resist cross-type migration on heterogeneous
+		// systems to preserve the placement made by choose_core. Without this,
+		// a high-priority thread on a P-core is immediately rebalanced to a
+		// lightly loaded E-core (which has a lower normalized score), defeating
+		// thread coloring on every scheduling quantum.
+		if (gMinCoreType != gMaxCoreType) {
+			bool isFgRebal = threadData->IsForeground();
+			int32 prioRebal = threadData->GetPriority();
+			CoreType wantedType
+				= (prioRebal > B_DISPLAY_PRIORITY || isFgRebal)
+					? gMaxCoreType
+					: (prioRebal < B_NORMAL_PRIORITY && !isFgRebal)
+						? gMinCoreType
+						: CORE_TYPE_UNKNOWN;
+
+			if (wantedType != CORE_TYPE_UNKNOWN
+					&& core->Type() == wantedType
+					&& other->Type() != wantedType) {
+				// Require double the normal load difference before accepting a
+				// cross-type migration. A severely overloaded P-core can still
+				// shed threads; a mildly overloaded one cannot.
+				int32 adjustment = kLoadDifference;
+				int32 coreNewScore = coreScore - threadLoad;
+				int32 otherNewScore = other->GetScore() + threadLoad;
+				if (coreNewScore - otherNewScore < (kLoadDifference >> 1) + adjustment)
+					return core;
+			}
+		}
 
 		int32 coreNewScore = coreScore - threadLoad;
 		int32 otherNewScore = other->GetScore() + threadLoad;

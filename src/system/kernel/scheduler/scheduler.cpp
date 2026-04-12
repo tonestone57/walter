@@ -62,6 +62,8 @@ int64 gDeadlineBucketSize = 5000;
 CoreType gMinCoreType = CORE_TYPE_UNKNOWN;
 CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
 
+bool gHasStandardCores = false;
+
 static timer sInteractionTimer;
 static int64 sLastInteractionTime;
 static int32 sDPCPending = 0;
@@ -1236,6 +1238,12 @@ init()
 
 	// Determine CPU Capacities (Heterogeneous Support)
 	// We use the CPU frequency as a proxy for performance capacity.
+	// detectedHeterogeneous is set to true only when cpu_frequency() returns
+	// at least two distinct non-zero values, confirming that the hardware
+	// exposes different core performance tiers. It gates the Alder Lake
+	// fallback heuristic below: without this flag the heuristic would
+	// misclassify any homogeneous system with >8 cores.
+	bool detectedHeterogeneous = false;
 	uint64 maxFreq = 0;
 	uint64* cpuFreqs = new(std::nothrow) uint64[cpuCount];
 	if (cpuFreqs != NULL) {
@@ -1256,6 +1264,7 @@ init()
 			}
 
 			if (heterogeneous) {
+				detectedHeterogeneous = true;
 				dprintf("scheduler: heterogeneous CPUs detected (max frequency: %"
 					B_PRIu64 ")\n", maxFreq);
 
@@ -1329,12 +1338,20 @@ init()
 		}
 	}
 
-	if (coreCount > 8) {
-		// Heuristic workaround for hybrid systems that don't report capacity
-		// through frequencies (e.g., some Intel Alder Lake+ configurations).
-		// We assume that if no heterogeneous capacity was detected but the core
-		// count is high, it's likely a hybrid system where a subset of cores
-		// are Efficiency cores.
+	// Alder Lake fallback heuristic: some hybrid CPUs do not report distinct
+	// frequencies for P-cores and E-cores (the firmware reports the P-core
+	// boost frequency for all entries). The heuristic assumes the last 8 or
+	// 50% of cores (whichever is smaller) are Efficiency cores.
+	//
+	// IMPORTANT: Only apply this when the frequency API actually confirmed
+	// heterogeneity (detectedHeterogeneous == true) but left some cores
+	// unclassified (cpu_frequency() returned 0 for them). If the API
+	// reported identical frequencies for every core, this is a genuinely
+	// homogeneous system and the heuristic must not fire — it would
+	// incorrectly split a 16-core Xeon or 64-core EPYC into fake P/E
+	// clusters, causing artificial load imbalance and misguided thread
+	// coloring with no performance benefit.
+	if (detectedHeterogeneous && coreCount > 8) {
 		bool allUnknown = true;
 		for (int32 i = 0; i < coreCount; i++) {
 			if (gCoreEntries[i].Type() != CORE_TYPE_UNKNOWN) {
@@ -1344,8 +1361,6 @@ init()
 		}
 
 		if (allUnknown) {
-			// Typical configuration: last 8 or 50% are Efficiency cores.
-			// Let's assume a reasonable default for high core count systems.
 			int32 eCoreCount = coreCount > 16 ? 8 : coreCount / 2;
 			for (int32 i = 0; i < coreCount; i++) {
 				if (i >= coreCount - eCoreCount)
@@ -1354,11 +1369,24 @@ init()
 					gCoreEntries[i].SetType(CORE_TYPE_PERFORMANCE);
 			}
 		}
-	} else {
-		// Small systems: assume all are standard cores if not otherwise detected
-		for (int32 i = 0; i < coreCount; i++) {
-			if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN)
-				gCoreEntries[i].SetType(CORE_TYPE_STANDARD);
+	}
+
+	// All remaining unclassified cores are STANDARD (covers homogeneous
+	// systems of any size and heterogeneous systems where the heuristic
+	// left some cores unassigned).
+	for (int32 i = 0; i < coreCount; i++) {
+		if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN)
+			gCoreEntries[i].SetType(CORE_TYPE_STANDARD);
+	}
+
+	// Detect whether STANDARD cores are present — used in choose_core to
+	// decide if a 3-type intermediate fallback (P → STANDARD → general) is
+	// available, as opposed to a 2-type E+P system where STANDARD is absent.
+	gHasStandardCores = false;
+	for (int32 i = 0; i < coreCount; i++) {
+		if (gCoreEntries[i].Type() == CORE_TYPE_STANDARD) {
+			gHasStandardCores = true;
+			break;
 		}
 	}
 

@@ -58,11 +58,16 @@ choose_core(const ThreadData* threadData)
 	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
 
-	// Thread Coloring: High-priority threads prefer Performance cores
+	// Thread Coloring: only meaningful on heterogeneous systems.
+	// On homogeneous systems (gMinCoreType == gMaxCoreType) the type-filtered
+	// search is equivalent to the general min-load search and adds overhead
+	// without benefit. Skip it entirely.
 	bool isForeground = threadData->IsForeground();
 	int32 priority = threadData->GetPriority();
-	bool preferMax = priority > B_DISPLAY_PRIORITY || isForeground;
-	bool preferMin = priority < B_NORMAL_PRIORITY && !isForeground;
+	bool preferMax = (priority > B_DISPLAY_PRIORITY || isForeground)
+		&& (gMinCoreType != gMaxCoreType);
+	bool preferMin = (priority < B_NORMAL_PRIORITY && !isForeground)
+		&& (gMinCoreType != gMaxCoreType);
 
 	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
 	// to enable global random sampling instead of slow mask iteration.
@@ -181,15 +186,57 @@ choose_core(const ThreadData* threadData)
 				}
 			}
 
+			// Prevent overloading E-cores: if the best E-core candidate is already
+			// heavily utilized, fall through to the general min-load search rather
+			// than pile more threads onto an overloaded E-core cluster.
+			if (preferMin && core != NULL && core->GetScore() > kHighLoad)
+				core = NULL;
+
 			// For Performance cores, respect load threshold (80%).
-			// For Efficiency cores, we just take the best one if we really want Efficiency cores.
 			if (preferMax && core != NULL && core->GetLoad() > 800)
 				core = NULL;
 		}
-	}
 
-	if (core != NULL)
-		return core;
+		if (core != NULL)
+			return core;
+
+		// 3-type intermediate fallback: when P-cores are all overloaded and
+		// STANDARD cores exist, try them before falling to the fully unfiltered
+		// search (which might return an E-core for a high-priority thread).
+		if (preferMax && gHasStandardCores) {
+			int32 stdBestScore = -1;
+			bool tryRandomStd = gPackageCount > kRandomSearchThreshold;
+
+			if (tryRandomStd && !useMask) {
+				search_global_random([&](PackageEntry* entry) {
+					CheckPackageMinimumLoad(entry, NULL, core, stdBestScore,
+						CORE_TYPE_STANDARD);
+					return false;
+				});
+			} else if (useMask) {
+				CheckMaskedPackagesMinimumLoad(mask, core, stdBestScore,
+					CORE_TYPE_STANDARD);
+			}
+
+			if (core == NULL) {
+				int32 startIndex = tryRandomStd
+					? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+						% gPackageCount
+					: 0;
+				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
+				for (int32 i = 0; i < attempts; i++) {
+					int32 index = startIndex + i;
+					if (index >= gPackageCount)
+						index -= gPackageCount;
+					CheckPackageMinimumLoad(&gPackageEntries[index], NULL, core,
+						stdBestScore, CORE_TYPE_STANDARD);
+				}
+			}
+
+			if (core != NULL)
+				return core;
+		}
+	}
 
 	// Check Home Package (NUMA/Memory Affinity)
 	// If the previous core was not suitable (or cache expired), we try to return
@@ -442,6 +489,34 @@ rebalance(const ThreadData* threadData)
 		} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
 			// Penalty for leaving home: double the threshold.
 			threshold *= 2;
+		}
+	}
+
+	// Type-affinity guard: on heterogeneous systems, resist migrating a
+	// thread off its preferred core type. choose_core places high-priority
+	// threads on P-cores; without this guard rebalance undoes that on every
+	// scheduling quantum by finding a lightly loaded E-core and moving the
+	// thread there.
+	//
+	// We increase the migration threshold rather than blocking migration
+	// entirely, so that severely overloaded P-cores can still shed load to
+	// other types in extreme conditions.
+	if (gMinCoreType != gMaxCoreType) {
+		bool isFgRebal = threadData->IsForeground();
+		int32 prioRebal = threadData->GetPriority();
+		CoreType wantedType
+			= (prioRebal > B_DISPLAY_PRIORITY || isFgRebal)
+				? gMaxCoreType
+				: (prioRebal < B_NORMAL_PRIORITY && !isFgRebal)
+					? gMinCoreType
+					: CORE_TYPE_UNKNOWN;
+
+		if (wantedType != CORE_TYPE_UNKNOWN
+				&& core->Type() == wantedType
+				&& other->Type() != wantedType) {
+			// Require a load difference twice the normal threshold before
+			// accepting a cross-type migration.
+			threshold = max_c(threshold, kLoadDifference * 2);
 		}
 	}
 

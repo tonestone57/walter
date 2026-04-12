@@ -153,6 +153,12 @@ extern CoreType gMinCoreType;
 extern CoreType gMaxCoreType;
 
 
+// True when at least one CORE_TYPE_STANDARD core exists. Used by choose_core
+// to decide whether a STANDARD-core intermediate fallback is available for
+// 3-type systems (EFFICIENCY + STANDARD + PERFORMANCE).
+extern bool gHasStandardCores;
+
+
 void init_debug_commands();
 void scheduler_update_interaction_state();
 
