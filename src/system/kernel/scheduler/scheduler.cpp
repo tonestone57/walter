@@ -1343,15 +1343,15 @@ init()
 	// boost frequency for all entries). The heuristic assumes the last 8 or
 	// 50% of cores (whichever is smaller) are Efficiency cores.
 	//
-	// IMPORTANT: Only apply this when the frequency API either returned no
-	// data at all (maxFreq == 0) OR confirmed heterogeneity
-	// (detectedHeterogeneous == true) but left some cores unclassified.
-	// If the API reported identical frequencies for every core, this is a
-	// genuinely homogeneous system and the heuristic must not fire — it
-	// would incorrectly split a 16-core Xeon or 64-core EPYC into fake P/E
+	// IMPORTANT: Only apply this when the frequency API actually confirmed
+	// heterogeneity (detectedHeterogeneous == true) but left some cores
+	// unclassified (cpu_frequency() returned 0 for them). If the API
+	// reported identical frequencies for every core, this is a genuinely
+	// homogeneous system and the heuristic must not fire — it would
+	// incorrectly split a 16-core Xeon or 64-core EPYC into fake P/E
 	// clusters, causing artificial load imbalance and misguided thread
 	// coloring with no performance benefit.
-	if ((maxFreq == 0 || detectedHeterogeneous) && coreCount > 8) {
+	if (detectedHeterogeneous && coreCount > 8) {
 		bool anyUnknown = false;
 		for (int32 i = 0; i < coreCount; i++) {
 			if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN) {
@@ -1376,28 +1376,18 @@ init()
 
 	// All remaining unclassified cores are STANDARD (covers homogeneous
 	// systems of any size and heterogeneous systems where the heuristic
-	// left some cores unassigned).
+	// left some cores unassigned). We also update the global core type
+	// range and detect whether STANDARD cores exist (enabling 3-type
+	// intermediate fallbacks in choose_core).
+	gHasStandardCores = false;
 	for (int32 i = 0; i < coreCount; i++) {
 		if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN)
 			gCoreEntries[i].SetType(CORE_TYPE_STANDARD);
-	}
 
-	// Detect whether STANDARD cores are present — used in choose_core to
-	// decide if a 3-type intermediate fallback (P → STANDARD → general) is
-	// available, as opposed to a 2-type E+P system where STANDARD is absent.
-	gHasStandardCores = false;
-	for (int32 i = 0; i < coreCount; i++) {
-		if (gCoreEntries[i].Type() == CORE_TYPE_STANDARD) {
-			gHasStandardCores = true;
-			break;
-		}
-	}
-
-	// Update gMinCoreType and gMaxCoreType based on assigned types
-	for (int32 i = 0; i < coreCount; i++) {
 		CoreType type = gCoreEntries[i].Type();
-		if (type == CORE_TYPE_UNKNOWN)
-			continue;
+		if (type == CORE_TYPE_STANDARD)
+			gHasStandardCores = true;
+
 		if (gMinCoreType == CORE_TYPE_UNKNOWN || type < gMinCoreType)
 			gMinCoreType = type;
 		if (gMaxCoreType == CORE_TYPE_UNKNOWN || type > gMaxCoreType)
