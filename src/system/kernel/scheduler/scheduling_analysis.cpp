@@ -81,7 +81,7 @@ struct Thread : HashObject, scheduling_analysis_thread {
 
 		runs = 0;
 		total_run_time = 0;
-		min_run_time = 1;
+		min_run_time = -1;
 		max_run_time = -1;
 
 		latencies = 0;

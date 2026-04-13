@@ -733,7 +733,8 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 		atomic_set64(&fCombinedLoad, 0);
 
 		atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
-		atomic_or((int32*)&fPackage->fEnabledCoreMask, 1U << fPackageIndex);
+		scheduler_atomic_or(&fPackage->fEnabledCoreMask,
+			(native_cpu_mask_t)1 << fPackageIndex);
 
 		fPackage->AddIdleCore(this);
 	}
@@ -745,7 +746,8 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 		fCPUSet.ClearBitAtomic(cpu->ID());
 		if (firstCPU) {
 			fPackage->RemoveIdleCore(this);
-			atomic_and((int32*)&fPackage->fEnabledCoreMask, ~(1U << fPackageIndex));
+			scheduler_atomic_and(&fPackage->fEnabledCoreMask,
+				~((native_cpu_mask_t)1 << fPackageIndex));
 			// Restore fCPUCount and fIdleCPUCount symmetrically.
 			atomic_add(&fCPUCount, -1);
 		} else {
@@ -771,7 +773,8 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	if (atomic_add(&fCPUCount, -1) == 1) {
 		// core has been disabled
-		atomic_and((int32*)&fPackage->fEnabledCoreMask, ~(1U << fPackageIndex));
+		scheduler_atomic_and(&fPackage->fEnabledCoreMask,
+			~((native_cpu_mask_t)1 << fPackageIndex));
 		fPackage->RemoveIdleCore(this);
 
 		// get rid of threads
