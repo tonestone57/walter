@@ -173,7 +173,6 @@ choose_core(const ThreadData* threadData)
 			}
 
 			if (core == NULL) {
-				const int32 kMaxFallbackAttempts = 64;
 				int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
@@ -219,13 +218,13 @@ choose_core(const ThreadData* threadData)
 			}
 
 			if (core == NULL) {
-				int32 startIndex = tryRandomStd
+				int32 startIndex2 = tryRandomStd
 					? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
 						% gPackageCount
 					: 0;
-				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
-				for (int32 i = 0; i < attempts; i++) {
-					int32 index = startIndex + i;
+				int32 attempts2 = min_c(gPackageCount, kMaxFallbackAttempts);
+				for (int32 i = 0; i < attempts2; i++) {
+					int32 index = startIndex2 + i;
 					if (index >= gPackageCount)
 						index -= gPackageCount;
 					CheckPackageMinimumLoad(&gPackageEntries[index], NULL, core,
@@ -250,10 +249,14 @@ choose_core(const ThreadData* threadData)
 			if (!useMask || candidate->CPUMask().Matches(mask))
 				core = candidate;
 		} else {
-			// If no idle core in home package, check for lightly loaded one
+			// If no idle core in home package, check for lightly loaded one.
+			// Pass NULL when !useMask: passing an all-zero CPUSet would cause
+			// PeekMinimumLoadCore to reject every candidate, disabling the
+			// NUMA home-package optimization for unconstrained threads.
 			CoreEntry* bestHomeCore = NULL;
 			int32 bestHomeLoad = -1;
-			CheckPackageMinimumLoad(homePackage, &mask, bestHomeCore, bestHomeLoad);
+			CheckPackageMinimumLoad(homePackage, useMask ? &mask : NULL,
+				bestHomeCore, bestHomeLoad);
 
 			if (bestHomeCore != NULL && bestHomeLoad < kLoadDifference)
 				core = bestHomeCore;
@@ -338,7 +341,6 @@ choose_core(const ThreadData* threadData)
 			// Start from a random index to ensure fairness over time.
 			// 64 attempts cover small systems entirely and provide a reasonable
 			// search depth for large ones.
-			const int32 kMaxFallbackAttempts = 64;
 			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
@@ -438,7 +440,6 @@ rebalance(const ThreadData* threadData)
 	}
 
 	if (other == NULL && !useMask) {
-		const int32 kMaxFallbackAttempts = 64;
 		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
@@ -591,7 +592,6 @@ rebalance_irqs(bool idle)
 
 	// Use empty mask (NULL), as we don't care about affinity here
 	if (other == NULL) {
-		const int32 kMaxFallbackAttempts = 64;
 		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 

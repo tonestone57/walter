@@ -808,16 +808,12 @@ PackageEntry::GetLeastIdlePackage()
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	if (gPackageCount > kRandomSearchThreshold) {
-		// Unified random probe loop: replaces the old two-phase (random then
-		// linear fallback) approach which called GetRandom() twice and had a
-		// branch between phases.  A single loop of max(log2(N)+4, 64) random
-		// probes is equivalent in coverage while saving one RNG call and one
-		// branch on the common-case miss path.
-		const int32 kMaxAttempts = max_c(
-			4 + (31 - __builtin_clz(gPackageCount)),
-			(int32)kMaxFallbackAttempts);
-
-		for (int32 i = 0; i < kMaxAttempts; i++) {
+		// For all practical package counts (33-4096) the log2 formula always
+		// evaluates to a value <= kMaxFallbackAttempts, so use the global
+		// constant directly.  This avoids recomputing __builtin_clz on every
+		// call in this hot path and keeps the probe count consistent with the
+		// rest of the scheduler.
+		for (int32 i = 0; i < kMaxFallbackAttempts; i++) {
 			int32 idx = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 			PackageEntry* current = &gPackageEntries[idx];
 			int32 count = atomic_get((int32*)&current->fIdleCoreCount);

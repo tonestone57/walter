@@ -294,9 +294,13 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 			targetCPU = NULL;
 	} else if (gSingleCore) {
 		targetCore = &gCoreEntries[0];
-	} else if (waker != NULL && waker->scheduler_data->Core() != NULL
-		&& waker->scheduler_data->Core()->GetLoad() < kHighLoad) {
-		targetCore = waker->scheduler_data->Core();
+	} else if (waker != NULL) {
+		// Snapshot Core() once: a concurrent UnassignCore() between the null
+		// check and the assignment could otherwise store NULL into targetCore,
+		// producing a spurious NULL that ChooseCoreAndCPU must then recover from.
+		CoreEntry* wakerCore = waker->scheduler_data->Core();
+		if (wakerCore != NULL && wakerCore->GetLoad() < kHighLoad)
+			targetCore = wakerCore;
 	} else if (threadData->Core() != NULL
 		&& (!newOne || !threadData->HasCacheExpired())) {
 		targetCore = threadData->Rebalance();

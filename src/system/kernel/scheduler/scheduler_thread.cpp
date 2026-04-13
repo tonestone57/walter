@@ -295,6 +295,16 @@ ThreadData::ComputeQuantum() const
 	// CoreEntry objects. The reads are still individually approximate (no
 	// run-queue lock is held), but they now all refer to the same object.
 	CoreEntry* const core = fCore;
+
+	// Defensive null guard: fCore can be transiently NULL during a race
+	// between UnassignCore() and the subsequent MigrateTo() (e.g. rapid CPU
+	// hot-plug).  Return the minimal quantum so the thread gets rescheduled
+	// quickly and picks up a valid core assignment on the next pass.
+	if (core == NULL) {
+		bigtime_t minQ = Scheduler::MinimalQuantum();
+		return max_c(minQ, (bigtime_t)1200);
+	}
+
 	int32 load        = core->GetLoad();
 	int32 threadCount = core->ThreadCount();
 	int32 cpuCount    = core->CPUCount();
