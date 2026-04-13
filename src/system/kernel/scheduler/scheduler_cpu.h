@@ -55,8 +55,16 @@ public:
 // Adjusted to sizeof(native_cpu_mask_t) * 8 to support larger clusters on 64-bit.
 // This allows a single L3 domain to span up to 64 cores.
 const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
-static_assert(kMaxCoresPerPackage <= sizeof(native_cpu_mask_t) * 8,
-	"kMaxCoresPerPackage exceeds native_cpu_mask_t capacity");
+// Validate the shift range: PackageIndex is in [0, kMaxCoresPerPackage),
+// so (native_cpu_mask_t)1 << PackageIndex() must not overflow. The old
+// assert compared kMaxCoresPerPackage to itself (tautological). This one
+// checks that kMaxCoresPerPackage does not exceed a hard platform ceiling
+// and that native_cpu_mask_t is wide enough to represent all core bits.
+static_assert(kMaxCoresPerPackage <= 64,
+	"kMaxCoresPerPackage exceeds 64-bit shift range on any platform");
+static_assert(kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8),
+	"native_cpu_mask_t is too narrow for kMaxCoresPerPackage; "
+	"increase native_cpu_mask_t or reduce kMaxCoresPerPackage");
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
@@ -508,9 +516,13 @@ inline int32
 CoreEntry::ThreadCount() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return atomic_get(const_cast<int32*>(&fThreadCount))
+	int32 result = atomic_get(const_cast<int32*>(&fThreadCount))
 		+ atomic_get(const_cast<int32*>(&fCPUCount))
 		- atomic_get(const_cast<int32*>(&fIdleCPUCount));
+	// Three separate atomic reads cannot be made jointly atomic; a concurrent
+	// RemoveCPU can cause transient underflow. Clamp to zero so callers such
+	// as ComputeQuantum() receive a non-negative thread count.
+	return max_c(result, 0);
 }
 
 
@@ -654,7 +666,8 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	SCHEDULER_ENTER_FUNCTION();
 
 	atomic_add(&fIdleCoreCount, 1);
-	int32 oldMask = atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
+	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
+		(native_cpu_mask_t)1 << core->PackageIndex());
 
 	if (oldMask == 0) {
 		// package goes idle (first core)
@@ -669,15 +682,13 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	SCHEDULER_ENTER_FUNCTION();
 
 	atomic_add(&fIdleCoreCount, -1);
-	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
+	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
+	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
 	// Detect the transition from fully-idle to partially-active:
 	// the package wakes up when the *last* idle core becomes active, i.e.
 	// after clearing this core's bit the mask becomes zero.
-	// This mirrors the CoreGoesIdle check (oldMask == 0 => first idle core)
-	// and fixes the original bug where 'oldMask == fEnabledCoreMask' fired
-	// incorrectly for non-first waking cores.
-	if ((oldMask & ~(1U << core->PackageIndex())) == 0) {
+	if ((oldMask & ~clearBit) == 0) {
 		// package wakes up (last idle core becomes active)
 		fNode->PackageWakesUp(this);
 	}
@@ -689,7 +700,7 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (package->NodeIndex() < 0)
+	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
 		return;
 
 	uint64 oldMask = atomic_or64((int64*)&fIdlePackageMask, 1ULL << package->NodeIndex());
@@ -706,7 +717,7 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (package->NodeIndex() < 0)
+	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
 		return;
 
 	uint64 oldMask = atomic_and64((int64*)&fIdlePackageMask, ~(1ULL << package->NodeIndex()));
@@ -768,11 +779,11 @@ CoreEntry::GetCore(int32 cpu)
 }
 
 
-inline uint32
+inline native_cpu_mask_t
 PackageEntry::IdleCoreMask() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return atomic_get((int32*)&fIdleCoreMask);
+	return scheduler_atomic_get(&fIdleCoreMask);
 }
 
 

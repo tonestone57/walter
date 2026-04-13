@@ -280,10 +280,10 @@ choose_core(const ThreadData* threadData)
 				continue;
 
 			PackageEntry* package = &gPackageEntries[globalPackageIndex];
-			uint32 idleMask = package->IdleCoreMask();
+			native_cpu_mask_t idleMask = package->IdleCoreMask();
 			while (idleMask != 0) {
-				int32 bitIdx = __builtin_ctz(idleMask);
-				idleMask &= ~(1U << bitIdx);
+				int32 bitIdx = scheduler_ctz(idleMask);
+				idleMask &= ~((native_cpu_mask_t)1 << bitIdx);
 
 				CoreEntry* candidate = package->GetCore(bitIdx);
 				if (!useMask || candidate->CPUMask().Matches(mask)) {

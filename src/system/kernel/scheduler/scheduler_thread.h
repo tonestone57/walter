@@ -567,15 +567,21 @@ ThreadData::UpdateActivity(bigtime_t active)
 	if (!IsRealTime()) {
 		int32 priority = max_c((int32)1, GetEffectivePriority());
 		bigtime_t delta = (active * B_URGENT_DISPLAY_PRIORITY) / priority;
-		// Saturate at INT64_MAX to prevent signed wraparound. A wrapped
-		// fVirtualRuntime would appear younger than every other thread and
-		// permanently dominate scheduling decisions until system reboot.
-		// The 700-year overflow horizon makes this purely theoretical in
-		// practice, but costs only a single compare on the hot path.
-		if (fVirtualRuntime <= INT64_MAX - delta)
+		// Cap virtual runtime to a forward-looking ceiling rather than
+		// INT64_MAX. A thread saturated at INT64_MAX would be permanently
+		// starved because every new thread starts at fVirtualRuntime == 0.
+		// With this ceiling the gap between a saturated thread and a new
+		// thread is at most MaximumLatency()*1000 in virtual-time units,
+		// after which they are scheduled fairly again as real time advances.
+		const bigtime_t kLookahead = Scheduler::MaximumLatency() * 1000LL;
+		bigtime_t ceiling = system_time() + kLookahead;
+		if (fVirtualRuntime < ceiling - delta)
 			fVirtualRuntime += delta;
-		else
-			fVirtualRuntime = INT64_MAX;
+		else if (fVirtualRuntime < ceiling)
+			fVirtualRuntime = ceiling;
+		// If fVirtualRuntime is already at or above ceiling (e.g. ceiling moved
+		// backward due to clock skew), leave it unchanged rather than reducing
+		// it, which would spuriously boost the thread's scheduling priority.
 	}
 
 	if (!gTrackCoreLoad)

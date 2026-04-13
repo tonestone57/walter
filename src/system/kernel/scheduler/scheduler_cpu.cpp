@@ -114,6 +114,10 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 	seed = (seed ^ (seed >> 30)) * 0x94D049BB133111EBULL;
 	uint32 finalSeed = (uint32)(seed ^ (seed >> 32));
 	fRandomState = finalSeed ? finalSeed : 1;
+	// Stagger the boost-scan trigger across CPUs. Without this all CPUs
+	// fire UpdatePriorityBoostScalable at the same reschedule boundary,
+	// causing correlated lock acquisition and measurable latency spikes.
+	fRescheduleCount = (uint32)(id % 10);
 }
 
 
@@ -445,7 +449,7 @@ CPUEntry::_TryStealWork()
 		if (victim == NULL)
 			return false;
 
-		if ((entry->IdleCoreMask() & (1U << victim->PackageIndex())) != 0)
+		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
 			return false;
 
 		if (victim->TryLockRunQueue()) {
@@ -495,7 +499,7 @@ CPUEntry::_TryStealWork()
 		if (victim == NULL)
 			return false;
 
-		if ((entry->IdleCoreMask() & (1U << victim->PackageIndex())) != 0)
+		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
 			return false;
 
 		if (victim->TryLockRunQueue()) {
@@ -722,7 +726,8 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
 	atomic_add(&fIdleCPUCount, 1);
-	if (atomic_add(&fCPUCount, 1) == 0) {
+	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
+	if (firstCPU) {
 		// core has been reenabled
 		fLoad = 0;
 		atomic_set64(&fCombinedLoad, 0);
@@ -734,8 +739,22 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	}
 	fCPUSet.SetBitAtomic(cpu->ID());
 
-	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK)
-		panic("CoreEntry::AddCPU: failed to insert CPU into heap");
+	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
+		// Roll back all state changes made above so the post-panic debugger
+		// does not see a CPU that appears initialised but has no heap entry.
+		fCPUSet.ClearBitAtomic(cpu->ID());
+		if (firstCPU) {
+			fPackage->RemoveIdleCore(this);
+			atomic_and((int32*)&fPackage->fEnabledCoreMask, ~(1U << fPackageIndex));
+			// Restore fCPUCount and fIdleCPUCount symmetrically.
+			atomic_add(&fCPUCount, -1);
+		} else {
+			atomic_add(&fCPUCount, -1);
+		}
+		atomic_add(&fIdleCPUCount, -1);
+		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
+			cpu->ID());
+	}
 }
 
 
@@ -853,9 +872,10 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	// AddLoad calls either contribute to the old epoch (and are manually
 	// added to fLoad) or the new epoch (and are captured in the next snapshot),
 	// with no double-counting or loss.
+	int32 currentLoad = 0;
 	int64 oldCombined = atomic_get64(&fCombinedLoad);
 	while (true) {
-		int32 currentLoad = (int32)(oldCombined >> 32);
+		currentLoad = (int32)(oldCombined >> 32);
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch; // Load reset to 0
 
@@ -937,7 +957,8 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 {
 	WriteSpinLocker coreLocker(fCoreLock);
 	atomic_add(&fIdleCoreCount, 1);
-	int32 oldMask = atomic_or((int32*)&fIdleCoreMask, 1U << core->PackageIndex());
+	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
+		(native_cpu_mask_t)1 << core->PackageIndex());
 
 	if (oldMask == 0)
 		fNode->PackageGoesIdle(this);
@@ -954,9 +975,10 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 	// reader can observe fIdleCoreCount > 0 with an empty mask and then
 	// dereference a NULL core from GetIdleCore().
 	atomic_add(&fIdleCoreCount, -1);
-	int32 oldMask = atomic_and((int32*)&fIdleCoreMask, ~(1U << core->PackageIndex()));
+	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
+	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
-	if ((oldMask & ~(1U << core->PackageIndex())) == 0)
+	if ((oldMask & ~clearBit) == 0)
 		fNode->PackageWakesUp(this);
 }
 
@@ -964,7 +986,7 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 CoreEntry*
 PackageEntry::GetIdleCore(int32 index) const
 {
-	uint32 mask = atomic_get((int32*)&fIdleCoreMask);
+	native_cpu_mask_t mask = scheduler_atomic_get(&fIdleCoreMask);
 	int32 firstBit = -1;
 
 	// Find the N-th set bit (index-th)
@@ -972,8 +994,8 @@ PackageEntry::GetIdleCore(int32 index) const
 		if (mask == 0)
 			return NULL;
 
-		firstBit = __builtin_ctz(mask);
-		mask &= ~(1U << firstBit);
+		firstBit = scheduler_ctz(mask);
+		mask &= ~((native_cpu_mask_t)1 << firstBit);
 	}
 
 	if (firstBit != -1)
@@ -1159,12 +1181,12 @@ DebugDumper::DumpIdleCoresInPackage(PackageEntry* package)
 {
 	kprintf("%-7" B_PRId32 " ", package->fPackageID);
 
-	uint32 mask = package->IdleCoreMask();
+	native_cpu_mask_t mask = package->IdleCoreMask();
 	if (mask != 0) {
 		bool first = true;
 		while (mask != 0) {
-			int32 bit = __builtin_ctz(mask);
-			mask &= ~(1U << bit);
+			int32 bit = scheduler_ctz(mask);
+			mask &= ~((native_cpu_mask_t)1 << bit);
 
 			CoreEntry* core = package->GetCore(bit);
 			kprintf("%s%" B_PRId32, first ? "" : ", ", core->ID());

@@ -290,10 +290,14 @@ ThreadData::ComputeQuantum() const
 	const bigtime_t kDisplayQuantum = max_c(Scheduler::MinimalQuantum(),
 		kMinGranularity);
 
-	// Approximation is intentional to avoid locking overhead on the fast path
-	int32 load = fCore->GetLoad();
-	int32 threadCount = fCore->ThreadCount();
-	int32 cpuCount = fCore->CPUCount();
+	// Cache fCore once. Without this, a concurrent MigrateTo() can change
+	// fCore between the three calls below, mixing data from two different
+	// CoreEntry objects. The reads are still individually approximate (no
+	// run-queue lock is held), but they now all refer to the same object.
+	CoreEntry* const core = fCore;
+	int32 load        = core->GetLoad();
+	int32 threadCount = core->ThreadCount();
+	int32 cpuCount    = core->CPUCount();
 
 	bool contention = threadCount > cpuCount;
 	bool overload = threadCount > (cpuCount << 1);
@@ -306,7 +310,7 @@ ThreadData::ComputeQuantum() const
 	// and (b) fEffectivePriority is an int32 that is read and written
 	// atomically on all supported architectures. The result is advisory only
 	// and a stale read merely causes a suboptimal quantum choice for one slice.
-	ThreadData* next = fCore->PeekHead();
+	ThreadData* next = core->PeekHead();
 	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
 		displayReady = true;
 

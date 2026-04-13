@@ -397,9 +397,15 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		unsigned int bestPriority = sGetLink(fBest)->fPriority;
 		if (priority > bestPriority)
 			fBest = element;
-		else if (priority == bestPriority)
-			fBest = NULL;	// Invalidate: fVirtualRuntime is mutable so the
-							// cached winner may be stale. PeekBest will rescan.
+		else if (priority == bestPriority) {
+			// Element is added at the tail. Only update fBest when the new
+			// element compares better (lower virtual runtime) than the cached
+			// winner. If it does not compare better, the existing fBest is
+			// still the optimal candidate and no rescan is needed. This avoids
+			// the O(32) PeekBest rescan on every PushBack to the same level.
+			if (sCompare(element, fBest))
+				fBest = element;
+		}
 	} else {
 		fBest = element;
 	}
@@ -572,8 +578,11 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	const int kMaxSearchCount = 16;
-	int count = 0;
+	// kMaxSearchPerLevel is applied independently per priority level.
+	// The old shared 'count' caused the function to return NULL after
+	// exhausting its budget on one priority level even when matching
+	// elements existed at lower levels.
+	const int kMaxSearchPerLevel = 16;
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
@@ -587,16 +596,14 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 
 			unsigned int priority = i * 32 + bit;
 			Element* current = fHeads[priority];
+			int count = 0;
 
-			while (current != NULL && count++ < kMaxSearchCount) {
+			while (current != NULL && count++ < kMaxSearchPerLevel) {
 				if (predicate(current))
 					return current;
 
 				current = sGetLink(current)->fNext;
 			}
-
-			if (count >= kMaxSearchCount)
-				return NULL;
 		}
 	}
 	return NULL;
