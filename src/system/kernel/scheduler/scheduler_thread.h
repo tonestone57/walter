@@ -290,8 +290,9 @@ ThreadData::SetStolenInterruptTime(bigtime_t interruptTime)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	interruptTime -= fLastInterruptTime;
-	fStolenTime += interruptTime;
+	bigtime_t delta = interruptTime - fLastInterruptTime;
+	if (delta > 0)
+		fStolenTime += delta;
 }
 
 

@@ -47,7 +47,7 @@ private:
 	struct FunctionData {
 			const char*		fFunction;
 
-			uint32			fCalled;
+			int32			fCalled;
 
 			bigtime_t		fTimeInclusive;
 			bigtime_t		fTimeExclusive;

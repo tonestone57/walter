@@ -41,7 +41,7 @@ Profiler::Profiler()
 
 	memset(fFunctionStacks, 0, sizeof(fFunctionStacks));
 
-	for (int32 i = 0; i < smp_get_num_cpus(); i++) {
+	for (int32 i = 0; i < SMP_MAX_CPUS; i++) {
 		fFunctionStacks[i]
 			= new(std::nothrow) FunctionEntry[kMaxFunctionStackEntries];
 		if (fFunctionStacks[i] == NULL) {
@@ -57,13 +57,13 @@ Profiler::Profiler()
 		memset(fFunctionStacks[i], 0,
 			sizeof(FunctionEntry) * kMaxFunctionStackEntries);
 	}
-	memset(fFunctionStackPointers, 0, sizeof(int32) * smp_get_num_cpus());
+	memset(fFunctionStackPointers, 0, sizeof(int32) * SMP_MAX_CPUS);
 }
 
 
 Profiler::~Profiler()
 {
-	for (int32 i = 0; i < smp_get_num_cpus(); i++)
+	for (int32 i = 0; i < SMP_MAX_CPUS; i++)
 		delete[] fFunctionStacks[i];
 	delete[] fFunctionData;
 	delete[] fSortBuffer;
@@ -82,7 +82,7 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 	FunctionData* function = _FindFunction(functionName);
 	if (function == NULL)
 		return false;
-	atomic_add((int32*)&function->fCalled, 1);
+	atomic_add(&function->fCalled, 1);
 
 	int32 stackDepth = fFunctionStackPointers[cpu];
 	if (stackDepth >= (int32)kMaxFunctionStackEntries)
@@ -152,7 +152,7 @@ Profiler::DumpCalled(uint32 maxCount)
 	memcpy(fSortBuffer, fFunctionData, count * sizeof(FunctionData));
 
 	qsort(fSortBuffer, count, sizeof(FunctionData),
-		&_CompareFunctions<uint32, &FunctionData::fCalled>);
+		&_CompareFunctions<int32, &FunctionData::fCalled>);
 
 	if (maxCount > 0)
 		count = std::min(count, maxCount);

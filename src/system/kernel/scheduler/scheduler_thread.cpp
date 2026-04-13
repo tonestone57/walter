@@ -302,7 +302,7 @@ ThreadData::ComputeQuantum() const
 	// quickly and picks up a valid core assignment on the next pass.
 	if (core == NULL) {
 		bigtime_t minQ = Scheduler::MinimalQuantum();
-		return max_c(minQ, (bigtime_t)1200);
+		return max_c(minQ, kMinGranularity);
 	}
 
 	int32 load        = core->GetLoad();
@@ -390,8 +390,8 @@ ThreadData::ComputeQuantumLengths()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	const bigtime_t kBaseSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
 	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
-		const bigtime_t kBaseSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
 		const int32 kBaseWeight = 10;
 		int32 taskWeight = max_c(1, priority);
 
@@ -446,7 +446,8 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 		beneficiaryData->fStolenTime += timeLeft;
 	}
 
-	fTimeUsed = 0;
+	fQuantumStart = system_time();
+	fTimeUsed = ComputeQuantum();
 }
 
 

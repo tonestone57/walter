@@ -418,7 +418,7 @@ choose_core(const ThreadData* threadData)
 				for (int32 i = 0; i < attempts; i++) {
 					int32 index = startIndex + i;
 					if (index >= gPackageCount) index -= gPackageCount;
-				check_package_packing(&gPackageEntries[index], useMask ? &mask : NULL, core,
+					check_package_packing(&gPackageEntries[index], useMask ? &mask : NULL, core,
 						stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD);
 				}
 			}
