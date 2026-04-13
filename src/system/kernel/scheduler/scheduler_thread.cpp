@@ -360,12 +360,15 @@ ThreadData::ComputeQuantum() const
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
 	quantum = quantum * (1500 - fInteractivityScore) / 1000;
 
-	// Clamp: when displayReady=true floorQuantum==maxAllowed==kDisplayQuantum;
-	// the interactivity multiplier can reduce quantum below that floor,
-	// defeating the display-responsiveness guarantee. Always return at least
-	// floorQuantum in the display-ready path.
+	// Clamp to [floor, maxAllowed].
+	// Lower bound: the interactivity multiplier (0.5x at fInteractivityScore=1000)
+	// can push the quantum below the intent floor, so enforce it.
+	// Upper bound: the multiplier (up to 1.5x at fInteractivityScore=0) can push
+	// the quantum above maxAllowed.  For displayReady=true this means a CPU-bound
+	// thread gets up to 1.5 * kDisplayQuantum, delaying the waiting display thread
+	// by 50% beyond the intended ceiling.  Clamp both ends.
 	const bigtime_t kResultFloor = displayReady ? floorQuantum : kMinGranularity;
-	return max_c(quantum, kResultFloor);
+	return min_c(max_c(quantum, kResultFloor), maxAllowed);
 }
 
 

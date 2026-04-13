@@ -882,7 +882,21 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
-			atomic_set(&fLoad, currentLoad);
+			// Use atomic_add rather than atomic_set.  Between the CAS above
+			// (which resets the upper 32 bits of fCombinedLoad to 0 and bumps
+			// the epoch) and here, concurrent AddLoad() calls that detect the
+			// epoch change do atomic_add(&fLoad, load) directly.  An atomic_set
+			// here would silently overwrite those additions, dropping load
+			// contributions for threads that woke up in this window.
+			//
+			// Instead, compute the delta from the last snapshotted value and
+			// add it atomically.  We read fLoad before the CAS; the delta
+			// is (currentLoad - prevLoad).  Any concurrent atomic_add between
+			// the read and here adds on top, which is the desired behaviour.
+			int32 prevLoad = atomic_get(&fLoad);
+			int32 delta = currentLoad - prevLoad;
+			if (delta != 0)
+				atomic_add(&fLoad, delta);
 			break;
 		}
 		oldCombined = actual;

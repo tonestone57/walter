@@ -356,10 +356,22 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	if (fBest != NULL) {
 		unsigned int bestPriority = sGetLink(fBest)->fPriority;
 		if (priority > bestPriority)
-			fBest = element;
+			// New element is at a strictly higher priority level so it always
+			// wins regardless of virtual runtime.  However, set fBest only if
+			// there is no existing element already at this priority (if there
+			// is, a same-priority compare is needed and we must rescan).
+			// Actually: PushFront inserts at HEAD of the priority list.  If
+			// something was already at 'priority', fBest would have had
+			// bestPriority == priority which is handled by the else-if below.
+			// So priority > bestPriority means this is the only element at a
+			// new peak level — it wins unconditionally.
+			fBest = element;  // correct: strictly highest level, no peers yet
 		else if (priority == bestPriority)
 			fBest = NULL;	// Invalidate: fVirtualRuntime is mutable so the
 							// cached winner may be stale. PeekBest will rescan.
+							// Also covers the case where the front-inserted element
+							// might not have the lowest VRuntime among peers at
+							// this level — force a full rescan.
 	} else {
 		fBest = element;
 	}

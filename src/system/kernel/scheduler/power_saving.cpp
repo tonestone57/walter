@@ -400,8 +400,8 @@ choose_core(const ThreadData* threadData)
 
 			if (tryRandomStd && !useMask) {
 				search_global_random([&](PackageEntry* entry) {
-					check_package_packing(entry, NULL, core, stdBestScore,
-						foundNonOverloadedStd, CORE_TYPE_STANDARD);
+				check_package_packing(entry, useMask ? &mask : NULL,
+					core, stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD);
 					return false;
 				});
 			} else if (useMask) {
@@ -418,7 +418,7 @@ choose_core(const ThreadData* threadData)
 				for (int32 i = 0; i < attempts; i++) {
 					int32 index = startIndex + i;
 					if (index >= gPackageCount) index -= gPackageCount;
-					check_package_packing(&gPackageEntries[index], NULL, core,
+				check_package_packing(&gPackageEntries[index], useMask ? &mask : NULL, core,
 						stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD);
 				}
 			}

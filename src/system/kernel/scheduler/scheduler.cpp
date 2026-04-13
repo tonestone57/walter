@@ -185,9 +185,14 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
 			uint32 val = bitmap[i];
 
+				// Use 2ULL to avoid undefined behaviour when the shift amount
+				// reaches 32 on 32-bit targets.  _FindNextPriority uses the
+				// same pattern.  The guard above prevents this branch when
+				// THREAD_MAX_SET_PRIORITY % 32 == 31, but a future change to
+				// THREAD_MAX_SET_PRIORITY could silently violate that.
 			if (i == ThreadRunQueue::kBitmapSize - 1
 				&& (THREAD_MAX_SET_PRIORITY % 32 != 31)) {
-				val &= (1UL << (THREAD_MAX_SET_PRIORITY % 32 + 1)) - 1;
+				val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 			}
 
 			if (val == 0)
@@ -229,7 +234,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 
 			if (i == ThreadRunQueue::kBitmapSize - 1
 				&& (THREAD_MAX_SET_PRIORITY % 32 != 31)) {
-				val &= (1UL << (THREAD_MAX_SET_PRIORITY % 32 + 1)) - 1;
+				val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 			}
 
 			if (val == 0)
