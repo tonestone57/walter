@@ -1554,31 +1554,9 @@ _user_estimate_max_scheduling_latency(thread_id id)
 
 	ThreadData* threadData = thread->scheduler_data;
 	CoreEntry* core = threadData->Core();
-	if (core == NULL) {
-		// Linear scan from a random starting index.
-		//
-		// The old approach used `GetRandom() % gCoreCount` which introduces
-		// modulo bias and could exhaust all 100 retries on sparse topologies
-		// (many disabled cores) without finding a valid core. A single linear
-		// scan from a random offset is O(gCoreCount) worst-case, unbiased,
-		// and guaranteed to find any initialized core that exists.
-		core = NULL;
-		int32 startCore = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())
-			->GetRandom() * (uint64)gCoreCount) >> 32);
-		for (int32 i = 0; i < gCoreCount; i++) {
-			int32 index = startCore + i;
-			if (index >= gCoreCount)
-				index -= gCoreCount;
-			if (gCoreEntries[index].Package() != NULL) {
-				core = &gCoreEntries[index];
-				break;
-			}
-		}
-		// Final safety net: if every core entry has a NULL package (should
-		// be impossible after a successful scheduler_init), fall back to
-		// the current CPU's core which is always guaranteed to be live.
-		if (core == NULL)
-			core = CoreEntry::GetCore(smp_get_current_cpu());
+	if (core == NULL || core->Package() == NULL) {
+		// Fast-path: Just use the current executing core for the estimate
+		core = CoreEntry::GetCore(smp_get_current_cpu());
 	}
 
 	int32 threadCount = core->ThreadCount();

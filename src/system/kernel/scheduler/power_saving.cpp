@@ -369,7 +369,7 @@ choose_core(const ThreadData* threadData)
 				foundNonOverloaded, preferredType);
 		}
 
-		if (core == NULL) {
+		if (core == NULL && !useMask) {
 			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
@@ -409,7 +409,7 @@ choose_core(const ThreadData* threadData)
 					foundNonOverloadedStd, CORE_TYPE_STANDARD);
 			}
 
-			if (core == NULL) {
+			if (core == NULL && !useMask) {
 				int32 startIndex = tryRandomStd
 					? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
 						% gPackageCount
