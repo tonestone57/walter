@@ -358,8 +358,8 @@ ThreadData::ComputeQuantum() const
 	bigtime_t quantum = targetQuantum;
 
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
-	// Fast integer approximation of / 1000 (1048 / 2^20 ~= 0.000999)
-	quantum = (quantum * (1500 - fInteractivityScore) * 1048) >> 20;
+	// Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
+	quantum = (quantum * (1500 - fInteractivityScore) * 1049) >> 20;
 
 	// Clamp to [floor, maxAllowed].
 	// Lower bound: the interactivity multiplier (0.5x at fInteractivityScore=1000)
@@ -486,7 +486,7 @@ ThreadData::_UpdateDeadline()
 
 	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
 	// Fast integer approximation of / 1000
-	slice = (slice * (1500 - fInteractivityScore) * 1048) >> 20;
+	slice = (slice * (1500 - fInteractivityScore) * 1049) >> 20;
 
 	fVirtualDeadline = now + slice;
 

@@ -234,16 +234,6 @@ public:
 		fHashTable = (HashObject**)((uint8*)fBuffer + fSize) - fHashTableSize;
 		fNextAllocation = (uint8*)fBuffer;
 		fRemainingBytes = (addr_t)fHashTable - (addr_t)fBuffer;
-
-		image_info info;
-		if (elf_get_image_info_for_address((addr_t)&scheduler_init, &info)
-				== B_OK) {
-			fKernelStart = (addr_t)info.text;
-			fKernelEnd = (addr_t)info.data + info.data_size;
-		} else {
-			fKernelStart = 0;
-			fKernelEnd = 0;
-		}
 	}
 
 	const scheduling_analysis* Analysis() const
@@ -255,6 +245,8 @@ public:
 	{
 		size = (size + 7) & ~(size_t)7;
 
+		// Explicit bounds check: ensure the new allocation does not overwrite
+		// the hash table, which is stored at the end of the buffer.
 		if (size > fRemainingBytes)
 			return NULL;
 
@@ -579,8 +571,6 @@ private:
 	uint32				fHashTableSize;
 	uint8*				fNextAllocation;
 	size_t				fRemainingBytes;
-	addr_t				fKernelStart;
-	addr_t				fKernelEnd;
 };
 
 
