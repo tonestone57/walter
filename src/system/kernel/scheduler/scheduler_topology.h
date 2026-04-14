@@ -30,14 +30,13 @@ search_local_node(SchedulerNode* node, Action action)
 		return;
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CoreEntry* core = cpu->Core();
 
-	// For small nodes (≤8 packages), pure random sampling wastes most probes
-	// on duplicates at small N (e.g., a 2-package node hit the same package
-	// ~50% of the time). A linear scan from a random start visits every
-	// package exactly once, providing complete coverage with zero wasted
-	// probes and the same O(N) bound.
+	// For small nodes (≤8 packages), use a Rotational Linear Scan.
+	// Starting from the last searched position improves coverage and
+	// reduces collisions between cores searching the same node.
 	if (packagesInNode <= 8) {
-		int32 start = (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
+		int32 start = (core->fLastLocalPackageIndex + 1) % packagesInNode;
 		for (int32 i = 0; i < packagesInNode; i++) {
 			int32 offset = start + i;
 			if (offset >= packagesInNode)
@@ -45,6 +44,7 @@ search_local_node(SchedulerNode* node, Action action)
 			int32 index = nodeBaseIndex + offset;
 			if (index >= gPackageCount)
 				continue;
+			core->fLastLocalPackageIndex = offset;
 			if (action(&gPackageEntries[index]))
 				break;
 		}
@@ -135,6 +135,16 @@ CheckPackageMinimumLoad(PackageEntry* entry, const CPUSet* mask,
 
 	if (candidate != NULL) {
 		int32 score = candidate->GetScore();
+
+		// Load-Threshold Short Circuit: If we find a core with very low load
+		// (e.g., < 15% of kMaxLoad), accept it immediately to save cycles.
+		const int32 kLowLoadThreshold = (kMaxLoad * 15) / 100;
+		if (score <= kLowLoadThreshold) {
+			bestCore = candidate;
+			bestLoad = score;
+			return;
+		}
+
 		if (bestCore == NULL || score < bestLoad) {
 			bestCore = candidate;
 			bestLoad = score;
