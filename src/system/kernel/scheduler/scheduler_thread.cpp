@@ -90,13 +90,17 @@ ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
 			&& (!useMask || mask.GetBit(fThread->previous_cpu->cpu_num))) {
 		CPUEntry* previousCPU
 			= CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
-		if (previousCPU->Core() == core) {
+		if (previousCPU->Core() == core && CPUPriorityHeap::GetKey(previousCPU)
+				<= threadPriority) {
+			// Optimization: Prioritize the previous CPU if it is in the same
+			// core to maximize cache warmth (L1/L2 hits).
 			CoreCPUHeapLocker _(core);
 			if (CPUPriorityHeap::GetKey(previousCPU) < threadPriority) {
 				previousCPU->UpdatePriority(threadPriority);
 				rescheduleNeeded = true;
-				return previousCPU;
-			}
+			} else
+				rescheduleNeeded = false;
+			return previousCPU;
 		}
 	}
 

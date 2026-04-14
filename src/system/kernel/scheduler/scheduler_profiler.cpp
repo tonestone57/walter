@@ -66,10 +66,11 @@ Profiler::Profiler()
 
 Profiler::~Profiler()
 {
-	for (int32 i = 0; i < SMP_MAX_CPUS; i++)
-		delete[] fFunctionStacks[i];
 	delete[] fFunctionData;
 	delete[] fSortBuffer;
+
+	for (int32 i = 0; i < SMP_MAX_CPUS; i++)
+		delete[] fFunctionStacks[i];
 }
 
 
