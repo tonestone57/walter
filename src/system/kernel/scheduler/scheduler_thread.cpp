@@ -215,7 +215,8 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	CPUSet mask = GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
-	for (int32 retry = 0; retry < 5; retry++) {
+	int32 maxRetries = min_c(5, smp_get_num_cpus());
+	for (int32 retry = 0; retry < maxRetries; retry++) {
 		bool rescheduleNeeded = false;
 
 		if (targetCore != NULL && (useMask
@@ -312,17 +313,12 @@ ThreadData::ComputeQuantum() const
 	bool contention = threadCount > cpuCount;
 	bool overload = threadCount > (cpuCount << 1);
 	bool displayReady = false;
-
-	// PeekHead is called without holding the core run queue lock. This is
-	// intentionally racy for performance: (a) a queued thread's ThreadData
-	// remains valid until the thread is destroyed (which requires removal from
-	// all run queues first), so the returned pointer is safe to dereference,
-	// and (b) fEffectivePriority is an int32 that is read and written
-	// atomically on all supported architectures. The result is advisory only
-	// and a stale read merely causes a suboptimal quantum choice for one slice.
-	ThreadData* next = core->PeekHead();
-	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
-		displayReady = true;
+	{
+		CoreRunQueueLocker _(core);
+		ThreadData* next = core->PeekHead();
+		if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+			displayReady = true;
+	}
 
 	// Determine target quantum floor and max allowed based on contention and display
 	bigtime_t floorQuantum = kMediumQuantum;
@@ -358,7 +354,8 @@ ThreadData::ComputeQuantum() const
 	bigtime_t quantum = targetQuantum;
 
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
-	quantum = quantum * (1500 - fInteractivityScore) / 1000;
+	// Fast integer approximation of / 1000 (1048 / 2^20 ~= 0.000999)
+	quantum = (quantum * (1500 - fInteractivityScore) * 1048) >> 20;
 
 	// Clamp to [floor, maxAllowed].
 	// Lower bound: the interactivity multiplier (0.5x at fInteractivityScore=1000)
@@ -484,7 +481,8 @@ ThreadData::_UpdateDeadline()
 	bigtime_t slice = atomic_get64(&sVirtualDeadlineSlices[priority]);
 
 	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
-	slice = slice * (1500 - fInteractivityScore) / 1000;
+	// Fast integer approximation of / 1000
+	slice = (slice * (1500 - fInteractivityScore) * 1048) >> 20;
 
 	fVirtualDeadline = now + slice;
 

@@ -279,7 +279,7 @@ cmd_scheduler(int argc, char** argv)
 
 	if (latencies > 0) {
 		kprintf("scheduling latency after wake up:\n");
-		kprintf("  total #: %" B_PRIdBIGTIME "\n", latencies);
+		kprintf("  total #: %" B_PRId64 "\n", latencies);
 		kprintf("  total:   %" B_PRIdBIGTIME " us\n", totalLatency);
 		kprintf("  average: %#.2f us\n", (double)totalLatency / latencies);
 		kprintf("  min:     %" B_PRIdBIGTIME " us\n", minLatency);
