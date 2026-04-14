@@ -1065,7 +1065,12 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
 
+			// fCores[i] is set by RegisterCore; an enabled bit implies the
+			// core was registered, but guard defensively against a transient
+			// window where the bit is set before the pointer is written.
 			CoreEntry* candidate = fCores[i];
+			if (candidate == NULL)
+				continue;
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)

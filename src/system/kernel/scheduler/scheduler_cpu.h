@@ -110,6 +110,9 @@ public:
 						void			Remove(ThreadData* thread);
 						ThreadData*		PeekThread() const;
 						ThreadData*		PeekIdleThread() const;
+						// Required by UpdatePriorityBoostScalable in scheduler.cpp,
+						// which inspects the run queue bitmap directly for priority boosting.
+	inline				const ThreadRunQueue*	RunQueue() const { return &fRunQueue; }
 
 	inline				ThreadRunQueue::ConstIterator
 										GetConstIterator() const
@@ -227,6 +230,7 @@ public:
 						ThreadData*		PeekThread() const;
 	inline				ThreadData*		PeekHead() const
 											{ return fRunQueue.PeekMaximum(); }
+	inline				const ThreadRunQueue*	RunQueue() const { return &fRunQueue; }
 
 	inline				ThreadRunQueue::ConstIterator
 										GetConstIterator() const

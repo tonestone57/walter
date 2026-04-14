@@ -689,7 +689,12 @@ rebalance_irqs(bool idle)
 	cpu_ent* cpu = get_cpu_struct();
 	CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
 
-	if (pack && sSmallTaskCore != NULL && currentCore != NULL) {
+	// Package() and Node() can be NULL during topology teardown or if a core
+	// was never fully initialised (e.g. it exceeded kMaxCoresPerPackage and
+	// its Init() was skipped).  Defend all three pointer dereferences.
+	if (pack && sSmallTaskCore != NULL && currentCore != NULL
+			&& currentCore->Package() != NULL
+			&& currentCore->Package()->Node() != NULL) {
 		int32 nodeID = currentCore->Package()->Node()->ID();
 		if (atomic_pointer_get(&sSmallTaskCore[nodeID]) == currentCore)
 			return;

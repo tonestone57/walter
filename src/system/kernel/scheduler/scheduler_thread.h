@@ -190,8 +190,11 @@ ThreadData::PreviousCore() const
 	if (fThread->previous_cpu == NULL)
 		return NULL;
 
+	// Core() can transiently return NULL during hot-unplug: the CPUEntry's
+	// fCore pointer is cleared before the CPU is fully removed from its
+	// package.  Guard against this before dereferencing.
 	CoreEntry* core = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num)->Core();
-	if (core->CPUCount() <= 0)
+	if (core == NULL || core->CPUCount() <= 0)
 		return NULL;
 
 	return core;
