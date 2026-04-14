@@ -359,7 +359,8 @@ ThreadData::ComputeQuantum() const
 
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
 	// Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
-	quantum = (quantum * (1500 - fInteractivityScore) * 1049) >> 20;
+	// Ensure 64-bit arithmetic to prevent overflow.
+	quantum = ((int64)quantum * (1500 - fInteractivityScore) * 1049) >> 20;
 
 	// Clamp to [floor, maxAllowed].
 	// Lower bound: the interactivity multiplier (0.5x at fInteractivityScore=1000)
@@ -392,35 +393,28 @@ ThreadData::ComputeQuantumLengths()
 	SCHEDULER_ENTER_FUNCTION();
 
 	const bigtime_t kBaseSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
+	const bigtime_t kQuantum0 = Scheduler::BaseQuantum();
+	const bigtime_t kQuantum1 = kQuantum0 * Scheduler::QuantumMultiplier(0);
+	const bigtime_t kQuantum2 = kQuantum0 * Scheduler::QuantumMultiplier(1);
+
 	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
 		const int32 kBaseWeight = 10;
 		int32 taskWeight = max_c(1, priority);
 
 		atomic_set64(&sVirtualDeadlineSlices[priority],
 			kBaseSlice * kBaseWeight / taskWeight);
-	}
 
-	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
-		const bigtime_t kQuantum0 = Scheduler::BaseQuantum();
 		if (priority >= B_URGENT_DISPLAY_PRIORITY) {
 			atomic_set64(&sQuantumLengths[priority], kQuantum0);
-			continue;
-		}
-
-		const bigtime_t kQuantum1
-			= kQuantum0 * Scheduler::QuantumMultiplier(0);
-		if (priority > B_NORMAL_PRIORITY) {
+		} else if (priority > B_NORMAL_PRIORITY) {
 			atomic_set64(&sQuantumLengths[priority],
 				_ScaleQuantum(kQuantum1, kQuantum0, B_URGENT_DISPLAY_PRIORITY,
 					B_NORMAL_PRIORITY, priority));
-			continue;
+		} else {
+			atomic_set64(&sQuantumLengths[priority],
+				_ScaleQuantum(kQuantum2, kQuantum1, B_NORMAL_PRIORITY,
+					B_IDLE_PRIORITY, priority));
 		}
-
-		const bigtime_t kQuantum2
-			= kQuantum0 * Scheduler::QuantumMultiplier(1);
-		atomic_set64(&sQuantumLengths[priority],
-			_ScaleQuantum(kQuantum2, kQuantum1, B_NORMAL_PRIORITY,
-				B_IDLE_PRIORITY, priority));
 	}
 }
 
@@ -447,6 +441,8 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 		beneficiaryData->fStolenTime += timeLeft;
 	}
 
+	// Exhaust donor slice: we expect the donor to yield or be descheduled
+	// immediately after this call to prevent double-dipping.
 	fQuantumStart = system_time();
 	fTimeUsed = ComputeQuantum();
 }
@@ -486,7 +482,8 @@ ThreadData::_UpdateDeadline()
 
 	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
 	// Fast integer approximation of / 1000
-	slice = (slice * (1500 - fInteractivityScore) * 1049) >> 20;
+	// Ensure 64-bit arithmetic to prevent overflow.
+	slice = ((int64)slice * (1500 - fInteractivityScore) * 1049) >> 20;
 
 	fVirtualDeadline = now + slice;
 
