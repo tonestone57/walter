@@ -35,9 +35,10 @@ static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;
 static void
 _LoadavgUpdate(void *data, int iteration)
 {
-	uint64 threadCount = 0;
-	for (int i = 0; i < gCoreCount; i++)
-		threadCount += gCoreEntries[i].ThreadCount();
+	// Optimization: Use global atomic counter instead of O(N) core scan.
+	int32 threadCount = atomic_get(&gTotalRunnableThreads);
+	if (threadCount < 0)
+		threadCount = 0;
 
 	InterruptsSpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {

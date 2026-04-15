@@ -76,7 +76,7 @@ public:
 						void			Dump() const;
 };
 
-class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
+class alignas(64) CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 public:
 										CPUEntry();
 
@@ -138,6 +138,13 @@ public:
 	inline				int32			ThreadCount() const
 											{ return atomic_get((int32*)&fThreadCount); }
 
+						void			MarkBusy();
+
+						bool			SetReschedulePending()
+											{ return atomic_set(&fReschedulePending, 1) == 0; }
+						void			ClearReschedulePending()
+											{ atomic_set(&fReschedulePending, 0); }
+
 	static inline		CPUEntry*		GetCPU(int32 cpu);
 
 private:
@@ -165,9 +172,12 @@ private:
 						bigtime_t		fMeasureTime;
 
 						bool			fUpdateLoadEvent;
-						uint32			fRandomState;
+						uint64			fRandomState;
 
 						uint32			fRescheduleCount;
+						uint32			fInteractionUpdateCounter;
+
+						int32			fReschedulePending;
 
 public:
 						IRQRebalanceDPC	fRebalanceDPC;
@@ -183,7 +193,7 @@ public:
 						void			Dump();
 };
 
-class CoreEntry {
+class alignas(64) CoreEntry {
 public:
 										CoreEntry();
 
@@ -258,6 +268,8 @@ public:
 	inline				void			CPUGoesIdle(CPUEntry* cpu);
 	inline				void			CPUWakesUp(CPUEntry* cpu);
 
+						CPUEntry*		PeekMinimumLoadCPU();
+
 						void			AddCPU(CPUEntry* cpu);
 						void			RemoveCPU(CPUEntry* cpu,
 											ThreadProcessing&
@@ -331,6 +343,14 @@ public:
 											{ return fPackageCount; }
 	inline				void				SetPackageCount(int32 count)
 											{ fPackageCount = count; }
+
+	inline				void				SetPackageIdle(int32 index, bool idle)
+	{
+		if (idle)
+			atomic_or64((int64*)&fIdlePackageMask, 1ULL << index);
+		else
+			atomic_and64((int64*)&fIdlePackageMask, ~(1ULL << index));
+	}
 
 private:
 						int32				fNodeID;

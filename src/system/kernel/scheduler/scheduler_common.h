@@ -54,7 +54,9 @@ struct ThreadDataVRuntimeCompare {
 		if (b->IsForeground())
 			bRuntime -= kForegroundVRuntimeOffset;
 
-		return aRuntime < bRuntime;
+		// Use signed delta to handle potential wrap-around or
+		// comparison near the zero-boundary robustly.
+		return (int64)(aRuntime - bRuntime) < 0;
 	}
 };
 
@@ -133,6 +135,7 @@ const int kVeryHighLoad = (kMaxLoad + kHighLoad) / 2;
 const int kLoadDifference = kMaxLoad * 20 / 100;
 
 const int32 kDefaultCapacity = 1024;
+const int32 kDefaultCapacityShift = 10;
 const int32 kRandomSearchThreshold = 32;
 
 // Maximum number of packages to scan in O(1)-bounded fallback paths.
@@ -148,6 +151,8 @@ extern bool gTrackCPULoad;
 extern int32 gRandomSamples;
 
 extern int64 gDeadlineBucketSize;
+
+extern atomic_int32 gTotalRunnableThreads;
 
 extern CoreType gMinCoreType;
 extern CoreType gMaxCoreType;

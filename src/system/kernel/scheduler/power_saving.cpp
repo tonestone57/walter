@@ -91,7 +91,8 @@ check_package_small_task(PackageEntry* entry, CoreEntry*& core, int32& bestScore
 				// Candidate is NOT overloaded.
 				// If current is overloaded, we definitely switch.
 				// If current is NOT overloaded, we switch if candidate is BUSIER (packing).
-				if (bestOverloaded || score > bestScore) {
+				// Added hysteresis (kLoadDifference / 4) to prevent ping-ponging.
+				if (bestOverloaded || score > bestScore + (kLoadDifference >> 2)) {
 					core = candidate;
 					bestScore = score;
 				}
@@ -335,6 +336,10 @@ choose_core(const ThreadData* threadData)
 
 	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
+
+	// Optimization: Treat "all enabled" mask as no mask to enable fast sampling
+	if (useMask && Scheduler::IsAllEnabledMask(mask))
+		useMask = false;
 
 	// Thread Coloring: only meaningful on heterogeneous systems.
 	// Skip on homogeneous systems where gMinCoreType == gMaxCoreType to avoid

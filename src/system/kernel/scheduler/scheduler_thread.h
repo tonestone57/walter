@@ -82,6 +82,11 @@ public:
 
 	SCHEDULER_INLINE	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
 
+	SCHEDULER_INLINE	void		SetQuantum(bigtime_t quantum)
+	{
+		fBaseQuantum = quantum;
+	}
+
 	SCHEDULER_INLINE	bool		IsEnqueued() const	{ return fEnqueued; }
 	SCHEDULER_INLINE	void		SetDequeued()
 	{
@@ -378,6 +383,9 @@ ThreadData::GoesAway()
 
 	ASSERT(fReady);
 
+	if (!IsIdle())
+		atomic_add(&gTotalRunnableThreads, -1);
+
 	if (!HasQuantumEnded(false, false)) {
 		fQuickStartCredit = true;
 		fInteractivityScore = min_c(fInteractivityScore + 10, 1000);
@@ -400,6 +408,10 @@ ThreadData::Dies()
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(fReady);
+
+	if (!IsIdle())
+		atomic_add(&gTotalRunnableThreads, -1);
+
 	if (gTrackCoreLoad)
 		fCore->RemoveLoad(fNeededLoad, true);
 	fReady = false;
@@ -460,6 +472,9 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		}
 
 		fReady = true;
+
+		if (!IsIdle())
+			atomic_add(&gTotalRunnableThreads, 1);
 	}
 
 	fThread->state = B_THREAD_READY;

@@ -51,10 +51,19 @@ choose_core(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	CoreEntry* previousCore = threadData->PreviousCore();
+
+	// Stage 0: Hot-Idle Fast Path
+	// If the core we previously ran on is idle and in the same package,
+	// use it immediately to preserve cache warmth and skip expensive search.
+	if (previousCore != NULL && previousCore->GetScore() == 0) {
+		if (previousCore->Package() == CoreEntry::GetCore(smp_get_current_cpu())->Package())
+			return previousCore;
+	}
+
 	// Try to use the previous core if it is idle and we have cache affinity.
 	// We also try to use a core on the same package (L3 cache) or a sibling
 	// core (L2 cache) to minimize cache misses.
-	CoreEntry* previousCore = threadData->PreviousCore();
 	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
 
@@ -196,8 +205,13 @@ choose_core(const ThreadData* threadData)
 				core = NULL;
 		}
 
-		if (core != NULL)
-			return core;
+		if (core != NULL) {
+			// Optimization: If P-cores are moderately busy, allow the fallback
+			// Phase 1 to check if a significantly less loaded Standard core
+			// exists before committing to this P-core.
+			if (!preferMax || core->GetScore() < kMediumLoad)
+				return core;
+		}
 
 		// 3-type intermediate fallback: when P-cores are all overloaded and
 		// STANDARD cores exist, try them before falling to the fully unfiltered
@@ -460,8 +474,11 @@ rebalance(const ThreadData* threadData)
 
 	// Check if the least loaded core is significantly less loaded than
 	// the current one.
-	int32 coreScore = core->GetScore();
-	int32 otherScore = other->GetScore();
+
+	// Normalize scores by performance capacity to ensure fair rebalancing
+	// across heterogeneous core types (P vs E).
+	int32 otherScore = (other->GetScore() << kDefaultCapacityShift) / other->PerformanceScale();
+	int32 coreScore = (core->GetScore() << kDefaultCapacityShift) / core->PerformanceScale();
 
 	if (other == core)
 		return core;
@@ -472,7 +489,11 @@ rebalance(const ThreadData* threadData)
 	// If the current core is significantly lagging behind the other core,
 	// we lower the threshold for migration to improve latency.
 	bool congested = coreVRuntime > 0 && otherVRuntime > coreVRuntime + 20000;
-	int32 threshold = congested ? 0 : kLoadDifference;
+
+	// Heterogeneous Placement Stickiness: scale threshold by core performance
+	int32 threshold = (kLoadDifference * core->PerformanceScale()) >> kDefaultCapacityShift;
+	if (congested)
+		threshold = 0;
 
 	// Advanced NUMA Support:
 	// If the candidate core 'other' is in the thread's Home Package,
@@ -614,7 +635,13 @@ rebalance_irqs(bool idle)
 	CoreEntry* core = CoreEntry::GetCore(cpu->cpu_num);
 	if (other == core)
 		return;
-	if (other->GetScore() + kLoadDifference >= core->GetScore())
+
+	// Normalize scores by performance capacity to ensure fair rebalancing
+	// across heterogeneous core types (P vs E).
+	int32 otherLoad = (other->GetScore() << kDefaultCapacityShift) / other->PerformanceScale();
+	int32 coreLoad = (core->GetScore() << kDefaultCapacityShift) / core->PerformanceScale();
+
+	if (otherLoad + kLoadDifference >= coreLoad)
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);

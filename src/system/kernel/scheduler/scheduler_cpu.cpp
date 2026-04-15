@@ -112,13 +112,34 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 	uint64 seed = system_time() ^ ((uint64)id << 16) ^ ((uint64)id * 0xBF58476D1CE4E5B9ULL);
 	// Step 2: Final mixing (using a different constant)
 	seed = (seed ^ (seed >> 30)) * 0x94D049BB133111EBULL;
-	uint32 finalSeed = (uint32)(seed ^ (seed >> 32));
-	fRandomState = finalSeed ? finalSeed : 1;
+	fRandomState = seed ? seed : 1;
 	// Stagger the boost-scan trigger across CPUs. Without this all CPUs
 	// fire UpdatePriorityBoostScalable at the same reschedule boundary,
 	// causing correlated lock acquisition and measurable latency spikes.
 	fRescheduleCount = (uint32)(id % 10);
+
+	fInteractionUpdateCounter = 0;
+	fReschedulePending = 0;
 }
+
+
+void
+CPUEntry::MarkBusy()
+{
+	// Complements the Idle Mask fix: Clear global bit if node is now full.
+	PackageEntry* package = fCore->Package();
+	if (atomic_add(&package->fIdleCoreCount, -1) == 1) {
+		SchedulerNode* node = package->Node();
+		if (node != NULL) {
+			node->SetPackageIdle(package->NodeIndex(), false);
+			if (node->IdlePackageMask() == 0) {
+				atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << node->Index()));
+			}
+		}
+	}
+}
+
+
 
 
 void
@@ -369,12 +390,12 @@ CPUEntry::TrackLoad(ThreadData* nextThreadData)
 uint32
 CPUEntry::GetRandom()
 {
-	uint32 x = fRandomState;
+	uint64 x = fRandomState;
 	x ^= x << 13;
-	x ^= x >> 17;
-	x ^= x << 5;
+	x ^= x >> 7;
+	x ^= x << 17;
 	fRandomState = x;
-	return x;
+	return (uint32)x;
 }
 
 
@@ -839,6 +860,28 @@ CoreEntry::GetMinVirtualRuntime() const
 }
 
 
+CPUEntry*
+CoreEntry::PeekMinimumLoadCPU()
+{
+	// Optimization: If a physical core is idle, explicitly return the
+	// Primary logical CPU first. This prevents unnecessary resource
+	// contention shared across SMT logical pairs (e.g. L1i/L1d).
+	if (fCPUCount > 1 && GetScore() == 0) {
+		// Find the first set bit in the CPU set to identify the primary logical CPU.
+		for (int i = 0; i < (SMP_MAX_CPUS + 31) / 32; i++) {
+			uint32 bits = fCPUSet.Bits(i);
+			if (bits != 0) {
+				int cpu = i * 32 + (__builtin_ffs(bits) - 1);
+				return &gCPUEntries[cpu];
+			}
+		}
+	}
+
+	CoreCPUHeapLocker _(this);
+	return fCPUHeap.PeekRoot();
+}
+
+
 void
 CoreEntry::SetCapacity(int32 capacity)
 {
@@ -977,8 +1020,16 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
 		(native_cpu_mask_t)1 << core->PackageIndex());
 
-	if (oldMask == 0)
+	if (oldMask == 0) {
+		SchedulerNode* node = fNode;
+		if (node != NULL) {
+			node->SetPackageIdle(fNodeIndex, true);
+			uint64 oldNodeMask = node->IdlePackageMask();
+			if (oldNodeMask == 0)
+				atomic_or64((int64*)&gIdleNodeMask, 1ULL << node->Index());
+		}
 		fNode->PackageGoesIdle(this);
+	}
 }
 
 
@@ -991,7 +1042,16 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 	// before inspecting fIdleCoreMask.  If the mask is cleared first, the
 	// reader can observe fIdleCoreCount > 0 with an empty mask and then
 	// dereference a NULL core from GetIdleCore().
-	atomic_add(&fIdleCoreCount, -1);
+	if (atomic_add(&fIdleCoreCount, -1) == 1) {
+		SchedulerNode* node = fNode;
+		if (node != NULL) {
+			node->SetPackageIdle(fNodeIndex, false);
+			if (node->IdlePackageMask() == 0) {
+				atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << node->Index()));
+			}
+		}
+	}
+
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 

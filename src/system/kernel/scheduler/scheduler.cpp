@@ -64,9 +64,18 @@ CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
 
 bool gHasStandardCores = false;
 
+atomic_int32 gTotalRunnableThreads = 0;
+
 static timer sInteractionTimer;
 static int64 sLastInteractionTime;
 static int32 sDPCPending = 0;
+
+
+static void
+UpdateDeadlineScalingScalable()
+{
+	ThreadData::ComputeQuantumLengths();
+}
 
 
 static void
@@ -78,7 +87,7 @@ update_quantum_lengths_dpc(void* arg)
 		InterruptsBigSchedulerLocker locker;
 		if (atomic_get64(&gDeadlineBucketSize) != targetResolution) {
 			atomic_set64(&gDeadlineBucketSize, targetResolution);
-			ThreadData::ComputeQuantumLengths();
+			UpdateDeadlineScalingScalable();
 		}
 	}
 
@@ -105,16 +114,24 @@ interaction_timer_hook(struct timer* timer)
 void
 scheduler_update_interaction_state()
 {
-	bigtime_t now = system_time();
-	if (now - atomic_get64(&sLastInteractionTime) < 50000)
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+
+	if (cpu->fInteractionUpdateCounter++ % 32 != 0)
 		return;
 
-	atomic_set64(&sLastInteractionTime, now);
+	bigtime_t now = system_time();
+	bigtime_t lastTime = atomic_get64(&sLastInteractionTime);
+	if (now - lastTime < 50000 ||
+		atomic_test_and_set64(&sLastInteractionTime, now, lastTime) != lastTime)
+		return;
 
 	if (atomic_get64(&gDeadlineBucketSize) == 1000) {
-		cancel_timer(&sInteractionTimer);
-		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
-			B_ONE_SHOT_RELATIVE_TIMER);
+		// Avoid timer cancellation storms. Only re-arm if the existing
+		// timer is not already set for a future interval.
+		if (!timer_is_active(&sInteractionTimer)) {
+			add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
+				B_ONE_SHOT_RELATIVE_TIMER);
+		}
 		return;
 	}
 
@@ -127,9 +144,10 @@ scheduler_update_interaction_state()
 			&update_quantum_lengths_dpc, (void*)(addr_t)1000);
 	}
 
-	cancel_timer(&sInteractionTimer);
-	add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
-		B_ONE_SHOT_RELATIVE_TIMER);
+	if (!timer_is_active(&sInteractionTimer)) {
+		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
+			B_ONE_SHOT_RELATIVE_TIMER);
+	}
 }
 
 
@@ -336,8 +354,11 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		if (targetCPU->ID() == smp_get_current_cpu()) {
 			gCPU[targetCPU->ID()].invoke_scheduler = true;
 		} else {
-			smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
-				NULL, SMP_MSG_FLAG_ASYNC);
+			// Only send IPI if one isn't already in flight for this CPU
+			if (targetCPU->SetReschedulePending()) {
+				smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
+					NULL, SMP_MSG_FLAG_ASYNC);
+			}
 		}
 	}
 }
@@ -527,6 +548,7 @@ reschedule(int32 nextState)
 	gCPU[thisCPU].invoke_scheduler = false;
 
 	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);
+	cpu->ClearReschedulePending();
 	CoreEntry* core = CoreEntry::GetCore(thisCPU);
 
 	Thread* oldThread = thread_get_current_thread();
@@ -663,6 +685,14 @@ reschedule(int32 nextState)
 	cpu->TrackLoad(nextThreadData);
 
 	if (nextThread != oldThread || oldThread->cpu->preempted) {
+		// Dynamic Quantum Scaling:
+		// Reduce quantum if the core is crowded to maintain interactivity.
+		int32 load = core->ThreadCount();
+		bigtime_t quantum = Scheduler::BaseQuantum();
+		if (load > 2)
+			quantum = max_c(Scheduler::MinimalQuantum(), quantum / (load - 1));
+		nextThreadData->SetQuantum(quantum);
+
 		cpu->StartQuantumTimer(nextThreadData, oldThread->cpu->preempted);
 
 		oldThread->cpu->preempted = false;

@@ -590,11 +590,11 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// kMaxSearchPerLevel is applied independently per priority level.
-	// The old shared 'count' caused the function to return NULL after
-	// exhausting its budget on one priority level even when matching
-	// elements existed at lower levels.
-	const int kMaxSearchPerLevel = 16;
+	// Scale search depth based on system size.
+	// More cores = more budget to find better affinity.
+	const int kMaxSearchPerLevel = 16 + (smp_get_num_cpus() >> 3);
+
+	int totalBudget = kMaxSearchPerLevel * 2;
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
@@ -610,12 +610,16 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			Element* current = fHeads[priority];
 			int count = 0;
 
-			while (current != NULL && count++ < kMaxSearchPerLevel) {
+			while (current != NULL && count++ < kMaxSearchPerLevel
+					&& totalBudget-- > 0) {
 				if (predicate(current))
 					return current;
 
 				current = sGetLink(current)->fNext;
 			}
+
+			if (totalBudget <= 0)
+				break;
 		}
 	}
 	return NULL;
