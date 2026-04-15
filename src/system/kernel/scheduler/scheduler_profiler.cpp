@@ -38,6 +38,7 @@ Profiler::Profiler()
 		return;
 	}
 	memset(fFunctionData, 0, sizeof(FunctionData) * kMaxFunctionEntries);
+	memset(fHashTable, 0, sizeof(fHashTable));
 
 	memset(fFunctionStacks, 0, sizeof(fFunctionStacks));
 
@@ -47,7 +48,9 @@ Profiler::Profiler()
 		if (fFunctionStacks[i] == NULL) {
 			fStatus = B_NO_MEMORY;
 			delete[] fFunctionData;
+			delete[] fSortBuffer;
 			fFunctionData = NULL;
+			fSortBuffer = NULL;
 			for (int32 j = 0; j < i; j++) {
 				delete[] fFunctionStacks[j];
 				fFunctionStacks[j] = NULL;
@@ -63,10 +66,11 @@ Profiler::Profiler()
 
 Profiler::~Profiler()
 {
-	for (int32 i = 0; i < SMP_MAX_CPUS; i++)
-		delete[] fFunctionStacks[i];
 	delete[] fFunctionData;
 	delete[] fSortBuffer;
+
+	for (int32 i = 0; i < SMP_MAX_CPUS; i++)
+		delete[] fFunctionStacks[i];
 }
 
 
@@ -282,19 +286,26 @@ Profiler::_Dump(FunctionData* data, uint32 count)
 Profiler::FunctionData*
 Profiler::_FindFunction(const char* function)
 {
-	// Single locked scan: the unlocked pre-scan provided no correctness
-	// benefit (writes to fFunctionData need the lock anyway) and scanned
-	// up to kMaxFunctionEntries (1024) entries on every miss.  A single
-	// locked pass is simpler and equally fast since fFunctionLock is
-	// uncontended in normal operation.
+	uint32 hash = 0;
+	for (const char* p = function; *p; p++)
+		hash = (hash * 31 + *p);
+	uint32 index = hash % 256;
+
 	InterruptsSpinLocker _(fFunctionLock);
+	FunctionData* entry = fHashTable[index];
+	if (entry != NULL && !strcmp(entry->fFunction, function))
+		return entry;
+
 	for (uint32 i = 0; i < kMaxFunctionEntries; i++) {
 		if (fFunctionData[i].fFunction == NULL) {
 			fFunctionData[i].fFunction = function;
+			fHashTable[index] = fFunctionData + i;
 			return fFunctionData + i;
 		}
-		if (!strcmp(fFunctionData[i].fFunction, function))
+		if (!strcmp(fFunctionData[i].fFunction, function)) {
+			fHashTable[index] = fFunctionData + i;
 			return fFunctionData + i;
+		}
 	}
 
 	return NULL;

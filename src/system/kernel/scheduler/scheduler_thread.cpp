@@ -90,13 +90,17 @@ ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
 			&& (!useMask || mask.GetBit(fThread->previous_cpu->cpu_num))) {
 		CPUEntry* previousCPU
 			= CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
-		if (previousCPU->Core() == core) {
+		if (previousCPU->Core() == core && CPUPriorityHeap::GetKey(previousCPU)
+				<= threadPriority) {
+			// Optimization: Prioritize the previous CPU if it is in the same
+			// core to maximize cache warmth (L1/L2 hits).
 			CoreCPUHeapLocker _(core);
 			if (CPUPriorityHeap::GetKey(previousCPU) < threadPriority) {
 				previousCPU->UpdatePriority(threadPriority);
 				rescheduleNeeded = true;
-				return previousCPU;
-			}
+			} else
+				rescheduleNeeded = false;
+			return previousCPU;
 		}
 	}
 
@@ -215,7 +219,8 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	CPUSet mask = GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
-	for (int32 retry = 0; retry < 5; retry++) {
+	int32 maxRetries = min_c(5, smp_get_num_cpus());
+	for (int32 retry = 0; retry < maxRetries; retry++) {
 		bool rescheduleNeeded = false;
 
 		if (targetCore != NULL && (useMask
@@ -312,17 +317,12 @@ ThreadData::ComputeQuantum() const
 	bool contention = threadCount > cpuCount;
 	bool overload = threadCount > (cpuCount << 1);
 	bool displayReady = false;
-
-	// PeekHead is called without holding the core run queue lock. This is
-	// intentionally racy for performance: (a) a queued thread's ThreadData
-	// remains valid until the thread is destroyed (which requires removal from
-	// all run queues first), so the returned pointer is safe to dereference,
-	// and (b) fEffectivePriority is an int32 that is read and written
-	// atomically on all supported architectures. The result is advisory only
-	// and a stale read merely causes a suboptimal quantum choice for one slice.
-	ThreadData* next = core->PeekHead();
-	if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
-		displayReady = true;
+	{
+		CoreRunQueueLocker _(core);
+		ThreadData* next = core->PeekHead();
+		if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+			displayReady = true;
+	}
 
 	// Determine target quantum floor and max allowed based on contention and display
 	bigtime_t floorQuantum = kMediumQuantum;
@@ -358,7 +358,9 @@ ThreadData::ComputeQuantum() const
 	bigtime_t quantum = targetQuantum;
 
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
-	quantum = quantum * (1500 - fInteractivityScore) / 1000;
+	// Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
+	// Ensure 64-bit arithmetic to prevent overflow.
+	quantum = ((int64)quantum * (1500 - fInteractivityScore) * 1049) >> 20;
 
 	// Clamp to [floor, maxAllowed].
 	// Lower bound: the interactivity multiplier (0.5x at fInteractivityScore=1000)
@@ -391,35 +393,28 @@ ThreadData::ComputeQuantumLengths()
 	SCHEDULER_ENTER_FUNCTION();
 
 	const bigtime_t kBaseSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
+	const bigtime_t kQuantum0 = Scheduler::BaseQuantum();
+	const bigtime_t kQuantum1 = kQuantum0 * Scheduler::QuantumMultiplier(0);
+	const bigtime_t kQuantum2 = kQuantum0 * Scheduler::QuantumMultiplier(1);
+
 	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
 		const int32 kBaseWeight = 10;
 		int32 taskWeight = max_c(1, priority);
 
 		atomic_set64(&sVirtualDeadlineSlices[priority],
 			kBaseSlice * kBaseWeight / taskWeight);
-	}
 
-	for (int32 priority = 0; priority <= THREAD_MAX_SET_PRIORITY; priority++) {
-		const bigtime_t kQuantum0 = Scheduler::BaseQuantum();
 		if (priority >= B_URGENT_DISPLAY_PRIORITY) {
 			atomic_set64(&sQuantumLengths[priority], kQuantum0);
-			continue;
-		}
-
-		const bigtime_t kQuantum1
-			= kQuantum0 * Scheduler::QuantumMultiplier(0);
-		if (priority > B_NORMAL_PRIORITY) {
+		} else if (priority > B_NORMAL_PRIORITY) {
 			atomic_set64(&sQuantumLengths[priority],
 				_ScaleQuantum(kQuantum1, kQuantum0, B_URGENT_DISPLAY_PRIORITY,
 					B_NORMAL_PRIORITY, priority));
-			continue;
+		} else {
+			atomic_set64(&sQuantumLengths[priority],
+				_ScaleQuantum(kQuantum2, kQuantum1, B_NORMAL_PRIORITY,
+					B_IDLE_PRIORITY, priority));
 		}
-
-		const bigtime_t kQuantum2
-			= kQuantum0 * Scheduler::QuantumMultiplier(1);
-		atomic_set64(&sQuantumLengths[priority],
-			_ScaleQuantum(kQuantum2, kQuantum1, B_NORMAL_PRIORITY,
-				B_IDLE_PRIORITY, priority));
 	}
 }
 
@@ -446,6 +441,8 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 		beneficiaryData->fStolenTime += timeLeft;
 	}
 
+	// Exhaust donor slice: we expect the donor to yield or be descheduled
+	// immediately after this call to prevent double-dipping.
 	fQuantumStart = system_time();
 	fTimeUsed = ComputeQuantum();
 }
@@ -484,7 +481,9 @@ ThreadData::_UpdateDeadline()
 	bigtime_t slice = atomic_get64(&sVirtualDeadlineSlices[priority]);
 
 	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
-	slice = slice * (1500 - fInteractivityScore) / 1000;
+	// Fast integer approximation of / 1000
+	// Ensure 64-bit arithmetic to prevent overflow.
+	slice = ((int64)slice * (1500 - fInteractivityScore) * 1049) >> 20;
 
 	fVirtualDeadline = now + slice;
 

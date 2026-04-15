@@ -219,8 +219,8 @@ public:
 		fAnalysis.wait_object_count = 0;
 		fAnalysis.thread_wait_object_count = 0;
 
-		size_t maxObjectSize = max_c(max_c(sizeof(Thread), sizeof(WaitObject)),
-			sizeof(ThreadWaitObject));
+		size_t maxObjectSize = (max_c(max_c(sizeof(Thread), sizeof(WaitObject)),
+			sizeof(ThreadWaitObject)) + 7) & ~(size_t)7;
 		size_t entrySize = maxObjectSize + sizeof(HashObject*);
 		fHashTableSize = size / entrySize;
 		if (fHashTableSize == 0) {
@@ -234,16 +234,6 @@ public:
 		fHashTable = (HashObject**)((uint8*)fBuffer + fSize) - fHashTableSize;
 		fNextAllocation = (uint8*)fBuffer;
 		fRemainingBytes = (addr_t)fHashTable - (addr_t)fBuffer;
-
-		image_info info;
-		if (elf_get_image_info_for_address((addr_t)&scheduler_init, &info)
-				== B_OK) {
-			fKernelStart = (addr_t)info.text;
-			fKernelEnd = (addr_t)info.data + info.data_size;
-		} else {
-			fKernelStart = 0;
-			fKernelEnd = 0;
-		}
 	}
 
 	const scheduling_analysis* Analysis() const
@@ -255,6 +245,8 @@ public:
 	{
 		size = (size + 7) & ~(size_t)7;
 
+		// Explicit bounds check: ensure the new allocation does not overwrite
+		// the hash table, which is stored at the end of the buffer.
 		if (size > fRemainingBytes)
 			return NULL;
 
@@ -568,8 +560,7 @@ private:
 
 	bool _IsInKernelImage(const void* _address)
 	{
-		addr_t address = (addr_t)_address;
-		return address >= fKernelStart && address < fKernelEnd;
+		return IS_KERNEL_ADDRESS((addr_t)_address);
 	}
 
 private:
@@ -580,8 +571,6 @@ private:
 	uint32				fHashTableSize;
 	uint8*				fNextAllocation;
 	size_t				fRemainingBytes;
-	addr_t				fKernelStart;
-	addr_t				fKernelEnd;
 };
 
 
@@ -849,6 +838,8 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 	if ((addr_t)buffer & 0x7) {
 		addr_t diff = (addr_t)buffer & 0x7;
+		if (size < 8 - diff)
+			return B_BAD_VALUE;
 		buffer = (void*)((addr_t)buffer + 8 - diff);
 		size -= 8 - diff;
 	}

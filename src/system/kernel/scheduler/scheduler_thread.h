@@ -592,8 +592,10 @@ ThreadData::UpdateActivity(bigtime_t active)
 		// With this ceiling the gap between a saturated thread and a new
 		// thread is at most MaximumLatency()*1000 in virtual-time units,
 		// after which they are scheduled fairly again as real time advances.
+		// Use a monotonic base to prevent clock skew from causing starvation.
 		const bigtime_t kLookahead = Scheduler::MaximumLatency() * 1000LL;
-		bigtime_t ceiling = system_time() + kLookahead;
+		bigtime_t now = system_time();
+		bigtime_t ceiling = now + kLookahead;
 		if (fVirtualRuntime < ceiling - delta)
 			fVirtualRuntime += delta;
 		else if (fVirtualRuntime < ceiling)

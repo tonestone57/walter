@@ -289,7 +289,7 @@ private:
 						bigtime_t		fLastLoadUpdate;
 
 						int32			fCoreID;
-						PackageEntry*	fPackage;
+						PackageEntry*	fPackage __attribute__((aligned(64)));
 						int32			fPackageIndex;
 
 						CoreType		fType;
@@ -308,6 +308,8 @@ private:
 						int32			fLoad;
 
 						uint32			fScoreFactor;
+
+						int32			fLastLocalPackageIndex;
 
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;

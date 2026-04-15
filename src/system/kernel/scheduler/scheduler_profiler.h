@@ -81,6 +81,7 @@ private:
 
 			FunctionData*	fFunctionData;
 			FunctionData*	fSortBuffer;
+			FunctionData*	fHashTable[256];
 			spinlock		fFunctionLock;
 
 			status_t		fStatus;

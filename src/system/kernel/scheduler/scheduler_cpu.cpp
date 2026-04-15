@@ -660,7 +660,8 @@ CoreEntry::CoreEntry()
 	fLoad(0),
 	fCombinedLoad(0),
 	fLastLoadUpdate(0),
-	fScoreFactor(1 << 16)
+	fScoreFactor(1 << 16),
+	fLastLocalPackageIndex(0)
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -674,6 +675,7 @@ CoreEntry::Init(int32 id, PackageEntry* package)
 	fPackage = package;
 
 	fScoreFactor = (kDefaultCapacity << 16) / fCapacity;
+	fLastLocalPackageIndex = 0;
 
 	fCPUHeap.~CPUPriorityHeap();
 	new(&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
