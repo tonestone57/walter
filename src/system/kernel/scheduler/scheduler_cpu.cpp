@@ -3,6 +3,9 @@
  * Distributed under the terms of the MIT License.
  */
 
+// Patch: Fix node->NodeIndex() calls, PeekMaximumLoadCore null deref,
+// and double-modification of fIdlePackageMask in AddIdleCore / RemoveIdleCore.
+
 
 #include "scheduler_cpu.h"
 
@@ -133,7 +136,7 @@ CPUEntry::MarkBusy()
 		if (node != NULL) {
 			node->SetPackageIdle(package->NodeIndex(), false);
 			if (node->IdlePackageMask() == 0) {
-				atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << node->Index()));
+				atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << node->NodeIndex()));
 			}
 		}
 	}
@@ -1023,14 +1026,15 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 		(native_cpu_mask_t)1 << core->PackageIndex());
 
 	if (oldMask == 0) {
-		SchedulerNode* node = fNode;
-		if (node != NULL) {
-			node->SetPackageIdle(fNodeIndex, true);
-			uint64 oldNodeMask = node->IdlePackageMask();
-			if (oldNodeMask == 0)
-				atomic_or64((int64*)&gIdleNodeMask, 1ULL << node->Index());
-		}
-		fNode->PackageGoesIdle(this);
+		// Package goes idle (first idle core).  Delegate entirely to
+		// PackageGoesIdle so that fIdlePackageMask and gIdleNodeMask are
+		// updated in exactly one place, matching the CoreGoesIdle path.
+		// The previous code called SetPackageIdle AND PackageGoesIdle,
+		// which double-wrote fIdlePackageMask; PackageGoesIdle then saw a
+		// non-zero oldMask and never updated gIdleNodeMask.  It also
+		// called the nonexistent node->Index() causing a compile error.
+		if (fNode != NULL)
+			fNode->PackageGoesIdle(this);
 	}
 }
 
@@ -1044,21 +1048,23 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 	// before inspecting fIdleCoreMask.  If the mask is cleared first, the
 	// reader can observe fIdleCoreCount > 0 with an empty mask and then
 	// dereference a NULL core from GetIdleCore().
-	if (atomic_add(&fIdleCoreCount, -1) == 1) {
-		SchedulerNode* node = fNode;
-		if (node != NULL) {
-			node->SetPackageIdle(fNodeIndex, false);
-			if (node->IdlePackageMask() == 0) {
-				atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << node->Index()));
-			}
-		}
-	}
+	atomic_add(&fIdleCoreCount, -1);
 
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
-	if ((oldMask & ~clearBit) == 0)
-		fNode->PackageWakesUp(this);
+	if ((oldMask & ~clearBit) == 0) {
+		// Package wakes up (last idle core became active).  Delegate to
+		// PackageWakesUp so that fIdlePackageMask and gIdleNodeMask are
+		// updated in exactly one place.
+		// The previous code called SetPackageIdle (which cleared the bit in
+		// fIdlePackageMask) and then PackageWakesUp; PackageWakesUp received
+		// oldMask == 0 from an already-cleared mask and unconditionally
+		// cleared gIdleNodeMask even when other packages in the node were
+		// still idle.  It also called the nonexistent node->Index().
+		if (fNode != NULL)
+			fNode->PackageWakesUp(this);
+	}
 }
 
 
@@ -1209,6 +1215,8 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
 			currentMask &= ~((native_cpu_mask_t)1 << i);
 
 			CoreEntry* candidate = fCores[i];
+			if (candidate == NULL)
+				continue;
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
