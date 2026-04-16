@@ -352,10 +352,6 @@ choose_core(const ThreadData* threadData)
 	bool preferMin = (priority < B_NORMAL_PRIORITY && !isForeground)
 		&& (gMinCoreType != gMaxCoreType);
 
-	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
-	if (useMask && Scheduler::IsAllEnabledMask(mask))
-		useMask = false;
-
 	// Thread Coloring: Search for a core of the preferred type first
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;

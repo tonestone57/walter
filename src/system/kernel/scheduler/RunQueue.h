@@ -366,12 +366,12 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 			// So priority > bestPriority means this is the only element at a
 			// new peak level — it wins unconditionally.
 			fBest = element;  // correct: strictly highest level, no peers yet
-		else if (priority == bestPriority)
+		else
 			fBest = NULL;	// Invalidate: fVirtualRuntime is mutable so the
 							// cached winner may be stale. PeekBest will rescan.
-							// Also covers the case where the front-inserted element
-							// might not have the lowest VRuntime among peers at
-							// this level — force a full rescan.
+							// Also covers same-priority or lower-priority
+							// insertions that could invalidate the optimality
+							// of the cached best element.
 	} else {
 		fBest = element;
 	}

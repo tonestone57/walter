@@ -138,8 +138,6 @@ public:
 	inline				int32			ThreadCount() const
 											{ return atomic_get((int32*)&fThreadCount); }
 
-						void			MarkBusy();
-
 						bool			SetReschedulePending()
 											{ return atomic_set(&fReschedulePending, 1) == 0; }
 						void			ClearReschedulePending()
@@ -221,7 +219,8 @@ public:
 
 	inline				CPUPriorityHeap*	CPUHeap();
 
-	inline				int32			ThreadCount() const;
+	inline				int32			ThreadCount() const
+											{ return atomic_get(const_cast<int32*>(&fTotalThreadCount)); }
 	inline				int32			CoreRunQueueThreadCount() const
 											{ return atomic_get(const_cast<int32*>(&fThreadCount)); }
 
@@ -303,6 +302,7 @@ private:
 
 						spinlock		fQueueLock;
 						int32			fThreadCount;
+						int32			fTotalThreadCount;
 						ThreadRunQueue	fRunQueue;
 
 						int32			fLoad;
@@ -538,20 +538,6 @@ CoreEntry::CPUHeap()
 }
 
 
-inline int32
-CoreEntry::ThreadCount() const
-{
-	SCHEDULER_ENTER_FUNCTION();
-	int32 result = atomic_get(const_cast<int32*>(&fThreadCount))
-		+ atomic_get(const_cast<int32*>(&fCPUCount))
-		- atomic_get(const_cast<int32*>(&fIdleCPUCount));
-	// Three separate atomic reads cannot be made jointly atomic; a concurrent
-	// RemoveCPU can cause transient underflow. Clamp to zero so callers such
-	// as ComputeQuantum() receive a non-negative thread count.
-	return max_c(result, 0);
-}
-
-
 inline void
 CoreEntry::LockRunQueue()
 {
@@ -750,7 +736,10 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 
 	if ((oldMask & ~(1ULL << package->NodeIndex())) == 0) {
 		// node wakes up (last package)
-		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
+		// Read fIdlePackageMask after the clear to confirm the node is not idle.
+		// If a concurrent PackageGoesIdle happened, fIdlePackageMask will be non-zero.
+		if (atomic_get64((int64*)&fIdlePackageMask) == 0)
+			atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
 	}
 }
 
@@ -771,6 +760,7 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 
 	int32 cpuCount = atomic_get(&fCPUCount);
 	ASSERT(atomic_get(&fIdleCPUCount) < cpuCount);
+	atomic_add(&fTotalThreadCount, -1);
 	if (atomic_add(&fIdleCPUCount, 1) == cpuCount - 1)
 		fPackage->CoreGoesIdle(this);
 }
@@ -791,6 +781,7 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	// if RemoveCPU has already decremented fCPUCount it will call
 	// RemoveIdleCore directly, so missing the CoreWakesUp transition here is
 	// safe.
+	atomic_add(&fTotalThreadCount, 1);
 	int32 oldIdleCount = atomic_add(&fIdleCPUCount, -1);
 	if (oldIdleCount == atomic_get(&fCPUCount))
 		fPackage->CoreWakesUp(this);

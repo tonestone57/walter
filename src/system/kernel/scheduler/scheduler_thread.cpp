@@ -310,19 +310,26 @@ ThreadData::ComputeQuantum() const
 		return max_c(minQ, kMinGranularity);
 	}
 
-	int32 load        = core->GetLoad();
-	int32 threadCount = core->ThreadCount();
-	int32 cpuCount    = core->CPUCount();
+	int32 load;
+	int32 threadCount;
+	int32 cpuCount;
 
-	bool contention = threadCount > cpuCount;
-	bool overload = threadCount > (cpuCount << 1);
+	bool contention;
+	bool overload;
 	bool displayReady = false;
 	{
 		CoreRunQueueLocker _(core);
+		load = core->GetLoad();
+		threadCount = core->ThreadCount();
+		cpuCount = core->CPUCount();
+
 		ThreadData* next = core->PeekHead();
 		if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
 			displayReady = true;
 	}
+
+	contention = threadCount > cpuCount;
+	overload = threadCount > (cpuCount << 1);
 
 	// Determine target quantum floor and max allowed based on contention and display
 	bigtime_t floorQuantum = kMediumQuantum;

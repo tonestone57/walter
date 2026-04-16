@@ -126,21 +126,6 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 }
 
 
-void
-CPUEntry::MarkBusy()
-{
-	// Complements the Idle Mask fix: Clear global bit if node is now full.
-	PackageEntry* package = fCore->Package();
-	if (atomic_add(&package->fIdleCoreCount, -1) == 1) {
-		SchedulerNode* node = package->Node();
-		if (node != NULL) {
-			node->SetPackageIdle(package->NodeIndex(), false);
-			if (node->IdlePackageMask() == 0) {
-				atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << node->NodeIndex()));
-			}
-		}
-	}
-}
 
 
 
@@ -659,6 +644,7 @@ CoreEntry::CoreEntry()
 	fCapacity(kDefaultCapacity),
 	fIdleCPUCount(0),
 	fThreadCount(0),
+	fTotalThreadCount(0),
 	fActiveTime(0),
 	fLoad(0),
 	fCombinedLoad(0),
@@ -694,6 +680,7 @@ CoreEntry::PushFront(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushFront(thread, priority);
 	atomic_add(&fThreadCount, 1);
+	atomic_add(&fTotalThreadCount, 1);
 }
 
 
@@ -704,6 +691,7 @@ CoreEntry::PushBack(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushBack(thread, priority);
 	atomic_add(&fThreadCount, 1);
+	atomic_add(&fTotalThreadCount, 1);
 }
 
 
@@ -718,6 +706,7 @@ CoreEntry::Remove(ThreadData* thread)
 	thread->SetDequeued();
 
 	atomic_add(&fThreadCount, -1);
+	atomic_add(&fTotalThreadCount, -1);
 	fRunQueue.Remove(thread);
 }
 
@@ -751,6 +740,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	ASSERT(fCPUCount >= 0);
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
+	// No net change to fTotalThreadCount: +1 for fCPUCount, -1 for fIdleCPUCount
 	atomic_add(&fIdleCPUCount, 1);
 	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
 	if (firstCPU) {
@@ -792,6 +782,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
+	// No net change to fTotalThreadCount: -1 for fCPUCount, +1 for fIdleCPUCount
 	// Decrement fIdleCPUCount unconditionally: AddCPU always increments it
 	// (every CPU starts idle), so RemoveCPU must balance it regardless of
 	// whether the CPU is currently idle or running at removal time.
@@ -1113,7 +1104,6 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 		if (enabledMask == 0)
 			return NULL;
 
-		int32 firstIndex = -1;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
 		if (registeredCores <= 0)
