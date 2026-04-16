@@ -732,15 +732,12 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
 		return;
 
-	uint64 oldMask = atomic_and64((int64*)&fIdlePackageMask, ~(1ULL << package->NodeIndex()));
+	atomic_and64((int64*)&fIdlePackageMask, ~(1ULL << package->NodeIndex()));
 
-	if ((oldMask & ~(1ULL << package->NodeIndex())) == 0) {
-		// node wakes up (last package)
-		// Read fIdlePackageMask after the clear to confirm the node is not idle.
-		// If a concurrent PackageGoesIdle happened, fIdlePackageMask will be non-zero.
-		if (atomic_get64((int64*)&fIdlePackageMask) == 0)
-			atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
-	}
+	// Read-after-confirmation pattern: clear the bit first, then confirm the node
+	// is still not idle before clearing its bit in gIdleNodeMask.
+	if (atomic_get64((int64*)&fIdlePackageMask) == 0)
+		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
 }
 
 

@@ -410,13 +410,15 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		if (priority > bestPriority)
 			fBest = element;
 		else if (priority == bestPriority) {
-			// Element is added at the tail. Only update fBest when the new
-			// element compares better (lower virtual runtime) than the cached
-			// winner. If it does not compare better, the existing fBest is
-			// still the optimal candidate and no rescan is needed. This avoids
-			// the O(32) PeekBest rescan on every PushBack to the same level.
+			// Element is added at the tail. If it compares better (lower
+			// virtual runtime) than the cached winner, update fBest.  If not,
+			// the existing fBest might still be optimal, but since
+			// virtual runtime is mutable, the cached winner could be stale.
+			// Invalidate the cache to force a rescan on next PeekBest.
 			if (sCompare(element, fBest))
 				fBest = element;
+			else
+				fBest = NULL;
 		}
 	} else {
 		fBest = element;
