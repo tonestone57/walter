@@ -126,6 +126,7 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 }
 
 
+void
 
 
 
@@ -644,7 +645,6 @@ CoreEntry::CoreEntry()
 	fCapacity(kDefaultCapacity),
 	fIdleCPUCount(0),
 	fThreadCount(0),
-	fTotalThreadCount(0),
 	fActiveTime(0),
 	fLoad(0),
 	fCombinedLoad(0),
@@ -680,7 +680,6 @@ CoreEntry::PushFront(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushFront(thread, priority);
 	atomic_add(&fThreadCount, 1);
-	atomic_add(&fTotalThreadCount, 1);
 }
 
 
@@ -691,7 +690,6 @@ CoreEntry::PushBack(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushBack(thread, priority);
 	atomic_add(&fThreadCount, 1);
-	atomic_add(&fTotalThreadCount, 1);
 }
 
 
@@ -706,7 +704,6 @@ CoreEntry::Remove(ThreadData* thread)
 	thread->SetDequeued();
 
 	atomic_add(&fThreadCount, -1);
-	atomic_add(&fTotalThreadCount, -1);
 	fRunQueue.Remove(thread);
 }
 
@@ -740,7 +737,6 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	ASSERT(fCPUCount >= 0);
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
-	// No net change to fTotalThreadCount: +1 for fCPUCount, -1 for fIdleCPUCount
 	atomic_add(&fIdleCPUCount, 1);
 	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
 	if (firstCPU) {
@@ -782,7 +778,6 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	// No net change to fTotalThreadCount: -1 for fCPUCount, +1 for fIdleCPUCount
 	// Decrement fIdleCPUCount unconditionally: AddCPU always increments it
 	// (every CPU starts idle), so RemoveCPU must balance it regardless of
 	// whether the CPU is currently idle or running at removal time.
@@ -1104,6 +1099,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 		if (enabledMask == 0)
 			return NULL;
 
+		int32 firstIndex = -1;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
 		if (registeredCores <= 0)
@@ -1114,21 +1110,30 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 		// For 32 cores: 4 + 7.5 = 11 attempts.
 		const int kMaxAttempts = 4 + (3 * (31 - __builtin_clz(registeredCores))) / 2;
 
-		while (attempts++ < kMaxAttempts) {
+		while (attempts < kMaxAttempts) {
 			// Select a random bit index based on registered cores to avoid sparse array slots
 			int32 i = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
 				* registeredCores) >> 32);
 
-			// Check if this core is enabled
-			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
+			CoreEntry* candidate = fCores[i];
+			if (candidate == NULL) {
+				attempts++;
+				continue;
+			}
+
+			if (i == firstIndex)
 				continue;
 
-			// fCores[i] is set by RegisterCore; an enabled bit implies the
-			// core was registered, but guard defensively against a transient
-			// window where the bit is set before the pointer is written.
-			CoreEntry* candidate = fCores[i];
-			if (candidate == NULL)
+			// Check if this core is enabled
+			if (!(((native_cpu_mask_t)1 << i) & enabledMask)) {
+				attempts++;
 				continue;
+			}
+
+			if (firstIndex == -1)
+				firstIndex = i;
+
+			attempts++;
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)

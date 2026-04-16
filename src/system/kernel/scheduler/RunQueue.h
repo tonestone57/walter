@@ -409,17 +409,14 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		unsigned int bestPriority = sGetLink(fBest)->fPriority;
 		if (priority > bestPriority)
 			fBest = element;
-		else if (priority == bestPriority) {
-			// Element is added at the tail. If it compares better (lower
-			// virtual runtime) than the cached winner, update fBest.  If not,
-			// the existing fBest might still be optimal, but since
-			// virtual runtime is mutable, the cached winner could be stale.
-			// Invalidate the cache to force a rescan on next PeekBest.
-			if (sCompare(element, fBest))
-				fBest = element;
-			else
-				fBest = NULL;
-		}
+		else if (priority == bestPriority && sCompare(element, fBest))
+			fBest = element;
+		else
+			fBest = NULL;	// Invalidate: fVirtualRuntime is mutable so the
+							// cached winner may be stale. PeekBest will rescan.
+							// Also covers same-priority or lower-priority
+							// insertions that could invalidate the optimality
+							// of the cached best element.
 	} else {
 		fBest = element;
 	}
