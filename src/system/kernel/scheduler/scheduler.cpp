@@ -1151,13 +1151,9 @@ init()
 
 	// These arrays are only used for initialization and can be freed now.
 	ArrayDeleter<int32> cpuToCoreDeleter(sCPUToCore);
-	sCPUToCore = NULL;
 	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
-	sCPUToPackage = NULL;
 	ArrayDeleter<int32> cpuToClusterDeleter(sCPUToCluster);
-	sCPUToCluster = NULL;
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
-	sPackageToNode = NULL;
 
 	if (packageCount > 4096) {
 		dprintf("scheduler: system has too many packages (%" B_PRId32 " > 4096). "
@@ -1485,6 +1481,11 @@ init()
 	cpuEntriesDeleter.Detach();
 	coreEntriesDeleter.Detach();
 	packageEntriesDeleter.Detach();
+
+	sCPUToCore = NULL;
+	sCPUToPackage = NULL;
+	sCPUToCluster = NULL;
+	sPackageToNode = NULL;
 
 	return B_OK;
 }

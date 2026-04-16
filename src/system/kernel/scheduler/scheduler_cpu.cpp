@@ -127,11 +127,6 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 
 
 void
-
-
-
-
-void
 CPUEntry::Start()
 {
 	fThreadCount = 0;
@@ -915,6 +910,12 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch; // Load reset to 0
 
+		// Read fLoad BEFORE the CAS. Concurrent AddLoad() calls that detect the
+		// epoch change AFTER the CAS will do atomic_add(&fLoad, load) directly.
+		// By reading it here, we ensure that any load added to fLoad before
+		// we reset fCombinedLoad is accounted for in our delta calculation.
+		int32 prevLoad = atomic_get(&fLoad);
+
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
@@ -926,10 +927,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			// contributions for threads that woke up in this window.
 			//
 			// Instead, compute the delta from the last snapshotted value and
-			// add it atomically.  We read fLoad before the CAS; the delta
-			// is (currentLoad - prevLoad).  Any concurrent atomic_add between
-			// the read and here adds on top, which is the desired behaviour.
-			int32 prevLoad = atomic_get(&fLoad);
+			// add it atomically.
 			int32 delta = currentLoad - prevLoad;
 			if (delta != 0)
 				atomic_add(&fLoad, delta);
