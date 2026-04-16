@@ -1098,6 +1098,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > 8) {
+		CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 		int32 firstIndex = -1;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
@@ -1111,8 +1112,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 
 		while (attempts++ < kMaxAttempts) {
 			// Select a random bit index based on registered cores to avoid sparse array slots
-			int32 i = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-				* registeredCores) >> 32);
+			int32 i = (int32)(((uint64)cpu->GetRandom() * registeredCores) >> 32);
 
 			CoreEntry* candidate = fCores[i];
 			if (candidate == NULL)
@@ -1184,6 +1184,7 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > 8) {
+		CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 		int32 firstIndex = -1;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
@@ -1196,8 +1197,7 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
 
 		while (attempts++ < kMaxAttempts) {
 			// Select a random bit index based on registered cores
-			int32 i = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-				* registeredCores) >> 32);
+			int32 i = (int32)(((uint64)cpu->GetRandom() * registeredCores) >> 32);
 
 			CoreEntry* candidate = fCores[i];
 			if (candidate == NULL)
