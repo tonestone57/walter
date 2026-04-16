@@ -1006,9 +1006,9 @@ void
 PackageEntry::AddIdleCore(CoreEntry* core)
 {
 	WriteSpinLocker coreLocker(fCoreLock);
-	atomic_add(&fIdleCoreCount, 1);
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
 		(native_cpu_mask_t)1 << core->PackageIndex());
+	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
 		// Package goes idle (first idle core).  Delegate entirely to

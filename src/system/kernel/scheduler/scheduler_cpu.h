@@ -679,13 +679,14 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	atomic_add(&fIdleCoreCount, 1);
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
 		(native_cpu_mask_t)1 << core->PackageIndex());
+	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
 		// package goes idle (first core)
-		fNode->PackageGoesIdle(this);
+		if (fNode != NULL)
+			fNode->PackageGoesIdle(this);
 	}
 }
 
@@ -695,7 +696,9 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Decrement the count BEFORE clearing the mask bit.
 	atomic_add(&fIdleCoreCount, -1);
+
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
@@ -704,7 +707,8 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	// after clearing this core's bit the mask becomes zero.
 	if ((oldMask & ~clearBit) == 0) {
 		// package wakes up (last idle core becomes active)
-		fNode->PackageWakesUp(this);
+		if (fNode != NULL)
+			fNode->PackageWakesUp(this);
 	}
 }
 
@@ -773,16 +777,13 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	// Capture the old idle count atomically, then read fCPUCount afterwards.
-	// Reading fCPUCount before the atomic_add creates a window where a
-	// concurrent RemoveCPU can decrement fCPUCount between our read and our
-	// add, producing a stale comparison.  Reading it after narrows the window:
-	// if RemoveCPU has already decremented fCPUCount it will call
-	// RemoveIdleCore directly, so missing the CoreWakesUp transition here is
-	// safe.
+	// Snapshot fCPUCount before the atomic_add. Reading it after creates a
+	// window where a concurrent RemoveCPU can decrement fCPUCount, leading
+	// to a spurious CoreWakesUp call if oldIdleCount matches the new,
+	// smaller fCPUCount.
+	int32 cpuCount = atomic_get(&fCPUCount);
 	atomic_add(&fTotalThreadCount, 1);
-	int32 oldIdleCount = atomic_add(&fIdleCPUCount, -1);
-	if (oldIdleCount == atomic_get(&fCPUCount))
+	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 

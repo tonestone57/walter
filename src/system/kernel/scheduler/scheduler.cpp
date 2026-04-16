@@ -899,6 +899,11 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
 					B_PRId32 ")\n", node->id, cpuCount);
 				return;
 			}
+			if (coreID >= cpuCount) {
+				dprintf("scheduler: core index %d out of bounds (max %"
+					B_PRId32 ")\n", coreID, cpuCount);
+				return;
+			}
 			sCPUToCore[node->id] = coreID;
 			sCPUToPackage[node->id] = packageID;
 			if (sCPUToCluster != NULL)
@@ -1146,9 +1151,13 @@ init()
 
 	// These arrays are only used for initialization and can be freed now.
 	ArrayDeleter<int32> cpuToCoreDeleter(sCPUToCore);
+	sCPUToCore = NULL;
 	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
+	sCPUToPackage = NULL;
 	ArrayDeleter<int32> cpuToClusterDeleter(sCPUToCluster);
+	sCPUToCluster = NULL;
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
+	sPackageToNode = NULL;
 
 	if (packageCount > 4096) {
 		dprintf("scheduler: system has too many packages (%" B_PRId32 " > 4096). "
