@@ -479,11 +479,6 @@ CPUEntry::_TryStealWork()
 		return stolen;
 
 	// Phase 3: The Global Hail Mary (Random)
-	// stolen is guaranteed NULL by the early return above, but reset it
-	// explicitly so the phase boundary is self-documenting and safe against
-	// future refactoring that might restructure or inline the guard.
-	stolen = NULL;
-
 	// Target: Any core in the system (4096 cores).
 	// Method: Logarithmic Formula
 	// Why: This is the last resort. If the local node is empty, you are willing to pay
@@ -1096,13 +1091,13 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 	CoreEntry* minEntry = NULL;
 	int32 minLoad = -1;
 
+	native_cpu_mask_t enabledMask = scheduler_atomic_get((native_cpu_mask_t*)&fEnabledCoreMask);
+	if (enabledMask == 0)
+		return NULL;
+
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > 8) {
-		native_cpu_mask_t enabledMask = scheduler_atomic_get((native_cpu_mask_t*)&fEnabledCoreMask);
-		if (enabledMask == 0)
-			return NULL;
-
 		int32 firstIndex = -1;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
@@ -1153,10 +1148,10 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 	}
 
 	// Linear Scan (Robust Path for small clusters or fallback)
-	native_cpu_mask_t enabledMask = scheduler_atomic_get((native_cpu_mask_t*)&fEnabledCoreMask);
-	while (enabledMask != 0) {
-		int32 i = scheduler_ctz(enabledMask);
-		enabledMask &= ~((native_cpu_mask_t)1 << i);
+	native_cpu_mask_t currentEnabledMask = enabledMask;
+	while (currentEnabledMask != 0) {
+		int32 i = scheduler_ctz(currentEnabledMask);
+		currentEnabledMask &= ~((native_cpu_mask_t)1 << i);
 
 		CoreEntry* candidate = fCores[i];
 		if (candidate == NULL)
@@ -1186,6 +1181,58 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
 	if (enabledMask == 0)
 		return NULL;
 
+	// Use "Power of Two Choices" random sampling if the core count is large.
+	// This avoids cache pollution and interconnect saturation from scanning all cores.
+	if (fRegisteredCoreCount > 8) {
+		int32 firstIndex = -1;
+		int32 attempts = 0;
+		int32 registeredCores = fRegisteredCoreCount;
+		if (registeredCores <= 0)
+			return NULL;
+
+		// Try to pick two distinct random valid cores.
+		// Use formula: 4 + (3 * log2(N)) / 2
+		const int kMaxAttempts = 4 + (3 * (31 - __builtin_clz(registeredCores))) / 2;
+
+		while (attempts++ < kMaxAttempts) {
+			// Select a random bit index based on registered cores
+			int32 i = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
+				* registeredCores) >> 32);
+
+			CoreEntry* candidate = fCores[i];
+			if (candidate == NULL)
+				continue;
+
+			if (i == firstIndex)
+				continue;
+
+			// Check if this core is enabled
+			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
+				continue;
+
+			if (firstIndex == -1)
+				firstIndex = i;
+
+			if (mask != NULL && !mask->GetBit(candidate->ID()))
+				continue;
+			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
+				continue;
+
+			int32 load = atomic_get(&fCoreLoads[i]);
+
+			// Track the best core across all attempts (Power-of-N-Choices).
+			if (maxEntry == NULL || load > maxLoad) {
+				maxLoad = load;
+				maxEntry = candidate;
+			}
+		}
+
+		// Use the best sampled core if any were found
+		if (maxEntry != NULL)
+			return maxEntry;
+	}
+
+	// Linear Scan (Robust Path for small clusters or fallback)
 	int32 count = scheduler_popcount(enabledMask);
 	int32 startBit = 0;
 

@@ -503,6 +503,10 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Cache bucket size: avoids redundant atomic reads on this hot path.
+	// The value is effectively constant within a scheduling decision.
+	const bigtime_t bucketSize = atomic_get64(&Scheduler::gDeadlineBucketSize);
+
 	if (IsIdle())
 		fEffectivePriority = B_IDLE_PRIORITY;
 	else if (IsRealTime())
@@ -516,10 +520,6 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		bigtime_t diff = fVirtualDeadline - now;
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
-		// Cache bucket size: avoids 3-4 atomic reads per call on this hot path.
-		// The value is effectively constant within a scheduling decision.
-		const bigtime_t bucketSize = atomic_get64(&Scheduler::gDeadlineBucketSize);
-
 		bigtime_t urgencyBoost = (fInteractivityScore * bucketSize) / 1000;
 		diff -= urgencyBoost;
 

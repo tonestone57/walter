@@ -182,6 +182,9 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	static_assert(THREAD_MAX_SET_PRIORITY < ThreadRunQueue::kBitmapSize * 32,
+		"THREAD_MAX_SET_PRIORITY exceeds ThreadRunQueue bitmap capacity");
+
 	// Throttle: only run the boost scan every 10 context switches to reduce overhead.
 	if (cpu->fRescheduleCount++ % 10 != 0)
 		return;
@@ -321,9 +324,12 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		// Snapshot Core() once: a concurrent UnassignCore() between the null
 		// check and the assignment could otherwise store NULL into targetCore,
 		// producing a spurious NULL that ChooseCoreAndCPU must then recover from.
+		// We also check CPUCount() to ensure the core is still enabled.
 		CoreEntry* wakerCore = waker->scheduler_data->Core();
-		if (wakerCore != NULL && wakerCore->GetLoad() < kHighLoad)
+		if (wakerCore != NULL && wakerCore->CPUCount() > 0
+			&& wakerCore->GetLoad() < kHighLoad) {
 			targetCore = wakerCore;
+		}
 	} else if (threadData->Core() != NULL
 		&& (!newOne || !threadData->HasCacheExpired())) {
 		targetCore = threadData->Rebalance();

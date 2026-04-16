@@ -592,9 +592,11 @@ CoreEntry::GetLoad() const
 	if (cpuCount <= 0)
 		return kMaxLoad;
 
-	// Optimization: Avoid division in the common case.
+	// Optimization: Avoid division in the common cases.
 	if (cpuCount == 1)
 		return min_c(load, kMaxLoad);
+	if (cpuCount == 2)
+		return (int32)min_c(load >> 1, kMaxLoad);
 
 	return (int32)min_c(load / cpuCount, kMaxLoad);
 }

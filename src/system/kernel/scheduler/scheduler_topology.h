@@ -79,6 +79,23 @@ search_global_random(Action action)
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	// Bitmask for tracking visited packages to avoid collisions.
+	// For systems with <= 64 packages, use a single uint64 bitmask (fast path).
+	if (gPackageCount <= 64) {
+		uint64 visitedBits = 0;
+		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
+			int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
+
+			if ((visitedBits & (1ULL << i)) != 0)
+				continue;
+			visitedBits |= (1ULL << i);
+
+			samplesTaken++;
+			if (action(&gPackageEntries[i]))
+				break;
+		}
+		return;
+	}
+
 	// Use a smaller fixed buffer on the stack (128 bytes = 1024 packages)
 	// which covers >99% of systems. For massive systems, we skip collision
 	// detection for indices beyond 1024 to save stack space.
