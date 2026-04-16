@@ -645,6 +645,7 @@ CoreEntry::CoreEntry()
 	fCapacity(kDefaultCapacity),
 	fIdleCPUCount(0),
 	fThreadCount(0),
+	fTotalThreadCount(0),
 	fActiveTime(0),
 	fLoad(0),
 	fCombinedLoad(0),
@@ -680,6 +681,7 @@ CoreEntry::PushFront(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushFront(thread, priority);
 	atomic_add(&fThreadCount, 1);
+	atomic_add(&fTotalThreadCount, 1);
 }
 
 
@@ -690,6 +692,7 @@ CoreEntry::PushBack(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushBack(thread, priority);
 	atomic_add(&fThreadCount, 1);
+	atomic_add(&fTotalThreadCount, 1);
 }
 
 
@@ -704,6 +707,7 @@ CoreEntry::Remove(ThreadData* thread)
 	thread->SetDequeued();
 
 	atomic_add(&fThreadCount, -1);
+	atomic_add(&fTotalThreadCount, -1);
 	fRunQueue.Remove(thread);
 }
 
@@ -1110,30 +1114,25 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 		// For 32 cores: 4 + 7.5 = 11 attempts.
 		const int kMaxAttempts = 4 + (3 * (31 - __builtin_clz(registeredCores))) / 2;
 
-		while (attempts < kMaxAttempts) {
+		while (attempts++ < kMaxAttempts) {
 			// Select a random bit index based on registered cores to avoid sparse array slots
 			int32 i = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
 				* registeredCores) >> 32);
 
 			CoreEntry* candidate = fCores[i];
-			if (candidate == NULL) {
-				attempts++;
+			if (candidate == NULL)
 				continue;
-			}
 
 			if (i == firstIndex)
 				continue;
 
 			// Check if this core is enabled
-			if (!(((native_cpu_mask_t)1 << i) & enabledMask)) {
-				attempts++;
+			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
-			}
 
 			if (firstIndex == -1)
 				firstIndex = i;
 
-			attempts++;
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
