@@ -252,8 +252,10 @@ ThreadData::_UpdatePriorityBoost()
 			// altering fCore between the Remove and PushBack calls. Using a
 			// local snapshot ensures both operations target the same object.
 			CoreEntry* core = fCore;
-			core->Remove(this);
-			core->PushBack(this, newPriority);
+			if (core != NULL) {
+				core->Remove(this);
+				core->PushBack(this, newPriority);
+			}
 
 			fEnqueuedInCPURunQueue = false;
 		}

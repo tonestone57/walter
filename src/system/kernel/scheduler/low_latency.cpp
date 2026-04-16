@@ -257,11 +257,15 @@ choose_core(const ThreadData* threadData)
 	int32 homePackageID = threadData->HomePackage();
 	if (core == NULL && homePackageID >= 0 && homePackageID < gPackageCount) {
 		PackageEntry* homePackage = &gPackageEntries[homePackageID];
-		CoreEntry* candidate = homePackage->GetIdleCore();
 
-		if (candidate != NULL) {
-			if (!useMask || candidate->CPUMask().Matches(mask))
-				core = candidate;
+		CoreType preferredType = preferMax ? gMaxCoreType :
+			(preferMin ? gMinCoreType : CORE_TYPE_UNKNOWN);
+
+		CoreEntry* candidate = homePackage->PeekMinimumLoadCore(
+			useMask ? &mask : NULL, preferredType);
+
+		if (candidate != NULL && candidate->GetLoad() == 0) {
+			core = candidate;
 		} else {
 			// If no idle core in home package, check for lightly loaded one.
 			// Pass NULL when !useMask: passing an all-zero CPUSet would cause
@@ -270,7 +274,7 @@ choose_core(const ThreadData* threadData)
 			CoreEntry* bestHomeCore = NULL;
 			int32 bestHomeLoad = -1;
 			CheckPackageMinimumLoad(homePackage, useMask ? &mask : NULL,
-				bestHomeCore, bestHomeLoad);
+				bestHomeCore, bestHomeLoad, preferredType);
 
 			if (bestHomeCore != NULL && bestHomeLoad < kLoadDifference)
 				core = bestHomeCore;

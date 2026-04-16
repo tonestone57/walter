@@ -121,8 +121,15 @@ scheduler_update_interaction_state()
 
 	bigtime_t now = system_time();
 	bigtime_t lastTime = atomic_get64(&sLastInteractionTime);
-	if (now - lastTime < 50000 ||
-		atomic_test_and_set64(&sLastInteractionTime, now, lastTime) != lastTime)
+	bigtime_t threshold = Scheduler::MinimalQuantum();
+
+	while (now - lastTime >= threshold) {
+		if (atomic_test_and_set64(&sLastInteractionTime, now, lastTime) == lastTime)
+			break;
+		lastTime = atomic_get64(&sLastInteractionTime);
+	}
+
+	if (now - lastTime < threshold)
 		return;
 
 	if (atomic_get64(&gDeadlineBucketSize) == 1000) {

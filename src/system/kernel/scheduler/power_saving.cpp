@@ -738,12 +738,14 @@ rebalance_irqs(bool idle)
 		if (tryRandom) {
 			// Phase 2: Local Node
 			currentCore = CoreEntry::GetCore(cpu->cpu_num);
-			if (currentCore != NULL) {
+			if (currentCore != NULL && currentCore->Package() != NULL) {
 				SchedulerNode* node = currentCore->Package()->Node();
-				search_local_node(node, [&](PackageEntry* entry) {
-					CheckPackageMinimumLoad(entry, NULL, other, bestScore);
-					return false;
-				});
+				if (node != NULL) {
+					search_local_node(node, [&](PackageEntry* entry) {
+						CheckPackageMinimumLoad(entry, NULL, other, bestScore);
+						return false;
+					});
+				}
 			}
 
 			// Phase 3: Global Random

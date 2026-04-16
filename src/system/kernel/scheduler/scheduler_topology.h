@@ -74,7 +74,7 @@ search_global_random(Action action)
 	int32 samplesToTake = min_c(gRandomSamples, gPackageCount);
 	int32 samplesTaken = 0;
 	int32 attempts = 0;
-	const int32 kMaxAttempts = samplesToTake * 2;
+	const int32 kMaxAttempts = samplesToTake * 4;
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 

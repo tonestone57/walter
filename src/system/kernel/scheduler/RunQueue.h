@@ -602,7 +602,8 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			Element* current = fHeads[priority];
 			int count = 0;
 
-			while (current != NULL && count++ < kMaxSearchPerLevel
+			int searchLimit = min_c(kMaxSearchPerLevel, totalBudget / 2 + 1);
+			while (current != NULL && count++ < searchLimit
 					&& totalBudget-- > 0) {
 				if (predicate(current))
 					return current;

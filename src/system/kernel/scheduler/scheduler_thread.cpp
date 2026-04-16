@@ -367,7 +367,7 @@ ThreadData::ComputeQuantum() const
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
 	// Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
 	// Ensure 64-bit arithmetic to prevent overflow.
-	quantum = ((int64)quantum * (1500 - fInteractivityScore) * 1049) >> 20;
+	quantum = (int64)quantum * (int64)(1500 - fInteractivityScore) * 1049 >> 20;
 
 	// Clamp to [floor, maxAllowed].
 	// Lower bound: the interactivity multiplier (0.5x at fInteractivityScore=1000)
