@@ -176,6 +176,11 @@ private:
 						uint32			fInteractionUpdateCounter;
 
 						int32			fReschedulePending;
+						// Fix #14: Moved from CoreEntry to eliminate false sharing.
+						// This field is written on every search_local_node call by
+						// the searching CPU.  Placing it in CoreEntry dirtied the
+						// core's hot read-mostly cache line on every sibling CPU.
+						int32			fLastLocalPackageIndex;
 
 public:
 						IRQRebalanceDPC	fRebalanceDPC;
@@ -309,8 +314,6 @@ private:
 
 						uint32			fScoreFactor;
 
-						int32			fLastLocalPackageIndex;
-
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
 
@@ -346,13 +349,10 @@ public:
 	inline				void				SetPackageCount(int32 count)
 											{ fPackageCount = count; }
 
-	inline				void				SetPackageIdle(int32 index, bool idle)
-	{
-		if (idle)
-			atomic_or64((int64*)&fIdlePackageMask, 1ULL << index);
-		else
-			atomic_and64((int64*)&fIdlePackageMask, ~(1ULL << index));
-	}
+	// Fix #13: SetPackageIdle removed — it was never called from any
+	// translation unit.  All idle-mask updates go through PackageGoesIdle /
+	// PackageWakesUp.  Leaving dead code here invited future callers to
+	// bypass the node-level gIdleNodeMask updates performed by those methods.
 
 private:
 						int32				fNodeID;
@@ -783,6 +783,14 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	// smaller fCPUCount.
 	int32 cpuCount = atomic_get(&fCPUCount);
 	atomic_add(&fTotalThreadCount, 1);
+	// Fix #1 (documentation): == cpuCount is intentionally correct here.
+	// atomic_add() returns the OLD value of fIdleCPUCount.  CoreWakesUp must
+	// fire exactly on the transition "fully idle -> first CPU active", which
+	// is when old_count == cpuCount (all CPUs were idle).  Changing this to
+	// == 1 would fire when the *last* idle CPU in an already-active core
+	// starts running — the opposite edge, and the wrong one for CoreWakesUp.
+	// The symmetric CPUGoesIdle check (== cpuCount - 1) confirms the pattern:
+	// both conditions detect the all-idle boundary from their respective sides.
 	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }

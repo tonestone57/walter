@@ -78,7 +78,12 @@ public:
 	SCHEDULER_INLINE	bool		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption);
 	SCHEDULER_INLINE	bool		Dequeue();
 
-	SCHEDULER_INLINE	void		UpdateActivity(bigtime_t active);
+	// Fix #6: Accept an optional pre-computed 'now' timestamp.  The caller
+	// (CPUEntry::UpdateActiveTime) already holds a fresh system_time() result
+	// and can pass it here to eliminate a redundant syscall.  Passing 0 (the
+	// default) falls back to an internal system_time() call for compatibility.
+	SCHEDULER_INLINE	void		UpdateActivity(bigtime_t active,
+								bigtime_t now = 0);
 
 	SCHEDULER_INLINE	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
 
@@ -581,7 +586,7 @@ ThreadData::Dequeue()
 
 
 inline void
-ThreadData::UpdateActivity(bigtime_t active)
+ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -596,7 +601,8 @@ ThreadData::UpdateActivity(bigtime_t active)
 		// after which they are scheduled fairly again as real time advances.
 		// Use a monotonic base to prevent clock skew from causing starvation.
 		const bigtime_t kLookahead = Scheduler::MaximumLatency() * 1000LL;
-		bigtime_t now = system_time();
+		if (now == 0)
+			now = system_time();
 		bigtime_t ceiling = now + kLookahead;
 		if (fVirtualRuntime < ceiling - delta)
 			fVirtualRuntime += delta;

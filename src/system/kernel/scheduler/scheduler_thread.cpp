@@ -317,12 +317,16 @@ ThreadData::ComputeQuantum() const
 	bool contention;
 	bool overload;
 	bool displayReady = false;
+	// Fix #9: GetLoad(), ThreadCount(), and CPUCount() are individually
+	// atomic and do not require the run-queue spinlock.  Only PeekHead()
+	// dereferences the queue's linked list and must be serialised.
+	// Holding CoreRunQueueLocker across all four calls forces three cheap
+	// atomic reads to serialize behind a spinlock acquire on the hot path.
+	load = core->GetLoad();
+	threadCount = core->ThreadCount();
+	cpuCount = core->CPUCount();
 	{
 		CoreRunQueueLocker _(core);
-		load = core->GetLoad();
-		threadCount = core->ThreadCount();
-		cpuCount = core->CPUCount();
-
 		ThreadData* next = core->PeekHead();
 		if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
 			displayReady = true;

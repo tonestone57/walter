@@ -123,6 +123,7 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 
 	fInteractionUpdateCounter = 0;
 	fReschedulePending = 0;
+	fLastLocalPackageIndex = 0;	// Fix #14
 }
 
 
@@ -343,7 +344,10 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
 		fMeasureActiveTime += active;
 		fCore->IncreaseActiveTime(active);
 
-		oldThreadData->UpdateActivity(active);
+		// Fix #6: Compute system_time() once and pass it to UpdateActivity so
+		// the virtual-runtime ceiling uses the same timestamp as the rest of
+		// this scheduling decision.  Avoids a redundant syscall on the hot path.
+		oldThreadData->UpdateActivity(active, system_time());
 	}
 }
 
@@ -640,8 +644,7 @@ CoreEntry::CoreEntry()
 	fLoad(0),
 	fCombinedLoad(0),
 	fLastLoadUpdate(0),
-	fScoreFactor(1 << 16),
-	fLastLocalPackageIndex(0)
+	fScoreFactor(1 << 16)
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -655,7 +658,6 @@ CoreEntry::Init(int32 id, PackageEntry* package)
 	fPackage = package;
 
 	fScoreFactor = (kDefaultCapacity << 16) / fCapacity;
-	fLastLocalPackageIndex = 0;
 
 	fCPUHeap.~CPUPriorityHeap();
 	new(&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
@@ -749,6 +751,13 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
 		// Roll back all state changes made above so the post-panic debugger
 		// does not see a CPU that appears initialised but has no heap entry.
+		// Fix #8 (documentation): The rollback is correct as written.
+		// RemoveIdleCore() decrements PackageEntry::fIdleCoreCount (a per-
+		// package idle-core counter).  The atomic_add at the bottom decrements
+		// CoreEntry::fIdleCPUCount (a per-core idle-CPU counter).  These are
+		// entirely different variables; there is no double-decrement of any
+		// single counter.  This comment guards against "simplification" that
+		// would merge the two undo operations and break one of them.
 		fCPUSet.ClearBitAtomic(cpu->ID());
 		if (firstCPU) {
 			fPackage->RemoveIdleCore(this);
@@ -808,7 +817,12 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// eliminates the latent hazard.
 	}
 
-	fCPUHeap.ModifyKey(cpu, -1);
+	// Fix #4: Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
+	// less than every valid scheduler priority (minimum B_IDLE_PRIORITY == 0),
+	// so the CPU is guaranteed to bubble to the heap root.  The explicit
+	// constant makes the intent clear and prevents silent misbehaviour if the
+	// priority range ever grows to include negative values.
+	fCPUHeap.ModifyKey(cpu, INT32_MIN);
 	ASSERT(fCPUHeap.PeekRoot() == cpu);
 	fCPUHeap.RemoveRoot();
 
@@ -1095,7 +1109,7 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
-	if (fRegisteredCoreCount > 8) {
+	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	// Fix #15
 		CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 		int32 firstIndex = -1;
 		int32 attempts = 0;
@@ -1181,7 +1195,7 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
 
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
-	if (fRegisteredCoreCount > 8) {
+	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	// Fix #15
 		CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 		int32 firstIndex = -1;
 		int32 attempts = 0;

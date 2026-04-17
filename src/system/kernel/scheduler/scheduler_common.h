@@ -138,6 +138,13 @@ const int32 kDefaultCapacity = 1024;
 const int32 kDefaultCapacityShift = 10;
 const int32 kRandomSearchThreshold = 32;
 
+// Fix #15: Named constant for the per-package core scan threshold.
+// Switch to random sampling inside a single package when it holds more than
+// this many registered cores.  Kept lower than kRandomSearchThreshold because
+// individual packages contain far fewer cores than the global package count,
+// and a linear scan of <= 8 cores is always inexpensive.
+const int32 kRandomCoreSearchThreshold = 8;
+
 // Maximum number of packages to scan in O(1)-bounded fallback paths.
 // Referenced by GetLeastIdlePackage (scheduler_cpu.h) and the choose_core /
 // rebalance / rebalance_irqs functions in low_latency.cpp and power_saving.cpp.

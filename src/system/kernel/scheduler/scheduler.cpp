@@ -69,6 +69,13 @@ atomic_int32 gTotalRunnableThreads = 0;
 static timer sInteractionTimer;
 static int64 sLastInteractionTime;
 static int32 sDPCPending = 0;
+// Fix #12: Atomic guard for sInteractionTimer arming.
+// timer_is_active() followed by add_timer() is not atomic: two CPUs can both
+// observe the timer as inactive and call add_timer() concurrently, corrupting
+// the shared timer_entry.  This flag serialises the arm with a compare-and-set
+// so exactly one CPU wins the race.  The flag is cleared by the timer callback
+// before it fires the DPC, allowing future re-arming.
+static int32 sTimerArmed = 0;
 
 
 static void
@@ -98,6 +105,10 @@ update_quantum_lengths_dpc(void* arg)
 static status_t
 interaction_timer_hook(struct timer* timer)
 {
+	// Fix #12: Clear the armed flag before queuing the DPC so that subsequent
+	// calls to scheduler_update_interaction_state() can re-arm if needed.
+	atomic_set(&sTimerArmed, 0);
+
 	// Offload resolution scaling to a DPC to avoid deadlock risk.
 	// Holding InterruptsBigSchedulerLocker (which acquires multiple write locks)
 	// in an interrupt context is unsafe if any CPU already holds a scheduler
@@ -133,9 +144,9 @@ scheduler_update_interaction_state()
 		return;
 
 	if (atomic_get64(&gDeadlineBucketSize) == 1000) {
-		// Avoid timer cancellation storms. Only re-arm if the existing
-		// timer is not already set for a future interval.
-		if (!timer_is_active(&sInteractionTimer)) {
+		// Fix #12: Replace non-atomic timer_is_active()+add_timer() pair
+		// with an atomic test-and-set so only one CPU arms the timer.
+		if (atomic_get_and_set(&sTimerArmed, 1) == 0) {
 			add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 				B_ONE_SHOT_RELATIVE_TIMER);
 		}
@@ -151,7 +162,7 @@ scheduler_update_interaction_state()
 			&update_quantum_lengths_dpc, (void*)(addr_t)1000);
 	}
 
-	if (!timer_is_active(&sInteractionTimer)) {
+	if (atomic_get_and_set(&sTimerArmed, 1) == 0) {
 		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 			B_ONE_SHOT_RELATIVE_TIMER);
 	}
@@ -252,7 +263,21 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	}
 
 	// Check Core RunQueue
-	if (core->CoreRunQueueThreadCount() > 0) {
+	// Fix #10: On an N-way SMT core, all N CPUs previously scanned the shared
+	// core run queue every 10 reschedules, contending on CoreRunQueueLocker N×
+	// more often than necessary.  Gate the scan with round-robin ownership:
+	// only the CPU whose (boost_epoch % cpuCount) matches its modular index
+	// within the core performs the scan.  Every CPU still scans its own
+	// private run queue unconditionally above.
+	{
+		int32 coreCPUCount = max_c(1, core->CPUCount());
+		// fRescheduleCount was post-incremented before the early-return check
+		// at the top of this function; subtract 1 to get the current epoch.
+		uint32 boostEpoch = (cpu->fRescheduleCount - 1) / 10;
+		bool ownsCoreQueueScan =
+			((int32)(boostEpoch % (uint32)coreCPUCount)
+				== (cpu->ID() % coreCPUCount));
+		if (ownsCoreQueueScan && core->CoreRunQueueThreadCount() > 0) {
 		CoreRunQueueLocker locker(core);
 		const ThreadRunQueue* runQueue = core->RunQueue();
 		const uint32* bitmap = runQueue->GetBitmap();
@@ -287,6 +312,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 				bit = fls(val) - 1;
 			}
 		}
+		} // end ownsCoreQueueScan
 	}
 }
 
@@ -1127,11 +1153,12 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 				coresInCurrentNode++;
 			}
 
-			// Use strict > (not >=): for a single-CPU system (cpuCount==1)
-			// the >= form fires when packageCount==0 (0+1>=1==true), preventing
-			// the final packageCount++ and leaving packageCount==0, which causes
-			// a zero-size gPackageEntries allocation.
-			if (packageCount + 1 > cpuCount)
+			// Fix #7: Use >= cpuCount — logically equivalent to the old
+			// "packageCount + 1 > cpuCount" but states the invariant directly:
+			// stop before packageCount reaches cpuCount so that the final
+			// packageCount++ keeps the index within the sPackageToNode allocation
+			// (cpuCount + 1 elements, valid indices 0 .. cpuCount inclusive).
+			if (packageCount >= cpuCount)
 				break;
 			packageCount++; // Finish last package in L3
 		}

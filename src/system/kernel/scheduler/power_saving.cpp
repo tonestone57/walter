@@ -737,7 +737,12 @@ rebalance_irqs(bool idle)
 
 		if (tryRandom) {
 			// Phase 2: Local Node
-			currentCore = CoreEntry::GetCore(cpu->cpu_num);
+			// Fix #5: Do NOT re-read CoreEntry::GetCore() here.  currentCore
+			// was snapshotted at function entry.  Re-reading it after the
+			// SpinLocker unlock creates a TOCTOU window: a concurrent CPU
+			// hot-unplug can change the assignment between the two reads,
+			// producing an inconsistent view of Package() and Node() that
+			// can lead to a NULL dereference or stale-pointer access.
 			if (currentCore != NULL && currentCore->Package() != NULL) {
 				SchedulerNode* node = currentCore->Package()->Node();
 				if (node != NULL) {

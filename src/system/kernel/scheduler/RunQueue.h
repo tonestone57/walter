@@ -602,13 +602,18 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			Element* current = fHeads[priority];
 			int count = 0;
 
-			int searchLimit = min_c(kMaxSearchPerLevel, totalBudget / 2 + 1);
-			while (current != NULL && count++ < searchLimit
-					&& totalBudget-- > 0) {
+			// Fix #11: Give each priority level a fair, equal share of the
+			// total budget.  The previous "/ 2 + 1" formula halved the budget
+			// at every level, causing the second priority band to receive only
+			// half as many probes as the first.  This under-served lower-
+			// priority stealable threads and made work-stealing incomplete.
+			int searchLimit = min_c(kMaxSearchPerLevel, totalBudget);
+			while (current != NULL && count++ < searchLimit) {
 				if (predicate(current))
 					return current;
 
 				current = sGetLink(current)->fNext;
+				totalBudget--;
 			}
 
 			if (totalBudget <= 0)

@@ -30,13 +30,18 @@ search_local_node(SchedulerNode* node, Action action)
 		return;
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-	CoreEntry* core = cpu->Core();
 
-	// For small nodes (≤8 packages), use a Rotational Linear Scan.
-	// Starting from the last searched position improves coverage and
-	// reduces collisions between cores searching the same node.
+	// For small nodes (<=8 packages), use a Rotational Linear Scan.  Starting
+	// from the last searched position improves coverage and reduces collisions
+	// between CPUs searching the same node.
+	//
+	// Fix #14: Use cpu->fLastLocalPackageIndex (per-CPU) rather than the old
+	// core->fLastLocalPackageIndex.  The CoreEntry field was written on every
+	// call by every CPU sharing the core, producing false sharing on the core's
+	// hot read-mostly cache line.  The per-CPU field is private to one CPU so
+	// no cross-CPU invalidation occurs.
 	if (packagesInNode <= 8) {
-		int32 start = (core->fLastLocalPackageIndex + 1) % packagesInNode;
+		int32 start = (cpu->fLastLocalPackageIndex + 1) % packagesInNode;
 		for (int32 i = 0; i < packagesInNode; i++) {
 			int32 offset = start + i;
 			if (offset >= packagesInNode)
@@ -44,16 +49,20 @@ search_local_node(SchedulerNode* node, Action action)
 			int32 index = nodeBaseIndex + offset;
 			if (index >= gPackageCount)
 				continue;
-			core->fLastLocalPackageIndex = offset;
+			cpu->fLastLocalPackageIndex = offset;
 			if (action(&gPackageEntries[index]))
 				break;
 		}
 		return;
 	}
 
-	// For larger nodes use logarithmic random sampling. Duplicate probes
-	// become statistically rare once N is large enough that the birthday
-	// probability over log(N) draws is low.
+	// For larger nodes, use logarithmic random sampling.  Duplicate probes
+	// become statistically rare once N is large enough.
+	//
+	// Fix #2 (documentation): The visitedBits array in search_global_random is
+	// a fixed 128-byte stack allocation (kStackBitmaskSize == 1024 packages).
+	// For systems with >1024 packages deduplication is skipped but the loop
+	// still terminates within kMaxAttempts, bounding stack use unconditionally.
 	const int kMaxLocalAttempts = min_c(packagesInNode,
 		4 + (packagesInNode > 1 ? 31 - __builtin_clz(packagesInNode) : 0));
 	for (int i = 0; i < kMaxLocalAttempts; i++) {

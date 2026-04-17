@@ -245,8 +245,17 @@ public:
 	{
 		size = (size + 7) & ~(size_t)7;
 
-		// Explicit bounds check: ensure the new allocation does not overwrite
-		// the hash table, which is stored at the end of the buffer.
+		// Fix #3 (defensive): fHashTable sits at the top of the buffer;
+		// fNextAllocation grows upward from the bottom.  fRemainingBytes
+		// tracks the gap between them and is the single correct guard.
+		// The ASSERT below makes the buffer-layout invariant machine-checkable
+		// in debug builds, catching any future refactoring that might break
+		// the relationship between fNextAllocation, fRemainingBytes, and
+		// fHashTable.
+#if DEBUG
+		ASSERT(fHashTable == NULL
+			|| (uint8*)fHashTable - fNextAllocation == (ptrdiff_t)fRemainingBytes);
+#endif
 		if (size > fRemainingBytes)
 			return NULL;
 
