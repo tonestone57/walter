@@ -774,7 +774,10 @@ rebalance_irqs(bool idle)
 		return;
 
 	CoreCPUHeapLocker _(other);
-	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
+	CPUEntry* targetCPU = other->CPUHeap()->PeekRoot();
+	if (targetCPU == NULL)
+		return;
+	int32 newCPU = targetCPU->ID();
 	_.Unlock();
 
 	CoreEntry* core = CoreEntry::GetCore(smp_get_current_cpu());

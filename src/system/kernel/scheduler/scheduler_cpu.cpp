@@ -231,7 +231,10 @@ CPUEntry::UpdatePriority(int32 priority)
 	int32 oldPriority = CPUPriorityHeap::GetKey(this);
 	if (oldPriority == priority)
 		return;
+
+	CoreCPUHeapLocker heapLocker(fCore);
 	fCore->CPUHeap()->ModifyKey(this, priority);
+	heapLocker.Unlock();
 
 	if (oldPriority == B_IDLE_PRIORITY)
 		fCore->CPUWakesUp(this);
@@ -746,7 +749,9 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	}
 	fCPUSet.SetBitAtomic(cpu->ID());
 
-	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
+	{
+		CoreCPUHeapLocker heapLocker(this);
+		if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
 		// Roll back all state changes made above so the post-panic debugger
 		// does not see a CPU that appears initialised but has no heap entry.
 		fCPUSet.ClearBitAtomic(cpu->ID());
@@ -760,8 +765,9 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 			atomic_add(&fCPUCount, -1);
 		}
 		atomic_add(&fIdleCPUCount, -1);
-		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
-			cpu->ID());
+			panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
+				cpu->ID());
+		}
 	}
 }
 
@@ -808,9 +814,11 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// eliminates the latent hazard.
 	}
 
-	fCPUHeap.ModifyKey(cpu, -1);
+	CoreCPUHeapLocker heapLocker(this);
+	fCPUHeap.ModifyKey(cpu, INT32_MIN);
 	ASSERT(fCPUHeap.PeekRoot() == cpu);
 	fCPUHeap.RemoveRoot();
+	heapLocker.Unlock();
 
 	ASSERT(cpu->GetLoad() >= 0 && cpu->GetLoad() <= kMaxLoad);
 	ASSERT(fLoad >= 0);

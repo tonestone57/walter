@@ -96,50 +96,52 @@ search_global_random(Action action)
 		return;
 	}
 
-	// Use a smaller fixed buffer on the stack (128 bytes = 1024 packages)
-	// which covers >99% of systems. For massive systems, we skip collision
-	// detection for indices beyond 1024 to save stack space.
-	const int32 kStackBitmaskSize = 1024;
-	uint64 visitedBits[kStackBitmaskSize / 64];
+	{
+		// Use a smaller fixed buffer on the stack (128 bytes = 1024 packages)
+		// which covers >99% of systems. For massive systems, we skip collision
+		// detection for indices beyond 1024 to save stack space.
+		const int32 kStackBitmaskSize = 1024;
+		uint64 visitedBits[kStackBitmaskSize / 64];
 
-	// Always zero the entire array. The conditional initialization above
-	// only cleared as many words as needed for gPackageCount, leaving words
-	// beyond that range uninitialized. Any subsequent access with an index
-	// in [cleared_range, kStackBitmaskSize) read garbage, causing spurious
-	// "already visited" skips. Zeroing all 128 bytes unconditionally is
-	// negligible on the scheduler hot path.
-	memset(visitedBits, 0, sizeof(visitedBits));
+		// Always zero the entire array. The conditional initialization above
+		// only cleared as many words as needed for gPackageCount, leaving words
+		// beyond that range uninitialized. Any subsequent access with an index
+		// in [cleared_range, kStackBitmaskSize) read garbage, causing spurious
+		// "already visited" skips. Zeroing all 128 bytes unconditionally is
+		// negligible on the scheduler hot path.
+		memset(visitedBits, 0, sizeof(visitedBits));
 
-	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-		// Multiplicative random mapping to avoid expensive modulo
-		int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
+		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
+			// Multiplicative random mapping to avoid expensive modulo
+			int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 
-		// Avoid checking the same package twice using the bitmask
-		int32 word = i / 64;
-		int32 bit = i % 64;
+			// Avoid checking the same package twice using the bitmask
+			int32 word = i / 64;
+			int32 bit = i % 64;
 
-		// Deduplication: skip packages already probed this call (within the
-		// stack bitmask range).  For indices beyond kStackBitmaskSize we
-		// cannot deduplicate cheaply, but we still count the probe towards
-		// the budget so the loop terminates in at most kMaxAttempts steps
-		// regardless of gPackageCount.  Previously, indices >= kStackBitmaskSize
-		// never incremented samplesTaken, causing the loop to always run the
-		// full kMaxAttempts (2x samplesToTake) on systems with > 1024 packages.
-		if (i < kStackBitmaskSize) {
-			if ((visitedBits[word] & (1ULL << bit)) != 0)
-				continue;	// Duplicate within bitmask range: do NOT count.
-			visitedBits[word] |= (1ULL << bit);
+			// Deduplication: skip packages already probed this call (within the
+			// stack bitmask range).  For indices beyond kStackBitmaskSize we
+			// cannot deduplicate cheaply, but we still count the probe towards
+			// the budget so the loop terminates in at most kMaxAttempts steps
+			// regardless of gPackageCount.  Previously, indices >= kStackBitmaskSize
+			// never incremented samplesTaken, causing the loop to always run the
+			// full kMaxAttempts (2x samplesToTake) on systems with > 1024 packages.
+			if (i < kStackBitmaskSize) {
+				if ((visitedBits[word] & (1ULL << bit)) != 0)
+					continue;	// Duplicate within bitmask range: do NOT count.
+				visitedBits[word] |= (1ULL << bit);
+			}
+			// Count this probe towards the budget.  For i < kStackBitmaskSize,
+			// only non-duplicate packages reach this line (duplicates hit the
+			// continue above, so the "distinct probes" invariant is maintained).
+			// For i >= kStackBitmaskSize deduplication is skipped and every probe
+			// counts, bounding the loop to at most kMaxAttempts iterations on any
+			// system size.
+			samplesTaken++;
+
+			if (action(&gPackageEntries[i]))
+				break;
 		}
-		// Count this probe towards the budget.  For i < kStackBitmaskSize,
-		// only non-duplicate packages reach this line (duplicates hit the
-		// continue above, so the "distinct probes" invariant is maintained).
-		// For i >= kStackBitmaskSize deduplication is skipped and every probe
-		// counts, bounding the loop to at most kMaxAttempts iterations on any
-		// system size.
-		samplesTaken++;
-
-		if (action(&gPackageEntries[i]))
-			break;
 	}
 }
 

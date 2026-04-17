@@ -247,12 +247,12 @@ public:
 
 		// Explicit bounds check: ensure the new allocation does not overwrite
 		// the hash table, which is stored at the end of the buffer.
-		if (size > fRemainingBytes)
+		if (size > (size_t)((uint8*)fHashTable - fNextAllocation))
 			return NULL;
 
 		void* address = fNextAllocation;
 		fNextAllocation += size;
-		fRemainingBytes -= size;
+		fRemainingBytes = (size_t)((uint8*)fHashTable - fNextAllocation);
 		return address;
 	}
 

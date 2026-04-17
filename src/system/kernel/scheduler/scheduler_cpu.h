@@ -783,7 +783,7 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	// smaller fCPUCount.
 	int32 cpuCount = atomic_get(&fCPUCount);
 	atomic_add(&fTotalThreadCount, 1);
-	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
+	if (atomic_add(&fIdleCPUCount, -1) == 1)
 		fPackage->CoreWakesUp(this);
 }
 
