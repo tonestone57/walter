@@ -85,6 +85,8 @@ public:
 	SCHEDULER_INLINE	void		UpdateActivity(bigtime_t active,
 								bigtime_t now = 0);
 
+	static	bigtime_t	sMaxLatency;
+
 	SCHEDULER_INLINE	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
 
 	SCHEDULER_INLINE	void		SetQuantum(bigtime_t quantum)
@@ -600,7 +602,8 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		// thread is at most MaximumLatency()*1000 in virtual-time units,
 		// after which they are scheduled fairly again as real time advances.
 		// Use a monotonic base to prevent clock skew from causing starvation.
-		const bigtime_t kLookahead = Scheduler::MaximumLatency() * 1000LL;
+		const bigtime_t maxLatency = atomic_get64(&sMaxLatency);
+		const bigtime_t kLookahead = maxLatency * 1000LL;
 		if (now == 0)
 			now = system_time();
 		bigtime_t ceiling = now + kLookahead;

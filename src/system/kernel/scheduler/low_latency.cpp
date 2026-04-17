@@ -51,13 +51,14 @@ choose_core(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* previousCore = threadData->PreviousCore();
 
 	// Stage 0: Hot-Idle Fast Path
 	// If the core we previously ran on is idle and in the same package,
 	// use it immediately to preserve cache warmth and skip expensive search.
 	if (previousCore != NULL && previousCore->GetScore() == 0) {
-		if (previousCore->Package() == CoreEntry::GetCore(smp_get_current_cpu())->Package())
+		if (previousCore->Package() == cpu->Core()->Package())
 			return previousCore;
 	}
 
@@ -157,7 +158,7 @@ choose_core(const ThreadData* threadData)
 					continue;
 
 				PackageEntry* package = &gPackageEntries[globalPackageIndex];
-				core = package->PeekMinimumLoadCore(&mask, preferredType);
+				core = package->PeekMinimumLoadCore(cpu, &mask, preferredType);
 				if (core != NULL && core->GetLoad() == 0)
 					break;
 				core = NULL;
@@ -172,25 +173,25 @@ choose_core(const ThreadData* threadData)
 			bool tryRandom = gPackageCount > kRandomSearchThreshold;
 			if (tryRandom && !useMask) {
 				search_global_random([&](PackageEntry* entry) {
-					CheckPackageMinimumLoad(entry, NULL, core, bestScore,
+					CheckPackageMinimumLoad(cpu, entry, NULL, core, bestScore,
 						preferredType);
 					return false;
 				});
 			} else if (useMask) {
-				CheckMaskedPackagesMinimumLoad(mask, core, bestScore,
+				CheckMaskedPackagesMinimumLoad(cpu, mask, core, bestScore,
 					preferredType);
 			}
 
 			if (core == NULL && !useMask) {
-				int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+				int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
 				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 				for (int32 i = 0; i < attempts; i++) {
 					int32 index = startIndex + i;
 					if (index >= gPackageCount)
 						index -= gPackageCount;
-					CheckPackageMinimumLoad(&gPackageEntries[index], NULL, core,
-						bestScore, preferredType);
+					CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
+						core, bestScore, preferredType);
 				}
 			}
 
@@ -222,27 +223,26 @@ choose_core(const ThreadData* threadData)
 
 			if (tryRandomStd && !useMask) {
 				search_global_random([&](PackageEntry* entry) {
-					CheckPackageMinimumLoad(entry, NULL, core, stdBestScore,
+					CheckPackageMinimumLoad(cpu, entry, NULL, core, stdBestScore,
 						CORE_TYPE_STANDARD);
 					return false;
 				});
 			} else if (useMask) {
-				CheckMaskedPackagesMinimumLoad(mask, core, stdBestScore,
+				CheckMaskedPackagesMinimumLoad(cpu, mask, core, stdBestScore,
 					CORE_TYPE_STANDARD);
 			}
 
 			if (core == NULL && !useMask) {
 				int32 startIndex2 = tryRandomStd
-					? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-						% gPackageCount
+					? cpu->GetRandom() % gPackageCount
 					: 0;
 				int32 attempts2 = min_c(gPackageCount, kMaxFallbackAttempts);
 				for (int32 i = 0; i < attempts2; i++) {
 					int32 index = startIndex2 + i;
 					if (index >= gPackageCount)
 						index -= gPackageCount;
-					CheckPackageMinimumLoad(&gPackageEntries[index], NULL, core,
-						stdBestScore, CORE_TYPE_STANDARD);
+					CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
+						core, stdBestScore, CORE_TYPE_STANDARD);
 				}
 			}
 
@@ -261,7 +261,7 @@ choose_core(const ThreadData* threadData)
 		CoreType preferredType = preferMax ? gMaxCoreType :
 			(preferMin ? gMinCoreType : CORE_TYPE_UNKNOWN);
 
-		CoreEntry* candidate = homePackage->PeekMinimumLoadCore(
+		CoreEntry* candidate = homePackage->PeekMinimumLoadCore(cpu,
 			useMask ? &mask : NULL, preferredType);
 
 		if (candidate != NULL && candidate->GetLoad() == 0) {
@@ -273,7 +273,7 @@ choose_core(const ThreadData* threadData)
 			// NUMA home-package optimization for unconstrained threads.
 			CoreEntry* bestHomeCore = NULL;
 			int32 bestHomeLoad = -1;
-			CheckPackageMinimumLoad(homePackage, useMask ? &mask : NULL,
+			CheckPackageMinimumLoad(cpu, homePackage, useMask ? &mask : NULL,
 				bestHomeCore, bestHomeLoad, preferredType);
 
 			if (bestHomeCore != NULL && bestHomeLoad < kLoadDifference)
@@ -337,18 +337,18 @@ choose_core(const ThreadData* threadData)
 				node = gPackageEntries[homePackageID].Node();
 
 			search_local_node(node, [&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(entry, NULL, bestCore, bestLoad);
+				CheckPackageMinimumLoad(cpu, entry, NULL, bestCore, bestLoad);
 				return false;
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(entry, NULL, bestCore, bestLoad);
+				CheckPackageMinimumLoad(cpu, entry, NULL, bestCore, bestLoad);
 				return false;
 			});
 
 		} else if (useMask) {
-			CheckMaskedPackagesMinimumLoad(mask, bestCore, bestLoad);
+			CheckMaskedPackagesMinimumLoad(cpu, mask, bestCore, bestLoad);
 		}
 
 		// Fallback to full scan ONLY if we are not using random sampling (small system)
@@ -359,15 +359,15 @@ choose_core(const ThreadData* threadData)
 			// Start from a random index to ensure fairness over time.
 			// 64 attempts cover small systems entirely and provide a reasonable
 			// search depth for large ones.
-			int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+			int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
 					index -= gPackageCount;
-				CheckPackageMinimumLoad(&gPackageEntries[index], NULL, bestCore,
-					bestLoad);
+				CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
+					bestCore, bestLoad);
 			}
 		}
 
@@ -426,6 +426,7 @@ rebalance(const ThreadData* threadData)
 	if (threadData->IsRealTime())
 		return threadData->Core();
 
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* core = threadData->Core();
 	ASSERT(core != NULL);
 
@@ -443,29 +444,30 @@ rebalance(const ThreadData* threadData)
 		// Phase 2: Local Node
 		SchedulerNode* node = core->Package()->Node();
 		search_local_node(node, [&](PackageEntry* entry) {
-			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+			CheckPackageMinimumLoad(cpu, entry, NULL, other, bestLoad);
 			return false;
 		});
 
 		// Phase 3: Global Random
 		search_global_random([&](PackageEntry* entry) {
-			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+			CheckPackageMinimumLoad(cpu, entry, NULL, other, bestLoad);
 			return false;
 		});
 
 	} else if (useMask) {
-		CheckMaskedPackagesMinimumLoad(mask, other, bestLoad);
+		CheckMaskedPackagesMinimumLoad(cpu, mask, other, bestLoad);
 	}
 
 	if (other == NULL && !useMask) {
-		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+		int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 		for (int32 i = 0; i < attempts; i++) {
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
 				index -= gPackageCount;
-			CheckPackageMinimumLoad(&gPackageEntries[index], NULL, other, bestLoad);
+			CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL, other,
+				bestLoad);
 		}
 	}
 
@@ -597,35 +599,39 @@ rebalance_irqs(bool idle)
 	// Use random sampling if possible
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
+	CPUEntry* cpuEntryForIRQ = CPUEntry::GetCPU(cpu->cpu_num);
+
 	if (tryRandom) {
 		// Phase 2: Local Node
 		CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
 		if (currentCore != NULL) {
 			SchedulerNode* node = currentCore->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+				CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL, other,
+					bestLoad);
 				return false;
 			});
 		}
 
 		// Phase 3: Global Random
 		search_global_random([&](PackageEntry* entry) {
-			CheckPackageMinimumLoad(entry, NULL, other, bestLoad);
+			CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL, other,
+				bestLoad);
 			return false;
 		});
 	}
 
 	// Use empty mask (NULL), as we don't care about affinity here
 	if (other == NULL) {
-		int32 startIndex = tryRandom ? CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom() % gPackageCount : 0;
+		int32 startIndex = tryRandom ? cpuEntryForIRQ->GetRandom() % gPackageCount : 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 		for (int32 i = 0; i < attempts; i++) {
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
 				index -= gPackageCount;
-			CheckPackageMinimumLoad(&gPackageEntries[index], NULL, other,
-				bestLoad);
+			CheckPackageMinimumLoad(cpuEntryForIRQ, &gPackageEntries[index],
+				NULL, other, bestLoad);
 		}
 	}
 

@@ -28,6 +28,8 @@ static const int32 kRangeReciprocal = (int32)(((int64)kLoadScale * kLoadScale
 	+ (kMaxLoad - kLowLoad) / 2) / (kMaxLoad - kLowLoad));
 static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1];
 
+bigtime_t ThreadData::sMaxLatency;
+
 
 void
 ThreadData::_InitBase()
@@ -402,6 +404,8 @@ ThreadData::UnassignCore(bool running)
 ThreadData::ComputeQuantumLengths()
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	atomic_set64(&sMaxLatency, Scheduler::MaximumLatency());
 
 	const bigtime_t kBaseSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
 	const bigtime_t kQuantum0 = Scheduler::BaseQuantum();

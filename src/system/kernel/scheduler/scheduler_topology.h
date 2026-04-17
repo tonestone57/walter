@@ -154,10 +154,10 @@ search_global_random(Action action)
 
 
 static inline void
-CheckPackageMinimumLoad(PackageEntry* entry, const CPUSet* mask,
+CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& bestCore, int32& bestLoad, CoreType type = CORE_TYPE_UNKNOWN)
 {
-	CoreEntry* candidate = entry->PeekMinimumLoadCore(mask, type);
+	CoreEntry* candidate = entry->PeekMinimumLoadCore(cpu, mask, type);
 
 	if (candidate != NULL) {
 		int32 score = candidate->GetScore();
@@ -180,8 +180,8 @@ CheckPackageMinimumLoad(PackageEntry* entry, const CPUSet* mask,
 
 
 static inline void
-CheckMaskedPackagesMinimumLoad(const CPUSet& mask, CoreEntry*& bestCore,
-	int32& bestLoad, CoreType type = CORE_TYPE_UNKNOWN)
+CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
+	CoreEntry*& bestCore, int32& bestLoad, CoreType type = CORE_TYPE_UNKNOWN)
 {
 	const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 	const int32 cpuCount = smp_get_num_cpus();
@@ -204,8 +204,8 @@ CheckMaskedPackagesMinimumLoad(const CPUSet& mask, CoreEntry*& bestCore,
 			if (cpuCore != NULL) {
 				PackageEntry* package = cpuCore->Package();
 				if (package != NULL && package != lastPackage) {
-					CheckPackageMinimumLoad(package, &mask, bestCore, bestLoad,
-						type);
+					CheckPackageMinimumLoad(cpu, package, &mask, bestCore,
+						bestLoad, type);
 					lastPackage = package;
 				}
 			}

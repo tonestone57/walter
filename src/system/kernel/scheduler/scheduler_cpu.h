@@ -394,9 +394,11 @@ public:
 	inline				void				ReadUnlockCore();
 
 						CoreEntry*			PeekMinimumLoadCore(
+												CPUEntry* cpu,
 												const CPUSet* mask = NULL,
 												CoreType type = CORE_TYPE_UNKNOWN) const;
 						CoreEntry*			PeekMaximumLoadCore(
+												CPUEntry* cpu,
 												const CPUSet* mask = NULL,
 												CoreType type = CORE_TYPE_UNKNOWN) const;
 
@@ -738,11 +740,10 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
 		return;
 
-	atomic_and64((int64*)&fIdlePackageMask, ~(1ULL << package->NodeIndex()));
+	uint64 clearBit = 1ULL << package->NodeIndex();
+	uint64 oldMask = (uint64)atomic_and64((int64*)&fIdlePackageMask, ~clearBit);
 
-	// Read-after-confirmation pattern: clear the bit first, then confirm the node
-	// is still not idle before clearing its bit in gIdleNodeMask.
-	if (atomic_get64((int64*)&fIdlePackageMask) == 0)
+	if ((oldMask & ~clearBit) == 0)
 		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
 }
 
@@ -791,7 +792,7 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	// starts running — the opposite edge, and the wrong one for CoreWakesUp.
 	// The symmetric CPUGoesIdle check (== cpuCount - 1) confirms the pattern:
 	// both conditions detect the all-idle boundary from their respective sides.
-	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
+	if (atomic_add(&fIdleCPUCount, -1) >= cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 

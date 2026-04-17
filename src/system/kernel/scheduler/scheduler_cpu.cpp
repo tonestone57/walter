@@ -710,10 +710,10 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 	SCHEDULER_ENTER_FUNCTION();
 
 	ThreadData* thread = fRunQueue.PeekOption([&](ThreadData* thread) {
-		const CPUSet& rawMask = thread->GetThread()->cpumask;
-		if (rawMask.GetBit(thiefCPU))
+		const CPUSet& mask = thread->GetCPUMask();
+		if (mask.GetBit(thiefCPU))
 			return true;
-		if (rawMask.IsEmpty())
+		if (mask.IsEmpty())
 			return true;
 
 		return false;
@@ -924,15 +924,15 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch; // Load reset to 0
 
-		// Read fLoad BEFORE the CAS. Concurrent AddLoad() calls that detect the
-		// epoch change AFTER the CAS will do atomic_add(&fLoad, load) directly.
-		// By reading it here, we ensure that any load added to fLoad before
-		// we reset fCombinedLoad is accounted for in our delta calculation.
-		int32 prevLoad = atomic_get(&fLoad);
-
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
+			// Read fLoad AFTER the CAS. Concurrent AddLoad() calls that detect the
+			// epoch change AFTER the CAS will do atomic_add(&fLoad, load) directly.
+			// By reading it here, we ensure that any load added to fLoad before
+			// we reset fCombinedLoad is accounted for in our delta calculation.
+			int32 prevLoad = atomic_get(&fLoad);
+
 			// Use atomic_add rather than atomic_set.  Between the CAS above
 			// (which resets the upper 32 bits of fCombinedLoad to 0 and bumps
 			// the epoch) and here, concurrent AddLoad() calls that detect the
@@ -1098,7 +1098,8 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 
 
 CoreEntry*
-PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
+PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
+	CoreType type) const
 {
 	CoreEntry* minEntry = NULL;
 	int32 minLoad = -1;
@@ -1110,7 +1111,6 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	// Fix #15
-		CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 		int32 firstIndex = -1;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
@@ -1184,7 +1184,8 @@ PackageEntry::PeekMinimumLoadCore(const CPUSet* mask, CoreType type) const
 
 
 CoreEntry*
-PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
+PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
+	CoreType type) const
 {
 	CoreEntry* maxEntry = NULL;
 	int32 maxLoad = -1;
@@ -1196,7 +1197,6 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	// Fix #15
-		CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 		int32 firstIndex = -1;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
@@ -1249,8 +1249,7 @@ PackageEntry::PeekMaximumLoadCore(const CPUSet* mask, CoreType type) const
 	int32 startBit = 0;
 
 	if (count > 1) {
-		startBit = (int32)(((uint64)CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()
-			* kMaxCoresPerPackage) >> 32);
+		startBit = (int32)(((uint64)cpu->GetRandom() * kMaxCoresPerPackage) >> 32);
 	}
 
 	// Split mask into two parts to randomize start position

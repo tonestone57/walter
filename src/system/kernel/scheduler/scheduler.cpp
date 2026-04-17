@@ -378,7 +378,12 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32 " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
 			thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
 
-	} while (!threadData->Enqueue(wasRunQueueEmpty, requestPreemption));
+		if (!threadData->Enqueue(wasRunQueueEmpty, requestPreemption)) {
+			targetCore = NULL;
+			targetCPU = NULL;
+		} else
+			break;
+	} while (true);
 
 	// notify listeners
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
