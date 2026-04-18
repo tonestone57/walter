@@ -632,6 +632,7 @@ reschedule(int32 nextState)
 		if (!oldThreadData->IsIdle()) {
 			putOldThreadAtBack = true;
 			oldThreadData->UnassignCore(true);
+			core->DecrementTotalThreadCount();
 
 			CPURunQueueLocker cpuLocker(cpu);
 			nextThreadData = cpu->PeekIdleThread();
