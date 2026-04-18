@@ -6,6 +6,7 @@
 #include "scheduler_profiler.h"
 
 #include <debug.h>
+#include <KernelExport.h>
 #include <util/atomic.h>
 #include <util/AutoLock.h>
 
