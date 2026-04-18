@@ -353,20 +353,17 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	}
 	fHeads[priority] = element;
 
-	if (fBest != NULL) {
-		unsigned int bestPriority = sGetLink(fBest)->fPriority;
+	Element* best = (Element*)atomic_pointer_get((void**)&fBest);
+	if (best != NULL) {
+		unsigned int bestPriority = sGetLink(best)->fPriority;
 		if (priority > bestPriority)
-			fBest = element;
-		else if (priority == bestPriority && sCompare(element, fBest))
-			fBest = element;
+			atomic_pointer_set((void**)&fBest, element);
+		else if (priority == bestPriority && sCompare(element, best))
+			atomic_pointer_set((void**)&fBest, element);
 		else
-			fBest = NULL;	// Invalidate: fVirtualRuntime is mutable so the
-							// cached winner may be stale. PeekBest will rescan.
-							// Also covers same-priority or lower-priority
-							// insertions that could invalidate the optimality
-							// of the cached best element.
+			atomic_pointer_set((void**)&fBest, (Element*)NULL);
 	} else {
-		fBest = element;
+		atomic_pointer_set((void**)&fBest, element);
 	}
 }
 
@@ -398,20 +395,17 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	}
 	fTails[priority] = element;
 
-	if (fBest != NULL) {
-		unsigned int bestPriority = sGetLink(fBest)->fPriority;
+	Element* best = (Element*)atomic_pointer_get((void**)&fBest);
+	if (best != NULL) {
+		unsigned int bestPriority = sGetLink(best)->fPriority;
 		if (priority > bestPriority)
-			fBest = element;
-		else if (priority == bestPriority && sCompare(element, fBest))
-			fBest = element;
+			atomic_pointer_set((void**)&fBest, element);
+		else if (priority == bestPriority && sCompare(element, best))
+			atomic_pointer_set((void**)&fBest, element);
 		else
-			fBest = NULL;	// Invalidate: fVirtualRuntime is mutable so the
-							// cached winner may be stale. PeekBest will rescan.
-							// Also covers same-priority or lower-priority
-							// insertions that could invalidate the optimality
-							// of the cached best element.
+			atomic_pointer_set((void**)&fBest, (Element*)NULL);
 	} else {
-		fBest = element;
+		atomic_pointer_set((void**)&fBest, element);
 	}
 }
 
@@ -447,12 +441,12 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
 
-	if (fBest == element) {
+	if ((Element*)atomic_pointer_get((void**)&fBest) == element) {
 		// Unconditionally invalidate the cache. Setting fBest to
 		// fHeads[priority] is incorrect when a higher-priority queue is
 		// non-empty, or when the next element at this level is not the
 		// lowest-virtual-runtime candidate. Force a full rescan in PeekBest.
-		fBest = NULL;
+		atomic_pointer_set((void**)&fBest, (Element*)NULL);
 	}
 }
 
@@ -488,8 +482,9 @@ RUN_QUEUE_TEMPLATE_LIST
 Element*
 RUN_QUEUE_CLASS_NAME::PeekBest() const
 {
-	if (fBest != NULL)
-		return fBest;
+	Element* bestCandidate = (Element*)atomic_pointer_get((void**)&fBest);
+	if (bestCandidate != NULL)
+		return bestCandidate;
 
 	// Strict priority: only look at the highest priority queue that has threads.
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
@@ -523,7 +518,7 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 
 				current = sGetLink(current)->fNext;
 			}
-			fBest = best;
+			atomic_pointer_set((void**)&fBest, best);
 			return best;
 		}
 	}

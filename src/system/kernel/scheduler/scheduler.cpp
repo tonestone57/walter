@@ -907,21 +907,27 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
 {
 	switch (node->level) {
 		case CPU_TOPOLOGY_SMT:
-			if (node->id >= cpuCount) {
+		{
+			bool nodeValid = node->id < cpuCount;
+			bool coreValid = coreID < cpuCount;
+
+			if (!nodeValid) {
 				dprintf("scheduler: topology node id %d out of bounds (max %"
 					B_PRId32 ")\n", node->id, cpuCount);
-				return;
 			}
-			if (coreID >= cpuCount) {
+			if (!coreValid) {
 				dprintf("scheduler: core index %d out of bounds (max %"
 					B_PRId32 ")\n", coreID, cpuCount);
-				return;
 			}
-			sCPUToCore[node->id] = coreID;
-			sCPUToPackage[node->id] = packageID;
-			if (sCPUToCluster != NULL)
-				sCPUToCluster[node->id] = packageID;
+
+			if (nodeValid && coreValid) {
+				sCPUToCore[node->id] = coreID;
+				sCPUToPackage[node->id] = packageID;
+				if (sCPUToCluster != NULL)
+					sCPUToCluster[node->id] = packageID;
+			}
 			return;
+		}
 
 		case CPU_TOPOLOGY_CORE:
 			coreID = coreIndex++;
@@ -1709,17 +1715,27 @@ scheduler_on_team_foreground_changed(Team* team)
 			// This ensures the virtual runtime tree/heap consistency and immediate
 			// application of the urgency bonus.
 			// Dequeue must happen before updating the flag that determines queue position.
-			bool dequeued = threadData->Dequeue();
-			threadData->SetForeground(team->fIsForeground);
-			threadData->ResetPriorityBoost();
-			if (dequeued)
+			if (threadData->Dequeue()) {
+				threadData->SetForeground(team->fIsForeground);
+				threadData->ResetPriorityBoost();
 				enqueue(thread, false, NULL);
+			} else {
+				threadData->SetForeground(team->fIsForeground);
+				threadData->ResetPriorityBoost();
+			}
 		} else {
 			threadData->SetForeground(team->fIsForeground);
 			if (thread->state == B_THREAD_RUNNING) {
-				// For running threads, just update their internal state.
-				// The next reschedule will handle the change.
+				// For running threads, update internal state and immediately
+				// adjust CPU heap priority to avoid lag.
 				threadData->ResetPriorityBoost();
+
+				ASSERT(thread->cpu != NULL);
+				CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
+				if (!gCPU[cpu->ID()].disabled) {
+					CoreCPUHeapLocker _(threadData->Core());
+					cpu->UpdatePriority(threadData->GetEffectivePriority());
+				}
 			}
 		}
 	}

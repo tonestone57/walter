@@ -137,14 +137,15 @@ choose_core(const ThreadData* threadData)
 	CoreEntry* core = NULL;
 
 	// Thread Coloring: Search for a core of the preferred type first
+	uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
 
 		// Try to find an idle core of the preferred type
-		uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
-		while (idleNodeMask != 0) {
-			int32 nodeIndex = __builtin_ctzll(idleNodeMask);
-			idleNodeMask &= ~(1ULL << nodeIndex);
+		uint64 typeIdleNodeMask = idleNodeMask;
+		while (typeIdleNodeMask != 0) {
+			int32 nodeIndex = __builtin_ctzll(typeIdleNodeMask);
+			typeIdleNodeMask &= ~(1ULL << nodeIndex);
 
 			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
 			uint64 idlePackageMask = node->IdlePackageMask();
@@ -282,7 +283,6 @@ choose_core(const ThreadData* threadData)
 	}
 
 	// wake new package/core
-	uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
 	while (idleNodeMask != 0) {
 		int32 nodeIndex = __builtin_ctzll(idleNodeMask);
 		idleNodeMask &= ~(1ULL << nodeIndex);

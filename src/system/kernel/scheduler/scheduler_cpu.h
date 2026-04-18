@@ -794,6 +794,7 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
+	int32 cpuCount = atomic_get(&fCPUCount);
 	IncrementTotalThreadCount();
 	// Fix #1 (documentation): == cpuCount is intentionally correct here.
 	// atomic_add() returns the OLD value of fIdleCPUCount.  CoreWakesUp must
@@ -803,7 +804,9 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	// starts running — the opposite edge, and the wrong one for CoreWakesUp.
 	// The symmetric CPUGoesIdle check (== cpuCount - 1) confirms the pattern:
 	// both conditions detect the all-idle boundary from their respective sides.
-	if (atomic_add(&fIdleCPUCount, -1) >= atomic_get(&fCPUCount))
+	// We use the cpuCount snapshot taken BEFORE the increment and decrement
+	// to ensure consistency even if a concurrent RemoveCPU occurs.
+	if (atomic_add(&fIdleCPUCount, -1) >= cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 

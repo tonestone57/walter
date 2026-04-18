@@ -40,7 +40,7 @@ _LoadavgUpdate(void *data, int iteration)
 	if (threadCount < 0)
 		threadCount = 0;
 
-	InterruptsSpinLocker locker(sLoadAvgLock);
+	SpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {
 		sAverageRunnable.ldavg[i]
 			= (sCExp[i] * (uint64)sAverageRunnable.ldavg[i]
