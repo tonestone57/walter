@@ -144,7 +144,7 @@ CPUEntry::Stop()
 
 	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);
-	while (true) {
+	for (int32 i = 0; i < 1000; i++) {
 		irq_assignment* irq
 			= (irq_assignment*)list_get_first_item(&entry->irqs);
 		if (irq == NULL)
@@ -163,6 +163,11 @@ CPUEntry::Stop()
 			dprintf("CPUEntry::Stop: interrupt %" B_PRId32 " still assigned "
 				"after successful reassignment\n", irqVector);
 			break;
+		}
+
+		if (i == 999) {
+			dprintf("CPUEntry::Stop: safety limit reached while removing "
+				"interrupts from CPU %" B_PRId32 "\n", fCPUNumber);
 		}
 	}
 	locker.Unlock();
@@ -920,6 +925,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	// AddLoad calls either contribute to the old epoch (and are manually
 	// added to fLoad) or the new epoch (and are captured in the next snapshot),
 	// with no double-counting or loss.
+	int32 prevLoad = atomic_get(&fLoad);
 	int32 currentLoad = 0;
 	int64 oldCombined = atomic_get64(&fCombinedLoad);
 	while (true) {
@@ -930,11 +936,12 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
-			// Read fLoad AFTER the CAS. Concurrent AddLoad() calls that detect the
-			// epoch change AFTER the CAS will do atomic_add(&fLoad, load) directly.
-			// By reading it here, we ensure that any load added to fLoad before
-			// we reset fCombinedLoad is accounted for in our delta calculation.
-			int32 prevLoad = atomic_get(&fLoad);
+			// Read fLoad BEFORE the CAS (or re-read on retry). Concurrent
+			// AddLoad() calls that detect the epoch change AFTER the CAS will
+			// do atomic_add(&fLoad, load) directly. By reading it before we
+			// commit the reset, we ensure that the delta is computed against
+			// a baseline that does not yet include those new-epoch additions,
+			// preventing us from "double-subtracting" them.
 
 			// Use atomic_add rather than atomic_set.  Between the CAS above
 			// (which resets the upper 32 bits of fCombinedLoad to 0 and bumps
@@ -951,6 +958,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			break;
 		}
 		oldCombined = actual;
+		prevLoad = atomic_get(&fLoad);
 	}
 
 	if (cpuCount > 0) {
@@ -1043,15 +1051,16 @@ void
 PackageEntry::RemoveIdleCore(CoreEntry* core)
 {
 	WriteSpinLocker coreLocker(fCoreLock);
-	// Decrement the count BEFORE clearing the mask bit.  A concurrent reader
-	// (e.g. GetLeastIdlePackage) checks fIdleCoreCount as a fast pre-filter
-	// before inspecting fIdleCoreMask.  If the mask is cleared first, the
-	// reader can observe fIdleCoreCount > 0 with an empty mask and then
-	// dereference a NULL core from GetIdleCore().
-	atomic_add(&fIdleCoreCount, -1);
-
+	// Clear the mask bit BEFORE decrementing the count.  A concurrent reader
+	// of the mask (e.g. GetIdleCore) must not see a core that is in the
+	// process of being removed from the idle set, as that could lead to a
+	// "dangling-ish" core reference if the core is being disabled.  The
+	// reader of the count (e.g. GetLeastIdlePackage) will gracefully handle
+	// a count > 0 with an empty mask by receiving NULL from GetIdleCore().
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
+
+	atomic_add(&fIdleCoreCount, -1);
 
 	if ((oldMask & ~clearBit) == 0) {
 		// Package wakes up (last idle core became active).  Delegate to

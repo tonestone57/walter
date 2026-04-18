@@ -87,11 +87,12 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 	FunctionData* function = _FindFunction(functionName);
 	if (function == NULL)
 		return false;
-	atomic_add(&function->fCalled, 1);
 
 	int32 stackDepth = fFunctionStackPointers[cpu];
 	if (stackDepth >= (int32)kMaxFunctionStackEntries)
 		return false;
+
+	atomic_add(&function->fCalled, 1);
 
 	fFunctionStackPointers[cpu]++;
 	FunctionEntry* stackEntry = &fFunctionStacks[cpu][stackDepth];

@@ -763,7 +763,9 @@ rebalance_irqs(bool idle)
 
 	CoreEntry* other = NULL;
 	if (pack) {
-		if (sSmallTaskCore != NULL && currentCore != NULL) {
+		if (sSmallTaskCore != NULL && currentCore != NULL
+				&& currentCore->Package() != NULL
+				&& currentCore->Package()->Node() != NULL) {
 			int32 nodeID = currentCore->Package()->Node()->ID();
 			other = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore[nodeID]);
 		}

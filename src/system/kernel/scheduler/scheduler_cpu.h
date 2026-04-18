@@ -698,11 +698,13 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Decrement the count BEFORE clearing the mask bit.
-	atomic_add(&fIdleCoreCount, -1);
-
+	// Clear the mask bit BEFORE decrementing the count, matching the logic
+	// in RemoveIdleCore to prevent GetIdleCore from returning a
+	// "dangling-ish" core reference.
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
+
+	atomic_add(&fIdleCoreCount, -1);
 
 	// Detect the transition from fully-idle to partially-active:
 	// the package wakes up when the *last* idle core becomes active, i.e.
@@ -743,7 +745,11 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	uint64 clearBit = 1ULL << package->NodeIndex();
 	uint64 oldMask = (uint64)atomic_and64((int64*)&fIdlePackageMask, ~clearBit);
 
-	if ((oldMask & ~clearBit) == 0)
+	// Detect the transition from fully-idle to partially-active for the node.
+	// Only clear the bit in gIdleNodeMask if this package was actually idle
+	// (bit was set in oldMask) AND it was the last idle package in this node
+	// (mask is now zero).
+	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == 0)
 		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
 }
 

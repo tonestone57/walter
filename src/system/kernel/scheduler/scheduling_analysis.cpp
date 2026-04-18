@@ -863,7 +863,9 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 	if ((addr_t)buffer & 0x7) {
 		addr_t diff = (addr_t)buffer & 0x7;
-		if (size < 8 - diff)
+		// Use explicit size check to prevent underflow or wrap-around on
+		// zero/small size when computing the 8-byte alignment fixup.
+		if (size <= (size_t)(8 - diff))
 			return B_BAD_VALUE;
 		buffer = (void*)((addr_t)buffer + 8 - diff);
 		size -= 8 - diff;

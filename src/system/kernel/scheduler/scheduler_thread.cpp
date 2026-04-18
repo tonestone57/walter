@@ -226,7 +226,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 		bool rescheduleNeeded = false;
 
 		if (targetCore != NULL && (useMask
-				&& GetCPUMask().And(targetCore->CPUMask()).IsEmpty())) {
+				&& mask.And(targetCore->CPUMask()).IsEmpty())) {
 			targetCore = NULL;
 		}
 		if (targetCPU != NULL && (useMask && !mask.GetBit(targetCPU->ID())))
