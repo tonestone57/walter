@@ -725,6 +725,12 @@ rebalance(const ThreadData* threadData)
 	if (coreScore >= kMediumLoad)
 		return core;
 
+	// Issue #10: Package() and Node() can return NULL during topology
+	// teardown or if this core was never fully initialised.  Guard all
+	// three pointer dereferences before accessing nodeID.
+	if (core->Package() == NULL || core->Package()->Node() == NULL)
+		return core;
+
 	int32 nodeID = core->Package()->Node()->ID();
 	CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 	if (smallTaskCore == NULL || (useMask && !smallTaskCore->CPUMask().Matches(mask)))

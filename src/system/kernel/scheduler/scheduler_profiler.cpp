@@ -81,6 +81,13 @@ bool
 Profiler::EnterFunction(int32 cpu, const char* functionName)
 {
 	InterruptsLocker _;
+	// Issue #25 (clarification): fFunctionStackPointers[cpu] is incremented
+	// with a plain ++.  This is safe because:
+	//   1. InterruptsLocker disables interrupts, preventing preemption on this
+	//      CPU — no other thread on this CPU can enter concurrently.
+	//   2. The 'cpu' argument equals smp_get_current_cpu(); two distinct CPUs
+	//      always have different cpu_num values so they access different array
+	//      slots.  No atomic operation is required.
 	if (fStatus != B_OK)
 		return false;
 

@@ -888,6 +888,12 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 	if ((addr_t)buffer & 0x7) {
 		addr_t diff = (addr_t)buffer & 0x7;
+		// Issue #38: diff is in [1,7], so (8 - diff) is in [1,7].  On a
+		// 32-bit target size_t is 32 bits; the subtraction can only underflow
+		// if the caller passed size == 0, which is caught by the
+		// "size <= (size_t)(8 - diff)" guard immediately below.  The cast to
+		// (size_t) of (8 - diff) is safe because 8 - diff is always positive
+		// (diff <= 7).  No code change required; comment added for clarity.
 		// Use explicit size check to prevent underflow or wrap-around on
 		// zero/small size when computing the 8-byte alignment fixup.
 		if (size <= (size_t)(8 - diff))
@@ -911,6 +917,12 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 	}
 
 	SchedulingAnalysisManager manager(buffer, size);
+
+	// Issue #9 (clarification): When fHashTable is NULL (buffer too small for
+	// even one entry), all Allocate() calls return NULL and all Insert/Lookup
+	// calls are no-ops.  The DEBUG assert in Allocate is guarded by
+	// "fHashTable == NULL" precisely to skip the layout-invariant check in
+	// that degenerate case.  Behaviour is correct; comment added for clarity.
 
 	InterruptsLocker locker;
 	lock_tracing_buffer();

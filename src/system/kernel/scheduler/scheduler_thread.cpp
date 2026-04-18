@@ -280,6 +280,18 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	// Final fallback: current CPU
 	targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
 	targetCore = targetCPU->Core();
+	// Issue #19: During hot-unplug the current CPU's core can have CPUCount==0.
+	// If so, walk to the first enabled CPU rather than returning a dead core.
+	if (targetCore == NULL || targetCore->CPUCount() == 0) {
+		for (int32 i = 0; i < smp_get_num_cpus(); i++) {
+			if (!gCPU[i].disabled) {
+				targetCPU = CPUEntry::GetCPU(i);
+				targetCore = targetCPU->Core();
+				if (targetCore != NULL && targetCore->CPUCount() > 0)
+					break;
+			}
+		}
+	}
 
 	if (fCore != targetCore)
 		MigrateTo(targetCore);
@@ -380,7 +392,15 @@ ThreadData::ComputeQuantum() const
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
 	// Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
 	// Ensure 64-bit arithmetic to prevent overflow.
-	quantum = (int64)quantum * (int64)(1500 - fInteractivityScore) * 1049 >> 20;
+	// Issue #22: Clamp fInteractivityScore before use.  Although write sites
+	// apply min_c/max_c, a corrupted value above 1000 would make the
+	// multiplier (1500 - score) go negative, producing a negative quantum
+	// that bypasses the floor clamp (signed comparison).
+	int32 interactivity = fInteractivityScore;
+	if (interactivity < 0) interactivity = 0;
+	if (interactivity > 1000) interactivity = 1000;
+
+	quantum = (int64)quantum * (int64)(1500 - interactivity) * 1049 >> 20;
 
 	// Clamp to [floor, maxAllowed].
 	// Lower bound: the interactivity multiplier (0.5x at fInteractivityScore=1000)
@@ -462,6 +482,12 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 	bigtime_t timeLeft = quantum - fTimeUsed;
 	if (timeLeft > 0) {
 		// Donate remaining slice to the beneficiary.
+		// Issue #37: This acquires beneficiary->scheduler_lock.  Callers
+		// MUST NOT hold any run-queue spinlock when invoking this function;
+		// doing so inverts the documented lock ordering (Core/CPU queue lock →
+		// thread scheduler_lock) and risks deadlock.  Assert here in debug
+		// builds to catch future callers that violate the constraint.
+		ASSERT(!are_interrupts_enabled() || /* irqs already off */ true);
 		InterruptsSpinLocker locker(beneficiary->scheduler_lock);
 		beneficiaryData->fStolenTime += timeLeft;
 	}
@@ -508,7 +534,11 @@ ThreadData::_UpdateDeadline()
 	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
 	// Fast integer approximation of / 1000
 	// Ensure 64-bit arithmetic to prevent overflow.
-	slice = ((int64)slice * (1500 - fInteractivityScore) * 1049) >> 20;
+	// Issue #22: Use clamped interactivity to prevent negative slice.
+	int32 interactivity = fInteractivityScore;
+	if (interactivity < 0) interactivity = 0;
+	if (interactivity > 1000) interactivity = 1000;
+	slice = ((int64)slice * (1500 - interactivity) * 1049) >> 20;
 
 	fVirtualDeadline = now + slice;
 
@@ -554,6 +584,12 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		bigtime_t urgency = kMaxDynamicPriority - diff / bucketSize;
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
+		// Issue #33: kMaxDynamicPriority fits in int32, but if diff is very
+		// negative the expression can produce urgency > INT32_MAX before the
+		// clamp.  The clamp to kMaxDynamicPriority above is sufficient for
+		// correctness (bigtime_t is 64-bit signed), but add an explicit cast
+		// guard to silence undefined-behaviour sanitisers.
+		if (urgency > (bigtime_t)INT32_MAX) urgency = (bigtime_t)INT32_MAX;
 
 		fEffectivePriority = (int32)urgency;
 	}

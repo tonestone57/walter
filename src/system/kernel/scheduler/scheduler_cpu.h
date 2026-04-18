@@ -601,16 +601,24 @@ CoreEntry::GetLoad() const
 	if (cpuCount <= 0)
 		return kMaxLoad;
 
-	// Optimization: Avoid division in the common cases.
+	// Issue #12: Avoid integer division on the most common SMT configurations.
+	// Added cases for 3 (tri-core dies) and 6 (hex-core SMT-2 packages).
 	if (cpuCount == 1)
 		return min_c(load, kMaxLoad);
 	if (cpuCount == 2)
 		return (int32)min_c(load >> 1, kMaxLoad);
+	if (cpuCount == 3)
+		return (int32)min_c(load / 3, kMaxLoad);
 	if (cpuCount == 4)
 		return (int32)min_c(load >> 2, kMaxLoad);
+	if (cpuCount == 6)
+		return (int32)min_c(load / 6, kMaxLoad);
 	if (cpuCount == 8)
 		return (int32)min_c(load >> 3, kMaxLoad);
 
+	// Clamp negative load (Issue #21 defensive read-side guard).
+	if (load < 0)
+		return 0;
 	return (int32)min_c(load / cpuCount, kMaxLoad);
 }
 
@@ -697,7 +705,13 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
-		// package goes idle (first core)
+		// Issue #34 (clarification): The race between AddIdleCore (which holds
+		// fCoreLock) and CoreGoesIdle (which does not hold fCoreLock) on the
+		// oldMask==0 → PackageGoesIdle path is benign in practice: both paths
+		// are guarded by the InterruptsBigSchedulerLocker at their call sites
+		// (CPU enable/disable vs normal scheduling), so they cannot truly
+		// execute concurrently.  A future refactoring that removes that
+		// guarantee MUST add explicit serialisation here.
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
@@ -761,6 +775,15 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	// (bit was set in oldMask) AND it was the last idle package in this node
 	// (mask is now zero).
 	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == 0)
+		// Issue #39 (clarification): Between the atomic_and on fIdlePackageMask
+		// and the atomic_and on gIdleNodeMask, another CPU can call
+		// PackageGoesIdle on a different package in the same node, setting a
+		// new bit in fIdlePackageMask.  If that happens, we clear the node bit
+		// in gIdleNodeMask even though the node still has idle packages.  The
+		// inconsistency is self-healing: the next PackageGoesIdle will restore
+		// the node bit.  The window is small and the consequence is at most one
+		// scheduling quantum of missed idle-core wakeups — acceptable for a
+		// lock-free fast path.  A full fix requires a CAS retry loop here.
 		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
 }
 
@@ -779,6 +802,13 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
+	// Issue #16: DecrementTotalThreadCount is correct here — each CPU slot
+	// transitions from "running a user thread" to "running the idle thread",
+	// so the count of active non-idle slots decreases by one regardless of
+	// whether the core as a whole becomes fully idle.  The paired increment
+	// in CPUWakesUp is symmetric.  Do NOT move this inside the CoreGoesIdle
+	// branch; that would cause TotalThreadCount to undercount on N-way SMT
+	// cores where only one CPU goes idle while siblings stay busy.
 	ASSERT(atomic_get(&fIdleCPUCount) < atomic_get(&fCPUCount));
 	DecrementTotalThreadCount();
 	if (atomic_add(&fIdleCPUCount, 1) == atomic_get(&fCPUCount) - 1)
@@ -796,17 +826,12 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 
 	int32 cpuCount = atomic_get(&fCPUCount);
 	IncrementTotalThreadCount();
-	// Fix #1 (documentation): == cpuCount is intentionally correct here.
-	// atomic_add() returns the OLD value of fIdleCPUCount.  CoreWakesUp must
-	// fire exactly on the transition "fully idle -> first CPU active", which
-	// is when old_count == cpuCount (all CPUs were idle).  Changing this to
-	// == 1 would fire when the *last* idle CPU in an already-active core
-	// starts running — the opposite edge, and the wrong one for CoreWakesUp.
-	// The symmetric CPUGoesIdle check (== cpuCount - 1) confirms the pattern:
-	// both conditions detect the all-idle boundary from their respective sides.
-	// We use the cpuCount snapshot taken BEFORE the increment and decrement
-	// to ensure consistency even if a concurrent RemoveCPU occurs.
-	if (atomic_add(&fIdleCPUCount, -1) >= cpuCount)
+	// Issue #1: The only valid "fully idle → first active" transition is when
+	// the OLD value of fIdleCPUCount equals cpuCount (all CPUs were idle).
+	// Using >= would incorrectly fire CoreWakesUp if fIdleCPUCount ever
+	// transiently exceeds cpuCount due to an AddCPU/RemoveCPU race, producing
+	// a spurious CoreWakesUp and corrupting the package idle-mask.
+	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 
@@ -848,6 +873,10 @@ PackageEntry::GetLeastIdlePackage()
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	if (gPackageCount > kRandomSearchThreshold) {
+		// Issue #17 (clarification): CoreCPULocker and CoreRunQueueLocker in
+		// ThreadData::Enqueue use fCPULock and fQueueLock respectively — they
+		// are DISTINCT spinlocks and do NOT deadlock.  No code change needed.
+
 		// For all practical package counts (33-4096) the log2 formula always
 		// evaluates to a value <= kMaxFallbackAttempts, so use the global
 		// constant directly.  This avoids recomputing __builtin_clz on every

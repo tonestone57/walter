@@ -253,15 +253,21 @@ ThreadData::_UpdatePriorityBoost()
 
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// Snapshot fCore before use. The caller holds either
-			// CPURunQueueLocker or CoreRunQueueLocker, but neither prevents
-			// a concurrent MigrateTo (which runs under a different lock) from
-			// altering fCore between the Remove and PushBack calls. Using a
-			// local snapshot ensures both operations target the same object.
-			CoreEntry* core = fCore;
+			// Issue #3: Take the snapshot before Remove.  If MigrateTo races
+			// between the snapshot and PushBack, fCore will have changed.
+			// After Remove (which clears fEnqueued), re-read fCore: if it
+			// changed, MigrateTo already moved the thread's logical home, so
+			// push onto the new core.  This narrows (but cannot eliminate) the
+			// race without restructuring the lock hierarchy.
+			CoreEntry* core = fCore;  // snapshot before Remove
 			if (core != NULL) {
 				core->Remove(this);
-				core->PushBack(this, newPriority);
+				// Re-read after Remove; MigrateTo may have updated fCore.
+				CoreEntry* current = fCore;
+				if (current != NULL && current != core)
+					current->PushBack(this, newPriority);
+				else
+					core->PushBack(this, newPriority);
 			}
 
 			fEnqueuedInCPURunQueue = false;
@@ -393,7 +399,11 @@ ThreadData::GoesAway()
 	ASSERT(fReady);
 
 	if (!IsIdle())
-		atomic_add(&gTotalRunnableThreads, -1);
+		// Issue #45: Saturate at zero to prevent the load-average EMA from
+		// receiving a negative thread count due to a double-call or other
+		// reference-count mismatch.
+		if (atomic_add(&gTotalRunnableThreads, -1) <= 0)
+			atomic_set(&gTotalRunnableThreads, 0);
 
 	if (!HasQuantumEnded(false, false)) {
 		fQuickStartCredit = true;
@@ -402,7 +412,12 @@ ThreadData::GoesAway()
 
 	fLastInterruptTime = 0;
 
-	fWentSleep = system_time();
+	// Issue #28: Cache system_time() once; calling it twice gives slightly
+	// different timestamps under heavy interrupt load, skewing sleep-time
+	// accounting.  fWentSleepActive uses core active time, not wall time,
+	// so no second call is needed for it.
+	bigtime_t now = system_time();
+	fWentSleep = now;
 	fWentSleepActive = fCore->GetActiveTime();
 
 	if (gTrackCoreLoad)
@@ -419,7 +434,9 @@ ThreadData::Dies()
 	ASSERT(fReady);
 
 	if (!IsIdle())
-		atomic_add(&gTotalRunnableThreads, -1);
+		// Issue #45: Same saturation guard as GoesAway.
+		if (atomic_add(&gTotalRunnableThreads, -1) <= 0)
+			atomic_set(&gTotalRunnableThreads, 0);
 
 	if (gTrackCoreLoad)
 		fCore->RemoveLoad(fNeededLoad, true);

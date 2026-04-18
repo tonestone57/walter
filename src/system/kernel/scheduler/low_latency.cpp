@@ -54,6 +54,13 @@ choose_core(const ThreadData* threadData)
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* previousCore = threadData->PreviousCore();
 
+	// Issue #43: has_cache_expired() calls system_time() internally.  It is
+	// called up to three times in this function; cache the result to avoid
+	// redundant syscalls and ensure a consistent view within one scheduling
+	// decision.
+	const bool cacheExpired = (previousCore != NULL)
+		? has_cache_expired(threadData) : true;
+
 	// Stage 0: Hot-Idle Fast Path
 	// If the core we previously ran on is idle and in the same package,
 	// use it immediately to preserve cache warmth and skip expensive search.
@@ -84,7 +91,7 @@ choose_core(const ThreadData* threadData)
 	if (useMask && Scheduler::IsAllEnabledMask(mask))
 		useMask = false;
 
-	if (previousCore != NULL && !has_cache_expired(threadData)) {
+	if (previousCore != NULL && !cacheExpired) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
 			// Respect thread coloring even for cache affinity
 			bool typeMatch = true;
@@ -404,7 +411,7 @@ choose_core(const ThreadData* threadData)
 
 	ASSERT(core != NULL);
 
-	if (previousCore != NULL && !has_cache_expired(threadData)) {
+	if (previousCore != NULL && !cacheExpired) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
 			if (core != previousCore) {
 				// If the selected core is not significantly less loaded than the
@@ -583,6 +590,13 @@ rebalance_irqs(bool idle)
 		return;
 
 	cpu_ent* cpu = get_cpu_struct();
+	// Issue #30: Snapshot currentCore BEFORE releasing irqs_lock.  A
+	// concurrent hot-unplug can change the CPU-to-core mapping in the window
+	// between Unlock() and a second GetCore() call, producing a stale Package()
+	// or Node() pointer.  This mirrors the identical fix applied to
+	// power_saving.cpp (Fix #5 in the audit summary).
+	CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
+
 	SpinLocker locker(cpu->irqs_lock);
 
 	irq_assignment* chosen = NULL;
@@ -615,7 +629,7 @@ rebalance_irqs(bool idle)
 
 	if (tryRandom) {
 		// Phase 2: Local Node
-		CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
+		// Use the pre-lock snapshot (Issue #30).
 		if (currentCore != NULL && currentCore->Package() != NULL) {
 			SchedulerNode* node = currentCore->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {

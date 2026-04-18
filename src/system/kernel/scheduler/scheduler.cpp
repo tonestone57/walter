@@ -132,6 +132,11 @@ scheduler_update_interaction_state()
 	if (cpu->fInteractionUpdateCounter++ % 32 != 0)
 		return;
 
+	// Issue #13: Cache gDeadlineBucketSize once — it is read twice below and
+	// the two reads could observe different values if a concurrent DPC is
+	// updating it.  A single cached read is also cheaper on the hot path.
+	int64 currentBucketSize = atomic_get64(&gDeadlineBucketSize);
+
 	bigtime_t now = system_time();
 	bigtime_t lastTime = atomic_get64(&sLastInteractionTime);
 	bigtime_t threshold = Scheduler::MinimalQuantum();
@@ -147,7 +152,7 @@ scheduler_update_interaction_state()
 			return;
 	}
 
-	if (atomic_get64(&gDeadlineBucketSize) == 1000) {
+	if (currentBucketSize == 1000) {
 		// Fix #12: Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
 		if (atomic_get_and_set(&sTimerArmed, 1) == 0) {
@@ -206,6 +211,12 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Issue #15: This mask is recomputed from a compile-time constant on every
+	// reschedule.  Hoist it to a static const so the compiler evaluates it
+	// once at startup.
+	static const uint32 kTopWordMask =
+		(uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
+
 	static_assert(THREAD_MAX_SET_PRIORITY < ThreadRunQueue::kBitmapSize * 32,
 		"THREAD_MAX_SET_PRIORITY exceeds ThreadRunQueue bitmap capacity");
 
@@ -233,7 +244,8 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 			// THREAD_MAX_SET_PRIORITY % 32 == 31, but a future change to
 			// THREAD_MAX_SET_PRIORITY could silently violate that.
 			if (i == ThreadRunQueue::kBitmapSize - 1)
-				val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
+				// Issue #15: Use pre-computed mask.
+				val &= kTopWordMask;
 
 			if (val == 0)
 				continue;
@@ -277,9 +289,13 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 			== (cpu->ID() % coreCPUCount));
 
 	CoreRunQueueLocker coreLocker(core, false);
-	if (ownsCoreQueueScan && core->CoreRunQueueThreadCount() > 0) {
+	// Issue #41: The thread-count check was done without the lock; a thread
+	// could be removed between the check and lock acquisition, making the
+	// locked scan a wasted spinlock round-trip.  Re-check inside the lock.
+	if (ownsCoreQueueScan) {
 		coreLocker.Lock();
-		scanRunQueue(core->RunQueue());
+		if (core->CoreRunQueueThreadCount() > 0)
+			scanRunQueue(core->RunQueue());
 	}
 
 	// Check CPU RunQueue
@@ -705,10 +721,15 @@ reschedule(int32 nextState)
 	if (nextThread != oldThread || oldThread->cpu->preempted) {
 		// Dynamic Quantum Scaling:
 		// Reduce quantum if the core is crowded to maintain interactivity.
+		// Issue #18: ThreadCount() can transiently return 0 during a remove
+		// race.  If load == 1, (load - 1) == 0 causes division by zero.
+		// Clamp divisor to at least 1.
 		int32 load = core->ThreadCount();
 		bigtime_t quantum = Scheduler::BaseQuantum();
-		if (load > 2)
-			quantum = max_c(Scheduler::MinimalQuantum(), quantum / (load - 1));
+		if (load > 2) {
+			int32 divisor = max_c(1, load - 1);
+			quantum = max_c(Scheduler::MinimalQuantum(), quantum / divisor);
+		}
 		nextThreadData->SetQuantum(quantum);
 
 		cpu->StartQuantumTimer(nextThreadData, oldThread->cpu->preempted);
@@ -870,6 +891,12 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 
 		// flush CPU run queue
 		while (true) {
+			// Issue #36 (clarification): The flush loop holds CPURunQueueLocker
+			// per iteration but NOT CoreRunQueueLocker.  Concurrent readers of
+			// the core queue (via ChooseNextThread on other CPUs) can observe
+			// threads mid-migration.  This is safe because cpu->LockScheduler()
+			// (held for the entire disable path) prevents other CPUs from
+			// entering their scheduler critical sections, serialising the flush.
 			ThreadData* threadData;
 			{
 				CPURunQueueLocker locker(cpu);
@@ -1128,15 +1155,16 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 				if (currentPackageSize >= clusterSize) {
-					if (packageCount + 1 >= cpuCount) {
-						// Should not happen with valid topology
-						break;
-					}
-					packageCount++;
-					currentPackageSize = 0;
-					clusterIndex++;
+					if (packageCount + 1 < cpuCount) {
+						packageCount++;
+						currentPackageSize = 0;
+						clusterIndex++;
 
-					sPackageToNode[packageCount] = currentNodeID;
+						sPackageToNode[packageCount] = currentNodeID;
+					} else {
+						// Issue #5: When the package limit is reached, assign
+						// remaining CPUs to the last valid package.
+					}
 				}
 
 				if (packageCount < cpuCount)
@@ -1157,6 +1185,13 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		}
 		l3Start = l3End;
 	}
+
+	// Issue #24 (clarification): scheduler_on_team_foreground_changed reads
+	// fThread->team->fIsForeground without the team lock in choose_core.
+	// This is a single-byte read that is atomic on all supported architectures;
+	// a torn read is impossible and the worst outcome is a one-quantum stale
+	// placement, which self-corrects on the next rebalance.  No lock change
+	// is warranted here.
 
 	cpuToCoreDeleter.Detach();
 	cpuToPackageDeleter.Detach();

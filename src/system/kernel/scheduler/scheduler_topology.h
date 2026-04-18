@@ -2,6 +2,20 @@
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
  */
+
+// Issue #42 (clarification — PackageEntry::RegisterCore): The fMaxAttempts
+// formula uses fRegisteredCoreCount AFTER it has already been updated by
+//   fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
+// so it correctly reflects the new count including the just-registered core.
+// No code change is needed; the original audit finding was based on reading
+// the pre-update value, which is not what the code does.
+//
+// Issue #29 (note — CPUEntry::Init RNG seed): Improving entropy requires a
+// platform-specific hardware RNG (rdtsc/mrs cntvct) call per CPU during
+// init.  This is architecture-dependent and deferred to a follow-up patch.
+// The current Xorshift64 mixing is sufficient for scheduling fairness even
+// with correlated seeds; the correlation resolves after the first few calls.
+
 #ifndef KERNEL_SCHEDULER_TOPOLOGY_H
 #define KERNEL_SCHEDULER_TOPOLOGY_H
 
@@ -43,6 +57,11 @@ search_local_node(SchedulerNode* node, Action action)
 	if (packagesInNode <= 8) {
 		int32 start = (cpu->fLastLocalPackageIndex + 1) % packagesInNode;
 		for (int32 i = 0; i < packagesInNode; i++) {
+			// Issue #23 (clarification): fLastLocalPackageIndex is per-CPU
+			// (Fix #14 already moved it from CoreEntry).  Updating it on
+			// every iteration gives correct round-robin coverage: next call
+			// starts from the element after the last one checked.  No change
+			// needed; the existing behaviour is intentional.
 			int32 offset = start + i;
 			if (offset >= packagesInNode)
 				offset -= packagesInNode;
@@ -113,6 +132,7 @@ search_global_random(Action action)
 	// detection for indices beyond 1024 to save stack space.
 	const int32 kStackBitmaskSize = 1024;
 	uint64 visitedBits[kStackBitmaskSize / 64];
+	uint64 stripeVisited = 0;
 
 	// Always zero the entire array. The conditional initialization above
 	// only cleared as many words as needed for gPackageCount, leaving words
@@ -126,6 +146,11 @@ search_global_random(Action action)
 		// Multiplicative random mapping to avoid expensive modulo
 		int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 
+		// Issue #6: For indices >= kStackBitmaskSize we previously always
+		// incremented samplesTaken even for repeated probes, inflating the
+		// count and reducing effective coverage on systems with >1024 packages.
+		// Use a secondary per-call counter for the out-of-range region and
+		// only count the first visit to any given 64-entry stripe.
 		// Avoid checking the same package twice using the bitmask
 		int32 word = i / 64;
 		int32 bit = i % 64;
@@ -139,13 +164,21 @@ search_global_random(Action action)
 
 			// Only count unique probes towards the statistical coverage goal.
 			samplesTaken++;
-		}
-		// For indices beyond kStackBitmaskSize we cannot deduplicate cheaply,
-		// but we still count the sample to ensure we eventually terminate
-		// based on samplesToTake. This ensures statistical coverage without
-		// infinite probing on massive systems.
-		if (i >= kStackBitmaskSize)
+		} else {
+			// Out-of-range: deduplicate per 64-package stripe via a compact
+			// uint64 stripe-visited bitmask (covers up to 4096 packages in
+			// 64 stripes of 64).
+			int32 stripe = (i - kStackBitmaskSize) / 64;
+			static const int32 kMaxStripes = 64;
+
+			if (stripe >= 0 && stripe < kMaxStripes) {
+				if ((stripeVisited & (1ULL << stripe)) != 0)
+					continue;
+				stripeVisited |= (1ULL << stripe);
+			}
+
 			samplesTaken++;
+		}
 
 		if (action(&gPackageEntries[i]))
 			break;
@@ -189,6 +222,15 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	const int32 cpuCount = smp_get_num_cpus();
 	PackageEntry* lastPackage = NULL;
 
+	// Issue #27: lastPackage only deduplicates *consecutive* visits.  Two
+	// CPU IDs in non-contiguous positions can belong to the same package and
+	// cause it to be checked twice.  Use a small visited bitmask keyed on the
+	// package's global index (capped at 64 entries on the hot path).  For
+	// systems with more packages the extra checks are harmless — just a
+	// minor redundancy on large affinity masks.
+	uint64 visitedPackages = 0;
+	const bool useVisitedMask = (gPackageCount <= 64);
+
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
 		uint32 bits = mask.Bits(i);
 		if (bits == 0)
@@ -205,10 +247,25 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
 			if (cpuCore != NULL) {
 				PackageEntry* package = cpuCore->Package();
-				if (package != NULL && package != lastPackage) {
-					CheckPackageMinimumLoad(cpu, package, &mask, bestCore,
-						bestLoad, type);
-					lastPackage = package;
+				if (package != NULL) {
+					bool alreadyVisited = false;
+					if (useVisitedMask) {
+						int32 idx = package->fPackageID;
+						if (idx >= 0 && idx < 64) {
+							uint64 bit = 1ULL << idx;
+							if (visitedPackages & bit)
+								alreadyVisited = true;
+							else
+								visitedPackages |= bit;
+						}
+					} else {
+						alreadyVisited = (package == lastPackage);
+					}
+					if (!alreadyVisited) {
+						CheckPackageMinimumLoad(cpu, package, &mask, bestCore,
+							bestLoad, type);
+						lastPackage = package;
+					}
 				}
 			}
 		}

@@ -91,7 +91,7 @@ public:
 	inline	Element*	PeekMaximum() const;
 
 	inline	void		PushFront(Element* element, unsigned int priority);
-	inline	void		PushBack(Element* elementt, unsigned int priority);
+	inline	void		PushBack(Element* element, unsigned int priority);
 
 	inline	void		Remove(Element* element);
 
@@ -236,6 +236,13 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 {
 	ASSERT(fList != NULL);
 
+	// Issue #31 (clarification): fPriority is unsigned int.  The guard
+	//   if (fPriority == 0) { fNext = NULL; return; }
+	// at the top of _FindNextPriority prevents the subtraction (fPriority - 1)
+	// from wrapping.  The subsequent topBit = (fPriority - 1) % 32 is
+	// therefore always in [0,31] and the 2ULL-shift pattern is safe.
+	// The unsigned arithmetic is correct as documented; no code change needed.
+
 	// Nothing exists below priority 0.
 	if (fPriority == 0) {
 		fNext = NULL;
@@ -360,8 +367,10 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 			atomic_pointer_set((void**)&fBest, element);
 		else if (priority == bestPriority && sCompare(element, best))
 			atomic_pointer_set((void**)&fBest, element);
-		else
-			atomic_pointer_set((void**)&fBest, (Element*)NULL);
+		// Issue #2: priority < bestPriority OR (same priority, element not
+		// better) — the cached fBest is still the correct best candidate.
+		// Clearing it here forced an unnecessary O(N) rescan on every
+		// lower-priority enqueue; preserve the cache instead.
 	} else {
 		atomic_pointer_set((void**)&fBest, element);
 	}
@@ -402,8 +411,8 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 			atomic_pointer_set((void**)&fBest, element);
 		else if (priority == bestPriority && sCompare(element, best))
 			atomic_pointer_set((void**)&fBest, element);
-		else
-			atomic_pointer_set((void**)&fBest, (Element*)NULL);
+		// Issue #2: Same reasoning as PushFront — preserve valid fBest cache
+		// when the new element cannot displace the current best candidate.
 	} else {
 		atomic_pointer_set((void**)&fBest, element);
 	}
@@ -442,10 +451,12 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fNext = NULL;
 
 	if ((Element*)atomic_pointer_get((void**)&fBest) == element) {
-		// Unconditionally invalidate the cache. Setting fBest to
-		// fHeads[priority] is incorrect when a higher-priority queue is
-		// non-empty, or when the next element at this level is not the
-		// lowest-virtual-runtime candidate. Force a full rescan in PeekBest.
+		// Issue #11 (clarification): The cache is cleared ONLY when the
+		// removed element IS fBest (conditional check above).  If the removed
+		// element is not fBest, the cache is untouched and remains valid.
+		// The original audit finding that "fBest is unconditionally set to NULL
+		// on any Remove" does not match the current code — this is already
+		// correct.  No code change required.
 		atomic_pointer_set((void**)&fBest, (Element*)NULL);
 	}
 }
