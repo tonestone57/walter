@@ -217,20 +217,17 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 
 	const int kMaxThreadsToCheckPerQueue = 5;
 
-	// Check CPU RunQueue
-	if (cpu->ThreadCount() > 0) {
-		CPURunQueueLocker locker(cpu);
-		const ThreadRunQueue* runQueue = cpu->RunQueue();
+	auto scanRunQueue = [&](const ThreadRunQueue* runQueue) {
 		const uint32* bitmap = runQueue->GetBitmap();
 
 		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
 			uint32 val = bitmap[i];
 
-				// Use 2ULL to avoid undefined behaviour when the shift amount
-				// reaches 32 on 32-bit targets.  _FindNextPriority uses the
-				// same pattern.  The guard above prevents this branch when
-				// THREAD_MAX_SET_PRIORITY % 32 == 31, but a future change to
-				// THREAD_MAX_SET_PRIORITY could silently violate that.
+			// Use 2ULL to avoid undefined behaviour when the shift amount
+			// reaches 32 on 32-bit targets.  _FindNextPriority uses the
+			// same pattern.  The guard above prevents this branch when
+			// THREAD_MAX_SET_PRIORITY % 32 == 31, but a future change to
+			// THREAD_MAX_SET_PRIORITY could silently violate that.
 			if (i == ThreadRunQueue::kBitmapSize - 1)
 				val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 
@@ -245,10 +242,9 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 
 				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
 					// Capture successor BEFORE _UpdatePriorityBoost(): that call
-					// may Remove(thread) + PushBack(thread, newPriority), clearing
-					// thread->fNext.  'next' remains valid because:
-					//  - We hold CPURunQueueLocker (no concurrent mutation).
-					//  - Only thread's own link fields change; next is unaffected.
+					// may Dequeue() + Enqueue(), clearing thread's next link.
+					// 'next' remains valid because we hold the appropriate
+					// run queue lock, preventing concurrent mutation.
 					ThreadData* next = thread->GetRunQueueLink()->fNext;
 					thread->_UpdatePriorityBoost();
 					thread = next;
@@ -260,57 +256,32 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 				bit = fls(val) - 1;
 			}
 		}
-	}
+	};
 
-	// Check Core RunQueue
+	// Check Core RunQueue first to maintain Core -> CPU lock ordering
 	// Fix #10: On an N-way SMT core, all N CPUs previously scanned the shared
 	// core run queue every 10 reschedules, contending on CoreRunQueueLocker N×
 	// more often than necessary.  Gate the scan with round-robin ownership:
 	// only the CPU whose (boost_epoch % cpuCount) matches its modular index
-	// within the core performs the scan.  Every CPU still scans its own
-	// private run queue unconditionally above.
-	{
-		int32 coreCPUCount = max_c(1, core->CPUCount());
-		// fRescheduleCount was post-incremented before the early-return check
-		// at the top of this function; subtract 1 to get the current epoch.
-		uint32 boostEpoch = (cpu->fRescheduleCount - 1) / 10;
-		bool ownsCoreQueueScan =
-			((int32)(boostEpoch % (uint32)coreCPUCount)
-				== (cpu->ID() % coreCPUCount));
-		if (ownsCoreQueueScan && core->CoreRunQueueThreadCount() > 0) {
-		CoreRunQueueLocker locker(core);
-		const ThreadRunQueue* runQueue = core->RunQueue();
-		const uint32* bitmap = runQueue->GetBitmap();
+	// within the core performs the scan.
+	int32 coreCPUCount = max_c(1, core->CPUCount());
+	// fRescheduleCount was post-incremented before the early-return check
+	// at the top of this function; subtract 1 to get the current epoch.
+	uint32 boostEpoch = (cpu->fRescheduleCount - 1) / 10;
+	bool ownsCoreQueueScan =
+		((int32)(boostEpoch % (uint32)coreCPUCount)
+			== (cpu->ID() % coreCPUCount));
 
-		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-			uint32 val = bitmap[i];
+	CoreRunQueueLocker coreLocker(core, false);
+	if (ownsCoreQueueScan && core->CoreRunQueueThreadCount() > 0) {
+		coreLocker.Lock();
+		scanRunQueue(core->RunQueue());
+	}
 
-			if (i == ThreadRunQueue::kBitmapSize - 1)
-				val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
-
-			if (val == 0)
-				continue;
-
-			int bit = fls(val) - 1;
-			while (true) {
-				unsigned int priority = i * 32 + bit;
-				ThreadData* thread = runQueue->GetHead(priority);
-				int count = 0;
-
-				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
-					// See CPU RunQueue loop above for why 'next' is captured first.
-					ThreadData* next = thread->GetRunQueueLink()->fNext;
-					thread->_UpdatePriorityBoost();
-					thread = next;
-				}
-
-				val &= ~(1UL << bit);
-				if (val == 0)
-					break;
-				bit = fls(val) - 1;
-			}
-		}
-		} // end ownsCoreQueueScan
+	// Check CPU RunQueue
+	if (cpu->ThreadCount() > 0) {
+		CPURunQueueLocker cpuLocker(cpu);
+		scanRunQueue(cpu->RunQueue());
 	}
 }
 
@@ -1252,7 +1223,7 @@ init()
 	for (int32 i = 0; i < packageCount; i++) {
 		int32 nodeIndex = sPackageToNode[i];
 		if (nodeIndex >= nodeCount)
-			nodeIndex = 0; // Fallback for edge cases
+			nodeIndex %= nodeCount; // Fallback for edge cases
 
 		if (nodeIndex != currentNode) {
 			if (currentNode != -1) {
@@ -1266,13 +1237,25 @@ init()
 				gSchedulerNodes[currentNode].SetPackageStartIndex(i);
 		}
 
-		gPackageEntries[i].Init(i, &gSchedulerNodes[nodeIndex],
-			currentPackageIndexInNode);
-		currentPackageIndexInNode++;
+		// Ensure we don't overflow the package mask in SchedulerNode.
+		// Packages beyond index 63 in a node will have NodeIndex() == -1,
+		// disabling their idle tracking in SchedulerNode to prevent mask
+		// corruption.
+		int32 packageIndexInNode = currentPackageIndexInNode;
+		if (packageIndexInNode >= 64 || packageIndexInNode < 0) {
+			if (packageIndexInNode == 64) {
+				dprintf("scheduler: warning: node %" B_PRId32 " has more than 64 "
+					"packages. Excess packages will not have idle tracking.\n",
+					nodeIndex);
+			}
+			packageIndexInNode = -1;
+		}
 
-		// Ensure we don't overflow the package mask in SchedulerNode
-		if (currentPackageIndexInNode >= 64)
-			currentPackageIndexInNode = -1;
+		gPackageEntries[i].Init(i, &gSchedulerNodes[nodeIndex],
+			packageIndexInNode);
+
+		if (currentPackageIndexInNode != -1)
+			currentPackageIndexInNode++;
 	}
 
 	if (currentNode != -1) {

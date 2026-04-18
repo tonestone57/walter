@@ -303,6 +303,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	if (oldPriority > rest || (!putAtBack && oldPriority == rest)) {
 		if (sharedThreadIsFloating) {
 			coreLocker.Unlock();
+			cpuLocker.Unlock();
 			bool wasRunQueueEmpty;
 			bool requestPreemption;
 			sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption);
@@ -319,10 +320,14 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	coreLocker.Unlock();
 
 	if (sharedThreadIsFloating) {
+		cpuLocker.Unlock();
 		bool wasRunQueueEmpty;
 		bool requestPreemption;
 		sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption);
 	}
+
+	if (!cpuLocker.IsLocked())
+		cpuLocker.Lock();
 
 	Remove(pinnedThread);
 	return pinnedThread;
@@ -1020,6 +1025,7 @@ PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex)
 	fEnabledCoreMask = 0;
 	fCoreCount = 0;
 	fRegisteredCoreCount = 0;
+	fMaxAttempts = 0;
 	memset(fCores, 0, sizeof(fCores));
 	memset(fCoreLoads, 0, sizeof(fCoreLoads));
 }
@@ -1149,6 +1155,14 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 	fCores[index] = core;
 	fCoreCount++;
 	fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
+
+	// Try to pick distinct random valid cores.
+	// Use formula: 4 + (3 * log2(N)) / 2
+	// For 32 cores: 4 + 7.5 = 11 attempts.
+	if (fRegisteredCoreCount > 0) {
+		fMaxAttempts = 4 + (3 * (31 - __builtin_clz(fRegisteredCoreCount))) / 2;
+	} else
+		fMaxAttempts = 0;
 }
 
 
@@ -1172,12 +1186,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		if (registeredCores <= 0)
 			return NULL;
 
-		// Try to pick distinct random valid cores.
-		// Use formula: 4 + (3 * log2(N)) / 2
-		// For 32 cores: 4 + 7.5 = 11 attempts.
-		const int kMaxAttempts = 4 + (3 * (31 - __builtin_clz(registeredCores))) / 2;
-
-		while (attempts++ < kMaxAttempts) {
+		while (attempts++ < fMaxAttempts) {
 			// Select a random bit index based on registered cores to avoid sparse array slots
 			int32 i = (int32)(((uint64)cpu->GetRandom() * registeredCores) >> 32);
 
@@ -1256,11 +1265,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		if (registeredCores <= 0)
 			return NULL;
 
-		// Try to pick distinct random valid cores.
-		// Use formula: 4 + (3 * log2(N)) / 2
-		const int kMaxAttempts = 4 + (3 * (31 - __builtin_clz(registeredCores))) / 2;
-
-		while (attempts++ < kMaxAttempts) {
+		while (attempts++ < fMaxAttempts) {
 			// Select a random bit index based on registered cores
 			int32 i = (int32)(((uint64)cpu->GetRandom() * registeredCores) >> 32);
 

@@ -153,7 +153,7 @@ search_global_random(Action action)
 }
 
 
-static inline void
+static inline bool
 CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& bestCore, int32& bestLoad, CoreType type = CORE_TYPE_UNKNOWN)
 {
@@ -168,7 +168,7 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 		if (score <= kLowLoadThreshold) {
 			bestCore = candidate;
 			bestLoad = score;
-			return;
+			return true;
 		}
 
 		if (bestCore == NULL || score < bestLoad) {
@@ -176,6 +176,8 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 			bestLoad = score;
 		}
 	}
+
+	return false;
 }
 
 

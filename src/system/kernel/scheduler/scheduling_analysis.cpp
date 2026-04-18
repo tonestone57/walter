@@ -35,6 +35,12 @@ struct HashObjectKey {
 };
 
 
+enum HashObjectType {
+	HASH_OBJECT_TYPE_THREAD,
+	HASH_OBJECT_TYPE_WAIT_OBJECT,
+	HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT
+};
+
 struct HashObject {
 	HashObject*	next;
 
@@ -42,6 +48,7 @@ struct HashObject {
 	{
 	}
 
+	virtual HashObjectType Type() const = 0;
 	virtual uint32 HashKey() const = 0;
 	virtual bool Equals(const HashObjectKey* key) const = 0;
 };
@@ -54,6 +61,11 @@ struct ThreadKey : HashObjectKey {
 		:
 		id(id)
 	{
+	}
+
+	virtual HashObjectType Type() const
+	{
+		return HASH_OBJECT_TYPE_THREAD;
 	}
 
 	virtual uint32 HashKey() const
@@ -127,6 +139,11 @@ struct WaitObjectKey : HashObjectKey {
 	{
 	}
 
+	virtual HashObjectType Type() const
+	{
+		return HASH_OBJECT_TYPE_WAIT_OBJECT;
+	}
+
 	virtual uint32 HashKey() const
 	{
 		return type ^ (uint32)(addr_t)object;
@@ -186,6 +203,11 @@ struct ThreadWaitObject : HashObject, scheduling_analysis_thread_wait_object {
 		wait_time = 0;
 		waits = 0;
 		next_in_list = NULL;
+	}
+
+	virtual HashObjectType Type() const
+	{
+		return HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT;
 	}
 
 	virtual uint32 HashKey() const
@@ -481,12 +503,15 @@ public:
 		for (uint32 i = 0; i < fHashTableSize; i++) {
 			HashObject* object = fHashTable[i];
 			while (object != NULL) {
-				Thread* thread = dynamic_cast<Thread*>(object);
-				if (thread != NULL) {
-					threads[index++] = thread;
-				} else if (WaitObject* waitObject
-						= dynamic_cast<WaitObject*>(object)) {
-					_PolishWaitObject(waitObject);
+				switch (object->Type()) {
+					case HASH_OBJECT_TYPE_THREAD:
+						threads[index++] = static_cast<Thread*>(object);
+						break;
+					case HASH_OBJECT_TYPE_WAIT_OBJECT:
+						_PolishWaitObject(static_cast<WaitObject*>(object));
+						break;
+					default:
+						break;
 				}
 
 				HashObject* next = object->next;

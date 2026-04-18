@@ -173,9 +173,8 @@ choose_core(const ThreadData* threadData)
 			bool tryRandom = gPackageCount > kRandomSearchThreshold;
 			if (tryRandom && !useMask) {
 				search_global_random([&](PackageEntry* entry) {
-					CheckPackageMinimumLoad(cpu, entry, NULL, core, bestScore,
-						preferredType);
-					return false;
+					return CheckPackageMinimumLoad(cpu, entry, NULL, core,
+						bestScore, preferredType);
 				});
 			} else if (useMask) {
 				CheckMaskedPackagesMinimumLoad(cpu, mask, core, bestScore,
@@ -225,9 +224,8 @@ choose_core(const ThreadData* threadData)
 
 			if (tryRandomStd && !useMask) {
 				search_global_random([&](PackageEntry* entry) {
-					CheckPackageMinimumLoad(cpu, entry, NULL, core, stdBestScore,
-						CORE_TYPE_STANDARD);
-					return false;
+					return CheckPackageMinimumLoad(cpu, entry, NULL, core,
+						stdBestScore, CORE_TYPE_STANDARD);
 				});
 			} else if (useMask) {
 				CheckMaskedPackagesMinimumLoad(cpu, mask, core, stdBestScore,
@@ -339,14 +337,14 @@ choose_core(const ThreadData* threadData)
 				node = gPackageEntries[homePackageID].Node();
 
 			search_local_node(node, [&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(cpu, entry, NULL, bestCore, bestLoad);
-				return false;
+				return CheckPackageMinimumLoad(cpu, entry, NULL, bestCore,
+					bestLoad);
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(cpu, entry, NULL, bestCore, bestLoad);
-				return false;
+				return CheckPackageMinimumLoad(cpu, entry, NULL, bestCore,
+					bestLoad);
 			});
 
 		} else if (useMask) {
@@ -446,16 +444,16 @@ rebalance(const ThreadData* threadData)
 
 	if (tryRandom && !useMask) {
 		// Phase 2: Local Node
-		SchedulerNode* node = core->Package()->Node();
+		SchedulerNode* node = NULL;
+		if (core->Package() != NULL)
+			node = core->Package()->Node();
 		search_local_node(node, [&](PackageEntry* entry) {
-			CheckPackageMinimumLoad(cpu, entry, NULL, other, bestLoad);
-			return false;
+			return CheckPackageMinimumLoad(cpu, entry, NULL, other, bestLoad);
 		});
 
 		// Phase 3: Global Random
 		search_global_random([&](PackageEntry* entry) {
-			CheckPackageMinimumLoad(cpu, entry, NULL, other, bestLoad);
-			return false;
+			return CheckPackageMinimumLoad(cpu, entry, NULL, other, bestLoad);
 		});
 
 	} else if (useMask) {
@@ -510,7 +508,7 @@ rebalance(const ThreadData* threadData)
 	// we reduce the migration threshold to encourage returning home.
 	// Conversely, if 'other' is remote and we are currently home, we increase it.
 	int32 homePackageID = threadData->HomePackage();
-	if (homePackageID >= 0) {
+	if (homePackageID >= 0 && core->Package() != NULL && other->Package() != NULL) {
 		int32 currentPackageID = core->Package()->ID();
 		int32 otherPackageID = other->Package()->ID();
 
@@ -618,20 +616,18 @@ rebalance_irqs(bool idle)
 	if (tryRandom) {
 		// Phase 2: Local Node
 		CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
-		if (currentCore != NULL) {
+		if (currentCore != NULL && currentCore->Package() != NULL) {
 			SchedulerNode* node = currentCore->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL, other,
-					bestLoad);
-				return false;
+				return CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL,
+					other, bestLoad);
 			});
 		}
 
 		// Phase 3: Global Random
 		search_global_random([&](PackageEntry* entry) {
-			CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL, other,
-				bestLoad);
-			return false;
+			return CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL,
+				other, bestLoad);
 		});
 	}
 

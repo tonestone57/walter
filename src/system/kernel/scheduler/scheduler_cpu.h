@@ -414,6 +414,7 @@ private:
 						int32				fIdleCoreCount;
 						int32				fCoreCount;
 						int32				fRegisteredCoreCount;
+						int32				fMaxAttempts;
 public:
 	inline				int32				CoreCount() const { return fCoreCount; }
 private:
@@ -601,6 +602,10 @@ CoreEntry::GetLoad() const
 		return min_c(load, kMaxLoad);
 	if (cpuCount == 2)
 		return (int32)min_c(load >> 1, kMaxLoad);
+	if (cpuCount == 4)
+		return (int32)min_c(load >> 2, kMaxLoad);
+	if (cpuCount == 8)
+		return (int32)min_c(load >> 3, kMaxLoad);
 
 	return (int32)min_c(load / cpuCount, kMaxLoad);
 }

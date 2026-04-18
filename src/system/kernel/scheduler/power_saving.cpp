@@ -136,7 +136,7 @@ choose_small_task_core(CPUEntry* cpu)
 						eBestScore = score;
 					}
 				}
-				return false;
+				return eCore != NULL && eBestScore >= (kHighLoad * 3) / 4;
 			});
 		}
 
@@ -196,7 +196,7 @@ choose_small_task_core(CPUEntry* cpu)
 	if (tryRandom) {
 		search_global_random([&](PackageEntry* entry) {
 			check_package_small_task(cpu, entry, core, bestScore);
-			return false;
+			return core != NULL && bestScore >= (kHighLoad * 3) / 4;
 		});
 	}
 
@@ -400,7 +400,7 @@ choose_core(const ThreadData* threadData)
 			search_global_random([&](PackageEntry* entry) {
 				check_package_packing(cpu, entry, NULL, core, bestScore,
 					foundNonOverloaded, preferredType);
-				return false;
+				return core != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
 			});
 		} else if (useMask) {
 			check_masked_packages_packing(cpu, mask, core, bestScore,
@@ -440,9 +440,9 @@ choose_core(const ThreadData* threadData)
 
 			if (tryRandomStd && !useMask) {
 				search_global_random([&](PackageEntry* entry) {
-				check_package_packing(cpu, entry, useMask ? &mask : NULL,
-					core, stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD);
-					return false;
+					check_package_packing(cpu, entry, useMask ? &mask : NULL,
+						core, stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD);
+					return core != NULL && foundNonOverloadedStd && stdBestScore >= (kHighLoad * 3) / 4;
 				});
 			} else if (useMask) {
 				check_masked_packages_packing(cpu, mask, core, stdBestScore,
@@ -502,14 +502,14 @@ choose_core(const ThreadData* threadData)
 			}
 
 			search_local_node(node, [&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(cpu, entry, NULL, bestCore, bestScore);
-				return false;
+				return CheckPackageMinimumLoad(cpu, entry, NULL, bestCore,
+					bestScore);
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(cpu, entry, NULL, bestCore, bestScore);
-				return false;
+				return CheckPackageMinimumLoad(cpu, entry, NULL, bestCore,
+					bestScore);
 			});
 
 		} else if (useMask) {
@@ -597,8 +597,11 @@ rebalance(const ThreadData* threadData)
 	int32 cpuCount = core->CPUCount();
 	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
 	if (coreScore > kHighLoad) {
-		int32 nodeID = core->Package()->Node()->ID();
-		if (sSmallTaskCore != NULL && atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {
+		int32 nodeID = -1;
+		if (core->Package() != NULL && core->Package()->Node() != NULL)
+			nodeID = core->Package()->Node()->ID();
+
+		if (nodeID != -1 && sSmallTaskCore != NULL && atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {
 			atomic_pointer_set(&sSmallTaskCore[nodeID], (CoreEntry*)NULL);
 			CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 
@@ -621,18 +624,20 @@ rebalance(const ThreadData* threadData)
 
 		if (tryRandom && !useMask) {
 			// Phase 2: Local Node
-			SchedulerNode* node = core->Package()->Node();
+			SchedulerNode* node = NULL;
+			if (core->Package() != NULL)
+				node = core->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {
 				check_package_packing(cpu, entry, NULL, other, bestScore,
 					foundNonOverloaded);
-				return false;
+				return other != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
 			});
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
 				check_package_packing(cpu, entry, NULL, other, bestScore,
 					foundNonOverloaded);
-				return false;
+				return other != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
 			});
 
 		} else if (useMask) {
@@ -665,6 +670,24 @@ rebalance(const ThreadData* threadData)
 		ASSERT(other != NULL);
 
 		int32 threshold = kLoadDifference >> 1;
+
+		// Advanced NUMA Support:
+		// If the candidate core 'other' is in the thread's Home Package,
+		// we reduce the migration threshold to encourage returning home.
+		// Conversely, if 'other' is remote and we are currently home, we increase it.
+		int32 homePackageID = threadData->HomePackage();
+		if (homePackageID >= 0 && core->Package() != NULL && other->Package() != NULL) {
+			int32 currentPackageID = core->Package()->ID();
+			int32 otherPackageID = other->Package()->ID();
+
+			if (otherPackageID == homePackageID && currentPackageID != homePackageID) {
+				// Bonus for returning home: effectively 0 threshold
+				threshold = 0;
+			} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
+				// Penalty for leaving home: double the threshold.
+				threshold *= 2;
+			}
+		}
 
 		// Type-affinity guard: resist cross-type migration on heterogeneous
 		// systems to preserve the placement made by choose_core. Without this,
@@ -800,18 +823,16 @@ rebalance_irqs(bool idle)
 				SchedulerNode* node = currentCore->Package()->Node();
 				if (node != NULL) {
 					search_local_node(node, [&](PackageEntry* entry) {
-						CheckPackageMinimumLoad(cpuEntryForIRQ, entry,
+						return CheckPackageMinimumLoad(cpuEntryForIRQ, entry,
 							NULL, other, bestScore);
-						return false;
 					});
 				}
 			}
 
 			// Phase 3: Global Random
 			search_global_random([&](PackageEntry* entry) {
-				CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL, other,
-					bestScore);
-				return false;
+				return CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL,
+					other, bestScore);
 			});
 		}
 
