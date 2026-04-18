@@ -81,7 +81,11 @@ private:
 
 			FunctionData*	fFunctionData;
 			FunctionData*	fSortBuffer;
-			FunctionData*	fHashTable[256];
+
+			static const uint32 kHashTableSize = 2048;
+			FunctionData*	fHashTable[kHashTableSize];
+			uint32			fNextFunctionSlot;
+
 			spinlock		fFunctionLock;
 
 			status_t		fStatus;

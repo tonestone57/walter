@@ -267,6 +267,9 @@ public:
 
 	void Insert(HashObject* object)
 	{
+		if (fHashTable == NULL)
+			return;
+
 		uint32 index = object->HashKey() % fHashTableSize;
 		object->next = fHashTable[index];
 		fHashTable[index] = object;
@@ -274,16 +277,23 @@ public:
 
 	void Remove(HashObject* object)
 	{
+		if (fHashTable == NULL)
+			return;
+
 		uint32 index = object->HashKey() % fHashTableSize;
 		HashObject** slot = &fHashTable[index];
-		while (*slot != object)
+		while (*slot != NULL && *slot != object)
 			slot = &(*slot)->next;
 
-		*slot = object->next;
+		if (*slot != NULL)
+			*slot = object->next;
 	}
 
 	HashObject* Lookup(const HashObjectKey& key) const
 	{
+		if (fHashTable == NULL)
+			return NULL;
+
 		uint32 index = key.HashKey() % fHashTableSize;
 		HashObject* object = fHashTable[index];
 		while (object != NULL && !object->Equals(&key))
@@ -433,6 +443,9 @@ public:
 
 	int32 MissingWaitObjects() const
 	{
+		if (fHashTable == NULL)
+			return 0;
+
 		// Iterate through the hash table and count the wait objects that don't
 		// have a name yet.
 		int32 count = 0;
@@ -462,6 +475,9 @@ public:
 		// Iterate through the hash table and collect all threads. Also polish
 		// all wait objects that haven't been update yet.
 		int32 index = 0;
+		if (fHashTable == NULL)
+			return B_OK;
+
 		for (uint32 i = 0; i < fHashTableSize; i++) {
 			HashObject* object = fHashTable[i];
 			while (object != NULL) {

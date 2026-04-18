@@ -446,20 +446,23 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 	if (beneficiaryData == NULL)
 		return;
 
-	bigtime_t timeUsed = system_time() - fQuantumStart;
+	bigtime_t now = system_time();
+	bigtime_t timeUsed = now - fQuantumStart;
 	ASSERT(timeUsed >= 0);
 	fTimeUsed += timeUsed;
 
-	bigtime_t timeLeft = ComputeQuantum() - fTimeUsed;
+	bigtime_t quantum = ComputeQuantum();
+	bigtime_t timeLeft = quantum - fTimeUsed;
 	if (timeLeft > 0) {
+		// Donate remaining slice to the beneficiary.
 		InterruptsSpinLocker locker(beneficiary->scheduler_lock);
 		beneficiaryData->fStolenTime += timeLeft;
 	}
 
 	// Exhaust donor slice: we expect the donor to yield or be descheduled
 	// immediately after this call to prevent double-dipping.
-	fQuantumStart = system_time();
-	fTimeUsed = ComputeQuantum();
+	fQuantumStart = now;
+	fTimeUsed = quantum;
 }
 
 

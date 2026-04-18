@@ -483,8 +483,11 @@ rebalance(const ThreadData* threadData)
 
 	// Normalize scores by performance capacity to ensure fair rebalancing
 	// across heterogeneous core types (P vs E).
-	int32 otherScore = (other->GetScore() << kDefaultCapacityShift) / other->PerformanceScale();
-	int32 coreScore = (core->GetScore() << kDefaultCapacityShift) / core->PerformanceScale();
+	int32 otherScale = other->PerformanceScale();
+	int32 coreScale = core->PerformanceScale();
+
+	int32 otherScore = (other->GetScore() << kDefaultCapacityShift) / (otherScale > 0 ? otherScale : 1);
+	int32 coreScore = (core->GetScore() << kDefaultCapacityShift) / (coreScale > 0 ? coreScale : 1);
 
 	if (other == core)
 		return core;
@@ -648,8 +651,11 @@ rebalance_irqs(bool idle)
 
 	// Normalize scores by performance capacity to ensure fair rebalancing
 	// across heterogeneous core types (P vs E).
-	int32 otherLoad = (other->GetScore() << kDefaultCapacityShift) / other->PerformanceScale();
-	int32 coreLoad = (core->GetScore() << kDefaultCapacityShift) / core->PerformanceScale();
+	int32 otherScale = other->PerformanceScale();
+	int32 coreScale = core->PerformanceScale();
+
+	int32 otherLoad = (other->GetScore() << kDefaultCapacityShift) / (otherScale > 0 ? otherScale : 1);
+	int32 coreLoad = (core->GetScore() << kDefaultCapacityShift) / (coreScale > 0 ? coreScale : 1);
 
 	if (otherLoad + kLoadDifference >= coreLoad)
 		return;

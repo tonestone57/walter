@@ -39,6 +39,7 @@ Profiler::Profiler()
 	}
 	memset(fFunctionData, 0, sizeof(FunctionData) * kMaxFunctionEntries);
 	memset(fHashTable, 0, sizeof(fHashTable));
+	fNextFunctionSlot = 0;
 
 	memset(fFunctionStacks, 0, sizeof(fFunctionStacks));
 
@@ -289,23 +290,35 @@ Profiler::_FindFunction(const char* function)
 	uint32 hash = 0;
 	for (const char* p = function; *p; p++)
 		hash = (hash * 31 + *p);
-	uint32 index = hash % 256;
 
 	InterruptsSpinLocker _(fFunctionLock);
-	FunctionData* entry = fHashTable[index];
-	if (entry != NULL && !strcmp(entry->fFunction, function))
-		return entry;
 
-	for (uint32 i = 0; i < kMaxFunctionEntries; i++) {
-		if (fFunctionData[i].fFunction == NULL) {
-			fFunctionData[i].fFunction = function;
-			fHashTable[index] = fFunctionData + i;
-			return fFunctionData + i;
-		}
-		if (!strcmp(fFunctionData[i].fFunction, function)) {
-			fHashTable[index] = fFunctionData + i;
-			return fFunctionData + i;
-		}
+	// Linear Probing: handle collisions without evictions.
+	uint32 index = hash % kHashTableSize;
+	uint32 startIndex = index;
+	do {
+		FunctionData* entry = fHashTable[index];
+		if (entry == NULL)
+			break;
+
+		if (strcmp(entry->fFunction, function) == 0)
+			return entry;
+
+		index = (index + 1) % kHashTableSize;
+	} while (index != startIndex);
+
+	// Not in hash table, check if we have room for a new entry.
+	if (fNextFunctionSlot < kMaxFunctionEntries) {
+		FunctionData* entry = &fFunctionData[fNextFunctionSlot++];
+		entry->fFunction = function;
+
+		// Insert into hash table.
+		index = hash % kHashTableSize;
+		while (fHashTable[index] != NULL)
+			index = (index + 1) % kHashTableSize;
+		fHashTable[index] = entry;
+
+		return entry;
 	}
 
 	return NULL;

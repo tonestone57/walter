@@ -302,11 +302,11 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = atomic_get((int32*)&fBitmap[i]);
 		if (val != 0) {
-			if (i == kBitmapSize - 1 && (MaxPriority % 32 != 31)) {
-				val &= (1UL << (MaxPriority % 32 + 1)) - 1;
-				if (val == 0)
-					continue;
-			}
+			if (i == kBitmapSize - 1)
+				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+
+			if (val == 0)
+				continue;
 
 			int bit = fls(val) - 1;
 			unsigned int priority = i * 32 + bit;
@@ -495,11 +495,11 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
 		if (val != 0) {
-			if (i == kBitmapSize - 1 && (MaxPriority % 32 != 31)) {
-				val &= (1UL << (MaxPriority % 32 + 1)) - 1;
-				if (val == 0)
-					continue;
-			}
+			if (i == kBitmapSize - 1)
+				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+
+			if (val == 0)
+				continue;
 
 			int bit = fls(val) - 1;
 			unsigned int priority = i * 32 + bit;
@@ -541,11 +541,11 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare, const Predicate& predica
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
 		if (val != 0) {
-			if (i == kBitmapSize - 1 && (MaxPriority % 32 != 31)) {
-				val &= (1UL << (MaxPriority % 32 + 1)) - 1;
-				if (val == 0)
-					continue;
-			}
+			if (i == kBitmapSize - 1)
+				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+
+			if (val == 0)
+				continue;
 
 			while (val != 0) {
 				int bit = fls(val) - 1;
@@ -592,8 +592,8 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
 
-		if (i == kBitmapSize - 1 && (MaxPriority % 32 != 31))
-			val &= (1UL << (MaxPriority % 32 + 1)) - 1;
+		if (i == kBitmapSize - 1)
+			val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 
 		while (val != 0) {
 			int bit = fls(val) - 1;
