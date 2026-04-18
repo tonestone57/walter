@@ -6,6 +6,7 @@
 #include "scheduler_profiler.h"
 
 #include <debug.h>
+#include <util/atomic.h>
 #include <util/AutoLock.h>
 
 #include <algorithm>
@@ -294,7 +295,7 @@ Profiler::_FindFunction(const char* function)
 	uint32 index = hash % kHashTableSize;
 	uint32 startIndex = index;
 	do {
-		FunctionData* entry = fHashTable[index];
+		FunctionData* entry = atomic_pointer_get(&fHashTable[index]);
 		if (entry == NULL)
 			break;
 
@@ -310,7 +311,7 @@ Profiler::_FindFunction(const char* function)
 	index = hash % kHashTableSize;
 	startIndex = index;
 	do {
-		FunctionData* entry = fHashTable[index];
+		FunctionData* entry = atomic_pointer_get(&fHashTable[index]);
 		if (entry == NULL)
 			break;
 
@@ -327,9 +328,9 @@ Profiler::_FindFunction(const char* function)
 
 		// Insert into hash table.
 		index = hash % kHashTableSize;
-		while (fHashTable[index] != NULL)
+		while (atomic_pointer_get(&fHashTable[index]) != NULL)
 			index = (index + 1) % kHashTableSize;
-		fHashTable[index] = entry;
+		atomic_pointer_set(&fHashTable[index], entry);
 
 		return entry;
 	}
