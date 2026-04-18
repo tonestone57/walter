@@ -113,6 +113,14 @@ choose_small_task_core(CPUEntry* cpu)
 	// work. On homogeneous systems packType is UNKNOWN and we fall through to
 	// the general packing logic.
 	if (sSmallTaskCore != NULL && gMinCoreType != gMaxCoreType) {
+		int32 currentNodeID = cpu->Core()->Package()->Node()->ID();
+		CoreEntry* current = (CoreEntry*)atomic_pointer_get(
+			&sSmallTaskCore[currentNodeID]);
+		if (current != NULL && current->Type() == gMinCoreType
+				&& current->GetScore() < kHighLoad) {
+			return current;
+		}
+
 		CoreEntry* eCore = NULL;
 		int32 eBestScore = -1;
 
@@ -157,14 +165,32 @@ choose_small_task_core(CPUEntry* cpu)
 		// capacity (all E-cores are already heavily loaded).
 		if (eCore != NULL) {
 			int32 nodeID = eCore->Package()->Node()->ID();
-			CoreEntry* smallTaskCore = (CoreEntry*)atomic_pointer_test_and_set(
-				&sSmallTaskCore[nodeID], eCore, (CoreEntry*)NULL);
-			return smallTaskCore == NULL ? eCore : smallTaskCore;
+			while (true) {
+				CoreEntry* currentE = (CoreEntry*)atomic_pointer_get(
+					&sSmallTaskCore[nodeID]);
+				if (currentE != NULL && currentE->Type() == gMinCoreType
+						&& currentE->GetScore() < kHighLoad) {
+					return currentE;
+				}
+
+				if (atomic_pointer_test_and_set(&sSmallTaskCore[nodeID], eCore,
+						currentE) == currentE) {
+					return eCore;
+				}
+			}
 		}
 	}
 
 	CoreEntry* core = NULL;
 	int32 bestScore = -1;
+
+	if (sSmallTaskCore != NULL) {
+		int32 currentNodeID = cpu->Core()->Package()->Node()->ID();
+		CoreEntry* current = (CoreEntry*)atomic_pointer_get(
+			&sSmallTaskCore[currentNodeID]);
+		if (current != NULL && current->GetScore() < kHighLoad)
+			return current;
+	}
 
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 	if (tryRandom) {
@@ -195,12 +221,17 @@ choose_small_task_core(CPUEntry* cpu)
 
 	if (sSmallTaskCore != NULL) {
 		int32 nodeID = core->Package()->Node()->ID();
-		CoreEntry* smallTaskCore
-			= (CoreEntry*)atomic_pointer_test_and_set(&sSmallTaskCore[nodeID], core,
-				(CoreEntry*)NULL);
-		if (smallTaskCore == NULL)
-			return core;
-		return smallTaskCore;
+		while (true) {
+			CoreEntry* current = (CoreEntry*)atomic_pointer_get(
+				&sSmallTaskCore[nodeID]);
+			if (current != NULL && current->GetScore() < kHighLoad)
+				return current;
+
+			if (atomic_pointer_test_and_set(&sSmallTaskCore[nodeID], core,
+					current) == current) {
+				return core;
+			}
+		}
 	}
 	return core;
 }

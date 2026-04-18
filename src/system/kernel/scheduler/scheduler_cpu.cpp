@@ -439,9 +439,6 @@ CPUEntry::_TryStealWork()
 	ThreadData* stolen = NULL;
 
 	search_local_node(node, [this, package, &stolen](PackageEntry* entry) {
-		// Note: 'stolen' is captured by reference and acts as a single-threaded
-		// accumulator for this CPU. This is safe because _TryStealWork is only
-		// ever called by the CPU's own rescheduling loop.
 		if (stolen != NULL)
 			return true;
 
@@ -465,13 +462,16 @@ CPUEntry::_TryStealWork()
 			int32 stolenPriority = -1;
 			stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
-			if (stolen != NULL)
+			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
+				victim->UnlockRunQueue();
+				return true;
+			}
 
 			victim->UnlockRunQueue();
 		}
 
-		return stolen != NULL;
+		return false;
 	});
 
 	if (stolen != NULL)
@@ -510,13 +510,16 @@ CPUEntry::_TryStealWork()
 			int32 stolenPriority = -1;
 			stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
-			if (stolen != NULL)
+			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
+				victim->UnlockRunQueue();
+				return true;
+			}
 
 			victim->UnlockRunQueue();
 		}
 
-		return stolen != NULL;
+		return false;
 	});
 
 	if (stolen != NULL)
@@ -1110,13 +1113,13 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	// Fix #15
-		int32 firstIndex = -1;
+		uint64 sampledCores = 0;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
 		if (registeredCores <= 0)
 			return NULL;
 
-		// Try to pick two distinct random valid cores.
+		// Try to pick distinct random valid cores.
 		// Use formula: 4 + (3 * log2(N)) / 2
 		// For 32 cores: 4 + 7.5 = 11 attempts.
 		const int kMaxAttempts = 4 + (3 * (31 - __builtin_clz(registeredCores))) / 2;
@@ -1125,19 +1128,17 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			// Select a random bit index based on registered cores to avoid sparse array slots
 			int32 i = (int32)(((uint64)cpu->GetRandom() * registeredCores) >> 32);
 
+			if (sampledCores & (1ULL << i))
+				continue;
+			sampledCores |= (1ULL << i);
+
 			CoreEntry* candidate = fCores[i];
 			if (candidate == NULL)
-				continue;
-
-			if (i == firstIndex)
 				continue;
 
 			// Check if this core is enabled
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
-
-			if (firstIndex == -1)
-				firstIndex = i;
 
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
 				continue;
@@ -1196,13 +1197,13 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	// Fix #15
-		int32 firstIndex = -1;
+		uint64 sampledCores = 0;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
 		if (registeredCores <= 0)
 			return NULL;
 
-		// Try to pick two distinct random valid cores.
+		// Try to pick distinct random valid cores.
 		// Use formula: 4 + (3 * log2(N)) / 2
 		const int kMaxAttempts = 4 + (3 * (31 - __builtin_clz(registeredCores))) / 2;
 
@@ -1210,19 +1211,17 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			// Select a random bit index based on registered cores
 			int32 i = (int32)(((uint64)cpu->GetRandom() * registeredCores) >> 32);
 
+			if (sampledCores & (1ULL << i))
+				continue;
+			sampledCores |= (1ULL << i);
+
 			CoreEntry* candidate = fCores[i];
 			if (candidate == NULL)
-				continue;
-
-			if (i == firstIndex)
 				continue;
 
 			// Check if this core is enabled
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
-
-			if (firstIndex == -1)
-				firstIndex = i;
 
 			if (mask != NULL && !mask->GetBit(candidate->ID()))
 				continue;
@@ -1232,7 +1231,8 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			int32 load = atomic_get(&fCoreLoads[i]);
 
 			// Track the best core across all attempts (Power-of-N-Choices).
-			if (maxEntry == NULL || load > maxLoad) {
+			if (maxEntry == NULL || load > maxLoad
+					|| (load == maxLoad && candidate->ID() < maxEntry->ID())) {
 				maxLoad = load;
 				maxEntry = candidate;
 			}
@@ -1274,7 +1274,8 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 				continue;
 
 			int32 load = atomic_get(&fCoreLoads[i]);
-			if (maxEntry == NULL || load > maxLoad) {
+			if (maxEntry == NULL || load > maxLoad
+					|| (load == maxLoad && candidate->ID() < maxEntry->ID())) {
 				maxLoad = load;
 				maxEntry = candidate;
 			}

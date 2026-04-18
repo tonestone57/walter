@@ -63,8 +63,11 @@ search_local_node(SchedulerNode* node, Action action)
 	// a fixed 128-byte stack allocation (kStackBitmaskSize == 1024 packages).
 	// For systems with >1024 packages deduplication is skipped but the loop
 	// still terminates within kMaxAttempts, bounding stack use unconditionally.
-	const int kMaxLocalAttempts = min_c(packagesInNode,
-		4 + (packagesInNode > 1 ? 31 - __builtin_clz(packagesInNode) : 0));
+	int32 logPackages = 0;
+	if (packagesInNode > 1)
+		logPackages = 31 - __builtin_clz(packagesInNode);
+
+	const int kMaxLocalAttempts = min_c(packagesInNode, 4 + logPackages);
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
 		int32 index = nodeBaseIndex
 			+ (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);

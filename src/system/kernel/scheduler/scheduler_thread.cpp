@@ -288,14 +288,16 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
+	const bigtime_t baseQuantum = Scheduler::BaseQuantum();
+	const bigtime_t multiplier = Scheduler::QuantumMultiplier(0);
+	const bigtime_t maxLatency = Scheduler::MaximumLatency();
+	const bigtime_t minQuantum = Scheduler::MinimalQuantum();
+
 	const bigtime_t kMinGranularity = 1200;
-	const bigtime_t kHighLoadQuantum = max_c(Scheduler::BaseQuantum(),
-		kMinGranularity);
-	const bigtime_t kMediumQuantum = Scheduler::BaseQuantum()
-		* Scheduler::QuantumMultiplier(0);
-	const bigtime_t kMaxQuantum = Scheduler::MaximumLatency();
-	const bigtime_t kDisplayQuantum = max_c(Scheduler::MinimalQuantum(),
-		kMinGranularity);
+	const bigtime_t kHighLoadQuantum = max_c(baseQuantum, kMinGranularity);
+	const bigtime_t kMediumQuantum = baseQuantum * multiplier;
+	const bigtime_t kMaxQuantum = maxLatency;
+	const bigtime_t kDisplayQuantum = max_c(minQuantum, kMinGranularity);
 
 	// Cache fCore once. Without this, a concurrent MigrateTo() can change
 	// fCore between the three calls below, mixing data from two different
@@ -307,10 +309,8 @@ ThreadData::ComputeQuantum() const
 	// between UnassignCore() and the subsequent MigrateTo() (e.g. rapid CPU
 	// hot-plug).  Return the minimal quantum so the thread gets rescheduled
 	// quickly and picks up a valid core assignment on the next pass.
-	if (core == NULL) {
-		bigtime_t minQ = Scheduler::MinimalQuantum();
-		return max_c(minQ, kMinGranularity);
-	}
+	if (core == NULL)
+		return max_c(minQuantum, kMinGranularity);
 
 	int32 load;
 	int32 threadCount;

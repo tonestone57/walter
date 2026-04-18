@@ -135,13 +135,15 @@ scheduler_update_interaction_state()
 	bigtime_t threshold = Scheduler::MinimalQuantum();
 
 	while (now - lastTime >= threshold) {
-		if (atomic_test_and_set64(&sLastInteractionTime, now, lastTime) == lastTime)
+		if (atomic_test_and_set64(&sLastInteractionTime, now, lastTime) == lastTime) {
+			lastTime = now;
 			break;
-		lastTime = atomic_get64(&sLastInteractionTime);
-	}
+		}
 
-	if (now - lastTime < threshold)
-		return;
+		lastTime = atomic_get64(&sLastInteractionTime);
+		if (now - lastTime < threshold)
+			return;
+	}
 
 	if (atomic_get64(&gDeadlineBucketSize) == 1000) {
 		// Fix #12: Replace non-atomic timer_is_active()+add_timer() pair
@@ -1125,10 +1127,23 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		const int32 kMaxCoresPerNode = 16;
 
 		if (coresInL3 > 0) {
+			if (packageCount < cpuCount)
+				sPackageToNode[packageCount] = currentNodeID;
+
 			for (int32 i = 0; i < coresInL3; i++) {
 				int32 cpuID = cpuList[l3Start + i];
-				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 
+				// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
+				// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
+				if (coresInCurrentNode >= kMaxCoresPerNode) {
+					currentNodeID = nodeCount++;
+					coresInCurrentNode = 0;
+
+					if (packageCount < cpuCount)
+						sPackageToNode[packageCount] = currentNodeID;
+				}
+
+				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 				if (currentPackageSize >= clusterSize) {
 					if (packageCount + 1 >= cpuCount) {
 						// Should not happen with valid topology
@@ -1137,19 +1152,13 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 					packageCount++;
 					currentPackageSize = 0;
 					clusterIndex++;
-				}
 
-				// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
-				// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
-				if (coresInCurrentNode >= kMaxCoresPerNode) {
-					currentNodeID = nodeCount++;
-					coresInCurrentNode = 0;
-				}
-
-				if (packageCount < cpuCount) {
-					sCPUToCluster[cpuID] = packageCount;
 					sPackageToNode[packageCount] = currentNodeID;
 				}
+
+				if (packageCount < cpuCount)
+					sCPUToCluster[cpuID] = packageCount;
+
 				currentPackageSize++;
 				coresInCurrentNode++;
 			}
