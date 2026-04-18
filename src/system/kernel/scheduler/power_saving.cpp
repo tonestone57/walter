@@ -691,8 +691,11 @@ rebalance(const ThreadData* threadData)
 			}
 		}
 
-		int32 coreNewScore = coreScore - threadLoad;
-		int32 otherNewScore = other->GetScore() + threadLoad;
+		int32 weightedLoadOnCore = ((int64)threadLoad * core->ScoreFactor()) >> 16;
+		int32 weightedLoadOnOther = ((int64)threadLoad * other->ScoreFactor()) >> 16;
+
+		int32 coreNewScore = coreScore - weightedLoadOnCore;
+		int32 otherNewScore = other->GetScore() + weightedLoadOnOther;
 		return coreNewScore - otherNewScore >= threshold ? other : core;
 	}
 

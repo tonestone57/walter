@@ -596,7 +596,7 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		int32 priority = max_c((int32)1, GetEffectivePriority());
 		bigtime_t delta = (active * B_URGENT_DISPLAY_PRIORITY) / priority;
 		// Cap virtual runtime to a forward-looking ceiling rather than
-		// INT64_MAX. A thread saturated at INT64_MAX would be permanently
+		// B_INT64_MAX. A thread saturated at B_INT64_MAX would be permanently
 		// starved because every new thread starts at fVirtualRuntime == 0.
 		// With this ceiling the gap between a saturated thread and a new
 		// thread is at most MaximumLatency()*1000 in virtual-time units,
@@ -608,8 +608,8 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 			now = system_time();
 
 		bigtime_t ceiling;
-		if (now > INT64_MAX - kLookahead)
-			ceiling = INT64_MAX;
+		if (now > B_INT64_MAX - kLookahead)
+			ceiling = B_INT64_MAX;
 		else
 			ceiling = now + kLookahead;
 

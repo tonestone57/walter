@@ -1116,11 +1116,28 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
 	if (activeMask != 0) {
 		// Find idle cores that have at least one active neighbor.
 		native_cpu_mask_t neighbors = ((activeMask << 1) | (activeMask >> 1)) & mask;
-		if (neighbors != 0)
+		if (neighbors != 0) {
+			// If multiple neighbors exist, pick one semi-randomly to avoid always
+			// hitting the same core if it's shared by many active ones.
+			if (scheduler_popcount(neighbors) > 1) {
+				int32 shift = (int32)(((uint64)cpu->GetRandom() * kMaxCoresPerPackage) >> 32);
+				native_cpu_mask_t rotated = (neighbors >> shift);
+				if (shift > 0)
+					rotated |= (neighbors << (kMaxCoresPerPackage - shift));
+
+				if (rotated != 0)
+					return fCores[(scheduler_ctz(rotated) + shift) % kMaxCoresPerPackage];
+			}
 			return fCores[scheduler_ctz(neighbors)];
+		}
 	}
 
-	// If no core is partially active, just pick the first idle one.
+	// If no core is partially active, just pick an idle one semi-randomly.
+	int32 count = scheduler_popcount(mask);
+	if (count > 1) {
+		int32 index = (int32)(((uint64)cpu->GetRandom() * count) >> 32);
+		return GetIdleCore(index);
+	}
 	return fCores[scheduler_ctz(mask)];
 }
 

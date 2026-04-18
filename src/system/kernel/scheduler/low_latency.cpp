@@ -487,13 +487,8 @@ rebalance(const ThreadData* threadData)
 	// Check if the least loaded core is significantly less loaded than
 	// the current one.
 
-	// Normalize scores by performance capacity to ensure fair rebalancing
-	// across heterogeneous core types (P vs E).
-	int32 otherScale = other->PerformanceScale();
-	int32 coreScale = core->PerformanceScale();
-
-	int32 otherScore = (other->GetScore() << kDefaultCapacityShift) / (otherScale > 0 ? otherScale : 1);
-	int32 coreScore = (core->GetScore() << kDefaultCapacityShift) / (coreScale > 0 ? coreScale : 1);
+	int32 otherScore = other->GetScore();
+	int32 coreScore = core->GetScore();
 
 	if (other == core)
 		return core;
@@ -567,7 +562,17 @@ rebalance(const ThreadData* threadData)
 
 	int32 cpuCount = core->CPUCount();
 	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
-	return difference >= threadLoad ? other : core;
+
+	// Check if migrating the thread would make the scores closer.
+	// We compare the thread's weight on the current core vs its weight on the
+	// target core to ensure the migration is truly beneficial on a normalized scale.
+	int32 weightedLoadOnCore = ((int64)threadLoad * core->ScoreFactor()) >> 16;
+	int32 weightedLoadOnOther = ((int64)threadLoad * other->ScoreFactor()) >> 16;
+
+	int32 coreNewScore = coreScore - weightedLoadOnCore;
+	int32 otherNewScore = otherScore + weightedLoadOnOther;
+
+	return coreNewScore - otherNewScore >= threshold ? other : core;
 }
 
 
@@ -657,13 +662,8 @@ rebalance_irqs(bool idle)
 	if (other == core)
 		return;
 
-	// Normalize scores by performance capacity to ensure fair rebalancing
-	// across heterogeneous core types (P vs E).
-	int32 otherScale = other->PerformanceScale();
-	int32 coreScale = core->PerformanceScale();
-
-	int32 otherLoad = (other->GetScore() << kDefaultCapacityShift) / (otherScale > 0 ? otherScale : 1);
-	int32 coreLoad = (core->GetScore() << kDefaultCapacityShift) / (coreScale > 0 ? coreScale : 1);
+	int32 otherLoad = other->GetScore();
+	int32 coreLoad = core->GetScore();
 
 	if (otherLoad + kLoadDifference >= coreLoad)
 		return;

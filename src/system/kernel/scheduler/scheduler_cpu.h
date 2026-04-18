@@ -258,6 +258,7 @@ public:
 	inline				int32			GetScore() const;
 						void			SetCapacity(int32 capacity);
 	inline				int32			Capacity() const { return fCapacity; }
+	inline				uint32			ScoreFactor() const { return fScoreFactor; }
 						bigtime_t		GetMinVirtualRuntime() const;
 	inline				uint32			LoadMeasurementEpoch() const
 											{ return (uint32)atomic_get64((int64*)&fCombinedLoad); }

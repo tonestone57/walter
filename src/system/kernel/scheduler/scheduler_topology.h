@@ -141,10 +141,11 @@ search_global_random(Action action)
 			samplesTaken++;
 		}
 		// For indices beyond kStackBitmaskSize we cannot deduplicate cheaply,
-		// so we skip the samplesTaken increment. This ensures that on massive
-		// systems we do not terminate early due to random collisions that we
-		// failed to filter out, instead relying on kMaxAttempts to bound the
-		// total effort.
+		// but we still count the sample to ensure we eventually terminate
+		// based on samplesToTake. This ensures statistical coverage without
+		// infinite probing on massive systems.
+		if (i >= kStackBitmaskSize)
+			samplesTaken++;
 
 		if (action(&gPackageEntries[i]))
 			break;
