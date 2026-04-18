@@ -235,9 +235,16 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 		if (targetCore == NULL && targetCPU != NULL)
 			targetCore = targetCPU->Core();
 		else if (targetCore != NULL && targetCPU == NULL) {
-			targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
-			if (targetCPU == NULL)
+			// If we have a core hint, verify its load under its lock before
+			// accepting it. This prevents overloading the waker's core.
+			if (targetCore->GetLoad() >= kHighLoad)
 				targetCore = NULL;
+
+			if (targetCore != NULL) {
+				targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
+				if (targetCPU == NULL)
+					targetCore = NULL;
+			}
 		}
 
 		if (targetCore == NULL && targetCPU == NULL) {

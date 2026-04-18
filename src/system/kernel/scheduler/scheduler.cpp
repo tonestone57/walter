@@ -356,11 +356,11 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		// check and the assignment could otherwise store NULL into targetCore,
 		// producing a spurious NULL that ChooseCoreAndCPU must then recover from.
 		// We also check CPUCount() to ensure the core is still enabled.
+		// Load validation is deferred to ChooseCoreAndCPU where it can be
+		// checked under the appropriate lock.
 		CoreEntry* wakerCore = waker->scheduler_data->Core();
-		if (wakerCore != NULL && wakerCore->CPUCount() > 0
-			&& wakerCore->GetLoad() < kHighLoad) {
+		if (wakerCore != NULL && wakerCore->CPUCount() > 0)
 			targetCore = wakerCore;
-		}
 	} else if (threadData->Core() != NULL
 		&& (!newOne || !threadData->HasCacheExpired())) {
 		targetCore = threadData->Rebalance();
@@ -878,16 +878,17 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		gCPUEnabled.SetBitAtomic(cpuID);
 		cpu->UnlockScheduler();
 	} else {
-		// If this is the last CPU in the core, we need to unassign threads from
-		// the core. We do this before acquiring any scheduler locks to avoid
-		// holding them for too long (thread_map is O(threads)).
-		if (core->CPUCount() == 1)
-			thread_map(CoreEntry::_UnassignThread, core);
-
 		cpu->LockScheduler();
 
 		gCPU[cpuID].disabled = true;
 		gCPUEnabled.ClearBitAtomic(cpuID);
+
+		// If this is the last CPU in the core, we need to unassign threads from
+		// the core.  We do this AFTER marking the CPU disabled and acquiring
+		// the scheduler lock. This ensures no new threads are assigned to the
+		// core while we are unassigning them.
+		if (core->CPUCount() == 1)
+			thread_map(CoreEntry::_UnassignThread, core);
 
 		ThreadEnqueuer enqueuer;
 
@@ -1186,6 +1187,8 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 static status_t
 init()
 {
+	gIdleNodeMask = 0;
+
 	// create logical processor to core and package mappings
 	int32 cpuCount, coreCount, packageCount, nodeCount;
 	status_t result = build_topology_mappings(cpuCount, coreCount,

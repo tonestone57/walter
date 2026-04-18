@@ -355,7 +355,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	bigtime_t skipTime = Scheduler::MinimalQuantum() / 2;
 	if (hasYielded) {
 		timeLeft = 0;
-		fInteractivityScore = min_c(fInteractivityScore + 50, 1000);
+		fInteractivityScore = min_c(fInteractivityScore + 20, 1000);
 	} else if (wasPreempted || timeLeft <= skipTime) {
 		fStolenTime += timeLeft;
 		timeLeft = 0;
@@ -606,7 +606,13 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		const bigtime_t kLookahead = maxLatency * 1000LL;
 		if (now == 0)
 			now = system_time();
-		bigtime_t ceiling = now + kLookahead;
+
+		bigtime_t ceiling;
+		if (now > INT64_MAX - kLookahead)
+			ceiling = INT64_MAX;
+		else
+			ceiling = now + kLookahead;
+
 		if (fVirtualRuntime < ceiling - delta)
 			fVirtualRuntime += delta;
 		else if (fVirtualRuntime < ceiling)

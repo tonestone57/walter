@@ -238,7 +238,7 @@ choose_small_task_core(CPUEntry* cpu)
 
 
 static CoreEntry*
-choose_idle_core()
+choose_idle_core(CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -265,7 +265,7 @@ choose_idle_core()
 	}
 
 	if (package != NULL)
-		return package->GetIdleCore();
+		return package->GetIdleCorePacking(cpu);
 	return NULL;
 }
 
@@ -529,7 +529,7 @@ choose_core(const ThreadData* threadData)
 		core = bestCore;
 
 		if (core == NULL) {
-			core = choose_idle_core();
+			core = choose_idle_core(cpu);
 			if (core != NULL && useMask && !core->CPUMask().Matches(mask))
 				core = NULL;
 		}

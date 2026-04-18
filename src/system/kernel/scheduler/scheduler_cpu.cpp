@@ -384,11 +384,11 @@ uint32
 CPUEntry::GetRandom()
 {
 	uint64 x = fRandomState;
-	x ^= x << 13;
-	x ^= x >> 7;
-	x ^= x << 17;
+	x ^= x >> 12;
+	x ^= x << 25;
+	x ^= x >> 27;
 	fRandomState = x;
-	return (uint32)x;
+	return (uint32)((x * 0x2545F4914F6CDD1DULL) >> 32);
 }
 
 
@@ -1094,6 +1094,33 @@ PackageEntry::GetIdleCore(int32 index) const
 	if (mask == 0)
 		return NULL;
 
+	return fCores[scheduler_ctz(mask)];
+}
+
+
+CoreEntry*
+PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
+{
+	native_cpu_mask_t mask = scheduler_atomic_get(&fIdleCoreMask);
+	if (mask == 0)
+		return NULL;
+
+	// Intra-package packing:
+	// We prefer idle cores that share a cache level (like L2) with already active
+	// cores in the same package. Since we don't have explicit L2 clusters here,
+	// we use adjacency in the topology-sorted fCores array as a proxy.
+
+	native_cpu_mask_t enabledMask = scheduler_atomic_get((native_cpu_mask_t*)&fEnabledCoreMask);
+	native_cpu_mask_t activeMask = enabledMask & ~mask;
+
+	if (activeMask != 0) {
+		// Find idle cores that have at least one active neighbor.
+		native_cpu_mask_t neighbors = ((activeMask << 1) | (activeMask >> 1)) & mask;
+		if (neighbors != 0)
+			return fCores[scheduler_ctz(neighbors)];
+	}
+
+	// If no core is partially active, just pick the first idle one.
 	return fCores[scheduler_ctz(mask)];
 }
 

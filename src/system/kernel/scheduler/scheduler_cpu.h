@@ -374,6 +374,7 @@ public:
 	inline				void				CoreWakesUp(CoreEntry* core);
 
 						CoreEntry*			GetIdleCore(int32 index = 0) const;
+						CoreEntry*			GetIdleCorePacking(CPUEntry* cpu) const;
 	inline				native_cpu_mask_t	IdleCoreMask() const;
 	inline				int32				IdleCoreCount() const { return fIdleCoreCount; }
 	inline				CoreEntry*			GetCore(int32 index) const;
