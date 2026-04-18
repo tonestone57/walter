@@ -183,7 +183,9 @@ choose_core(const ThreadData* threadData)
 			}
 
 			if (core == NULL && !useMask) {
-				int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
+				int32 startIndex = tryRandom
+					? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
+					: 0;
 				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 				for (int32 i = 0; i < attempts; i++) {
@@ -234,7 +236,7 @@ choose_core(const ThreadData* threadData)
 
 			if (core == NULL && !useMask) {
 				int32 startIndex2 = tryRandomStd
-					? cpu->GetRandom() % gPackageCount
+					? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
 					: 0;
 				int32 attempts2 = min_c(gPackageCount, kMaxFallbackAttempts);
 				for (int32 i = 0; i < attempts2; i++) {
@@ -359,7 +361,9 @@ choose_core(const ThreadData* threadData)
 			// Start from a random index to ensure fairness over time.
 			// 64 attempts cover small systems entirely and provide a reasonable
 			// search depth for large ones.
-			int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
+			int32 startIndex = tryRandom
+				? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
+				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 			for (int32 i = 0; i < attempts; i++) {
@@ -459,7 +463,9 @@ rebalance(const ThreadData* threadData)
 	}
 
 	if (other == NULL && !useMask) {
-		int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
+		int32 startIndex = tryRandom
+			? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
+			: 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 		for (int32 i = 0; i < attempts; i++) {
@@ -626,7 +632,9 @@ rebalance_irqs(bool idle)
 
 	// Use empty mask (NULL), as we don't care about affinity here
 	if (other == NULL) {
-		int32 startIndex = tryRandom ? cpuEntryForIRQ->GetRandom() % gPackageCount : 0;
+		int32 startIndex = tryRandom
+			? (int32)(((uint64)cpuEntryForIRQ->GetRandom() * gPackageCount) >> 32)
+			: 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 		for (int32 i = 0; i < attempts; i++) {

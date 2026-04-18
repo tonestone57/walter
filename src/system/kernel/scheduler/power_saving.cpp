@@ -142,7 +142,7 @@ choose_small_task_core(CPUEntry* cpu)
 
 		if (eCore == NULL) {
 			int32 start = tryRandom
-				? cpu->GetRandom() % gPackageCount
+				? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
 				: 0;
 			for (int32 i = 0; i < min_c(gPackageCount, kMaxFallbackAttempts); i++) {
 				int32 idx = start + i;
@@ -205,7 +205,9 @@ choose_small_task_core(CPUEntry* cpu)
 	if (core == NULL) {
 		// Use the global kMaxFallbackAttempts constant from scheduler_common.h.
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
-		int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
+		int32 startIndex = tryRandom
+			? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
+			: 0;
 
 		for (int32 i = 0; i < attempts; i++) {
 			int32 index = startIndex + i;
@@ -406,7 +408,9 @@ choose_core(const ThreadData* threadData)
 		}
 
 		if (core == NULL && !useMask) {
-			int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
+			int32 startIndex = tryRandom
+				? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
+				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 			for (int32 i = 0; i < attempts; i++) {
@@ -447,7 +451,7 @@ choose_core(const ThreadData* threadData)
 
 			if (core == NULL && !useMask) {
 				int32 startIndex = tryRandomStd
-					? cpu->GetRandom() % gPackageCount
+					? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
 					: 0;
 				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 				for (int32 i = 0; i < attempts; i++) {
@@ -514,7 +518,9 @@ choose_core(const ThreadData* threadData)
 
 		// Fallback to full scan
 		if (bestCore == NULL && !useMask) {
-			int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
+			int32 startIndex = tryRandom
+				? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
+				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 			for (int32 i = 0; i < attempts; i++) {
@@ -636,7 +642,9 @@ rebalance(const ThreadData* threadData)
 
 		if (other == NULL && !useMask) {
 			// Phase 4: Limited Global Scan (Fallback)
-			int32 startIndex = tryRandom ? cpu->GetRandom() % gPackageCount : 0;
+			int32 startIndex = tryRandom
+				? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
+				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 			for (int32 i = 0; i < attempts; i++) {
@@ -806,7 +814,9 @@ rebalance_irqs(bool idle)
 
 		if (other == NULL) {
 			// Limit fallback attempts
-			int32 startIndex = tryRandom ? cpuEntryForIRQ->GetRandom() % gPackageCount : 0;
+			int32 startIndex = tryRandom
+				? (int32)(((uint64)cpuEntryForIRQ->GetRandom() * gPackageCount) >> 32)
+				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
 			for (int32 i = 0; i < attempts; i++) {
