@@ -762,10 +762,9 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	int32 cpuCount = atomic_get(&fCPUCount);
-	ASSERT(atomic_get(&fIdleCPUCount) < cpuCount);
+	ASSERT(atomic_get(&fIdleCPUCount) < atomic_get(&fCPUCount));
 	atomic_add(&fTotalThreadCount, -1);
-	if (atomic_add(&fIdleCPUCount, 1) == cpuCount - 1)
+	if (atomic_add(&fIdleCPUCount, 1) == atomic_get(&fCPUCount) - 1)
 		fPackage->CoreGoesIdle(this);
 }
 
@@ -778,11 +777,6 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	// Snapshot fCPUCount before the atomic_add. Reading it after creates a
-	// window where a concurrent RemoveCPU can decrement fCPUCount, leading
-	// to a spurious CoreWakesUp call if oldIdleCount matches the new,
-	// smaller fCPUCount.
-	int32 cpuCount = atomic_get(&fCPUCount);
 	atomic_add(&fTotalThreadCount, 1);
 	// Fix #1 (documentation): == cpuCount is intentionally correct here.
 	// atomic_add() returns the OLD value of fIdleCPUCount.  CoreWakesUp must
@@ -792,7 +786,7 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	// starts running — the opposite edge, and the wrong one for CoreWakesUp.
 	// The symmetric CPUGoesIdle check (== cpuCount - 1) confirms the pattern:
 	// both conditions detect the all-idle boundary from their respective sides.
-	if (atomic_add(&fIdleCPUCount, -1) >= cpuCount)
+	if (atomic_add(&fIdleCPUCount, -1) >= atomic_get(&fCPUCount))
 		fPackage->CoreWakesUp(this);
 }
 

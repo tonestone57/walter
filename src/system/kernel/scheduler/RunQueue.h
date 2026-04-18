@@ -584,7 +584,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 
 	// Scale search depth based on system size.
 	// More cores = more budget to find better affinity.
-	static const int kNumCPUs = smp_get_num_cpus();
+	const int kNumCPUs = smp_get_num_cpus();
 	const int kMaxSearchPerLevel = 16 + (kNumCPUs >> 3);
 
 	int totalBudget = kMaxSearchPerLevel * 2;

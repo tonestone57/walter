@@ -779,12 +779,12 @@ void
 CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 {
 	ASSERT(fCPUCount > 0);
-	ASSERT(atomic_get(&fIdleCPUCount) > 0);
+	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
-	// Decrement fIdleCPUCount unconditionally: AddCPU always increments it
-	// (every CPU starts idle), so RemoveCPU must balance it regardless of
-	// whether the CPU is currently idle or running at removal time.
-	atomic_add(&fIdleCPUCount, -1);
+	// Only decrement fIdleCPUCount if the CPU being removed was actually idle.
+	if (CPUPriorityHeap::GetKey(cpu) == B_IDLE_PRIORITY)
+		atomic_add(&fIdleCPUCount, -1);
+
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	if (atomic_add(&fCPUCount, -1) == 1) {
 		// core has been disabled
@@ -1069,21 +1069,20 @@ CoreEntry*
 PackageEntry::GetIdleCore(int32 index) const
 {
 	native_cpu_mask_t mask = scheduler_atomic_get(&fIdleCoreMask);
-	int32 firstBit = -1;
 
 	// Find the N-th set bit (index-th)
-	for (int32 i = 0; i <= index; i++) {
+	for (int32 i = 0; i < index; i++) {
 		if (mask == 0)
 			return NULL;
 
-		firstBit = scheduler_ctz(mask);
-		mask &= ~((native_cpu_mask_t)1 << firstBit);
+		int32 bit = scheduler_ctz(mask);
+		mask &= ~((native_cpu_mask_t)1 << bit);
 	}
 
-	if (firstBit != -1)
-		return fCores[firstBit];
+	if (mask == 0)
+		return NULL;
 
-	return NULL;
+	return fCores[scheduler_ctz(mask)];
 }
 
 

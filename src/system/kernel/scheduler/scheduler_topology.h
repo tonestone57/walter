@@ -128,24 +128,20 @@ search_global_random(Action action)
 		int32 bit = i % 64;
 
 		// Deduplication: skip packages already probed this call (within the
-		// stack bitmask range).  For indices beyond kStackBitmaskSize we
-		// cannot deduplicate cheaply, but we still count the probe towards
-		// the budget so the loop terminates in at most kMaxAttempts steps
-		// regardless of gPackageCount.  Previously, indices >= kStackBitmaskSize
-		// never incremented samplesTaken, causing the loop to always run the
-		// full kMaxAttempts (2x samplesToTake) on systems with > 1024 packages.
+		// stack bitmask range).
 		if (i < kStackBitmaskSize) {
 			if ((visitedBits[word] & (1ULL << bit)) != 0)
 				continue;	// Duplicate within bitmask range: do NOT count.
 			visitedBits[word] |= (1ULL << bit);
+
+			// Only count unique probes towards the statistical coverage goal.
+			samplesTaken++;
 		}
-		// Count this probe towards the budget.  For i < kStackBitmaskSize,
-		// only non-duplicate packages reach this line (duplicates hit the
-		// continue above, so the "distinct probes" invariant is maintained).
-		// For i >= kStackBitmaskSize deduplication is skipped and every probe
-		// counts, bounding the loop to at most kMaxAttempts iterations on any
-		// system size.
-		samplesTaken++;
+		// For indices beyond kStackBitmaskSize we cannot deduplicate cheaply,
+		// so we skip the samplesTaken increment. This ensures that on massive
+		// systems we do not terminate early due to random collisions that we
+		// failed to filter out, instead relying on kMaxAttempts to bound the
+		// total effort.
 
 		if (action(&gPackageEntries[i]))
 			break;
