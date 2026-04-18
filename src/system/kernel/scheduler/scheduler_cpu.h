@@ -226,6 +226,10 @@ public:
 
 	inline				int32			ThreadCount() const
 											{ return atomic_get(const_cast<int32*>(&fTotalThreadCount)); }
+	inline				void			IncrementTotalThreadCount()
+											{ atomic_add(&fTotalThreadCount, 1); }
+	inline				void			DecrementTotalThreadCount()
+											{ atomic_add(&fTotalThreadCount, -1); }
 	inline				int32			CoreRunQueueThreadCount() const
 											{ return atomic_get(const_cast<int32*>(&fThreadCount)); }
 
@@ -776,7 +780,7 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 		return;
 
 	ASSERT(atomic_get(&fIdleCPUCount) < atomic_get(&fCPUCount));
-	atomic_add(&fTotalThreadCount, -1);
+	DecrementTotalThreadCount();
 	if (atomic_add(&fIdleCPUCount, 1) == atomic_get(&fCPUCount) - 1)
 		fPackage->CoreGoesIdle(this);
 }
@@ -790,7 +794,7 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	atomic_add(&fTotalThreadCount, 1);
+	IncrementTotalThreadCount();
 	// Fix #1 (documentation): == cpuCount is intentionally correct here.
 	// atomic_add() returns the OLD value of fIdleCPUCount.  CoreWakesUp must
 	// fire exactly on the transition "fully idle -> first CPU active", which

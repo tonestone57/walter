@@ -127,8 +127,6 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 		return;
 
 	stackDepth = --fFunctionStackPointers[cpu];
-	if (stackDepth >= (int32)kMaxFunctionStackEntries)
-		return;
 
 	FunctionEntry* stackEntry = &fFunctionStacks[cpu][stackDepth];
 
@@ -292,11 +290,25 @@ Profiler::_FindFunction(const char* function)
 	for (const char* p = function; *p; p++)
 		hash = (hash * 31 + *p);
 
-	InterruptsSpinLocker _(fFunctionLock);
-
-	// Linear Probing: handle collisions without evictions.
+	// Lockless Search: fast path for existing entries.
 	uint32 index = hash % kHashTableSize;
 	uint32 startIndex = index;
+	do {
+		FunctionData* entry = fHashTable[index];
+		if (entry == NULL)
+			break;
+
+		if (strcmp(entry->fFunction, function) == 0)
+			return entry;
+
+		index = (index + 1) % kHashTableSize;
+	} while (index != startIndex);
+
+	InterruptsSpinLocker _(fFunctionLock);
+
+	// Double-checked Search: handle races and insertions.
+	index = hash % kHashTableSize;
+	startIndex = index;
 	do {
 		FunctionData* entry = fHashTable[index];
 		if (entry == NULL)

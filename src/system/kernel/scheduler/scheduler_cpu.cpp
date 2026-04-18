@@ -180,6 +180,9 @@ CPUEntry::PushFront(ThreadData* thread, int32 priority)
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushFront(thread, priority);
 	atomic_add(&fThreadCount, 1);
+
+	if (!thread->IsIdle())
+		Core()->IncrementTotalThreadCount();
 }
 
 
@@ -189,6 +192,9 @@ CPUEntry::PushBack(ThreadData* thread, int32 priority)
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushBack(thread, priority);
 	atomic_add(&fThreadCount, 1);
+
+	if (!thread->IsIdle())
+		Core()->IncrementTotalThreadCount();
 }
 
 
@@ -200,6 +206,9 @@ CPUEntry::Remove(ThreadData* thread)
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
 	atomic_add(&fThreadCount, -1);
+
+	if (!thread->IsIdle())
+		Core()->DecrementTotalThreadCount();
 }
 
 
@@ -686,7 +695,7 @@ CoreEntry::PushFront(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushFront(thread, priority);
 	atomic_add(&fThreadCount, 1);
-	atomic_add(&fTotalThreadCount, 1);
+	IncrementTotalThreadCount();
 }
 
 
@@ -697,7 +706,7 @@ CoreEntry::PushBack(ThreadData* thread, int32 priority)
 
 	fRunQueue.PushBack(thread, priority);
 	atomic_add(&fThreadCount, 1);
-	atomic_add(&fTotalThreadCount, 1);
+	IncrementTotalThreadCount();
 }
 
 
@@ -712,7 +721,7 @@ CoreEntry::Remove(ThreadData* thread)
 	thread->SetDequeued();
 
 	atomic_add(&fThreadCount, -1);
-	atomic_add(&fTotalThreadCount, -1);
+	DecrementTotalThreadCount();
 	fRunQueue.Remove(thread);
 }
 

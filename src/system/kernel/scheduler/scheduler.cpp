@@ -114,8 +114,10 @@ interaction_timer_hook(struct timer* timer)
 	// in an interrupt context is unsafe if any CPU already holds a scheduler
 	// read lock.
 	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
-		DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
-			&update_quantum_lengths_dpc, (void*)(addr_t)5000);
+		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
+				&update_quantum_lengths_dpc, (void*)(addr_t)5000) != B_OK) {
+			atomic_set(&sDPCPending, 0);
+		}
 	}
 
 	return B_HANDLED_INTERRUPT;
@@ -160,8 +162,10 @@ scheduler_update_interaction_state()
 	// scheduler_update_interaction_state is called from Enqueue, which HOLDS
 	// scheduler locks.
 	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
-		DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
-			&update_quantum_lengths_dpc, (void*)(addr_t)1000);
+		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
+				&update_quantum_lengths_dpc, (void*)(addr_t)1000) != B_OK) {
+			atomic_set(&sDPCPending, 0);
+		}
 	}
 
 	if (atomic_get_and_set(&sTimerArmed, 1) == 0) {
@@ -1159,6 +1163,10 @@ static status_t
 init()
 {
 	gIdleNodeMask = 0;
+
+	gMinCoreType = CORE_TYPE_UNKNOWN;
+	gMaxCoreType = CORE_TYPE_UNKNOWN;
+	gHasStandardCores = false;
 
 	// create logical processor to core and package mappings
 	int32 cpuCount, coreCount, packageCount, nodeCount;
