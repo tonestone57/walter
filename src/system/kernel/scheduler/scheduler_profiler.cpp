@@ -299,6 +299,7 @@ Profiler::_FindFunction(const char* function)
 		if (entry == NULL)
 			break;
 
+		memory_read_barrier();
 		if (strcmp(entry->fFunction, function) == 0)
 			return entry;
 
@@ -315,6 +316,7 @@ Profiler::_FindFunction(const char* function)
 		if (entry == NULL)
 			break;
 
+		memory_read_barrier();
 		if (strcmp(entry->fFunction, function) == 0)
 			return entry;
 
@@ -330,6 +332,8 @@ Profiler::_FindFunction(const char* function)
 		index = hash % kHashTableSize;
 		while (atomic_pointer_get(&fHashTable[index]) != NULL)
 			index = (index + 1) % kHashTableSize;
+
+		memory_write_barrier();
 		atomic_pointer_set(&fHashTable[index], entry);
 
 		return entry;
