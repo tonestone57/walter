@@ -633,8 +633,8 @@ private:
 	size_t				fSize;
 	HashObject**		fHashTable;
 	uint32				fHashTableSize;
-	uint8*				fNextAllocation;
-	size_t				fRemainingBytes;
+	alignas(8) uint8*	fNextAllocation;
+	alignas(8) size_t	fRemainingBytes;
 };
 
 

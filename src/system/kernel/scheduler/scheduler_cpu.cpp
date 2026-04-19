@@ -455,10 +455,8 @@ CPUEntry::_TryStealWork()
 			int32 stolenPriority = -1;
 			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
-			if (stolen != NULL) {
+			if (stolen != NULL)
 				stolen->MigrateTo(fCore);
-				fCore->IncrementTotalThreadCount();
-			}
 
 			victim->UnlockRunQueue();
 
@@ -502,7 +500,6 @@ CPUEntry::_TryStealWork()
 
 			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
-				fCore->IncrementTotalThreadCount();
 				victim->UnlockRunQueue();
 				return true;
 			}
@@ -551,7 +548,6 @@ CPUEntry::_TryStealWork()
 
 			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
-				fCore->IncrementTotalThreadCount();
 				victim->UnlockRunQueue();
 				return true;
 			}
@@ -835,11 +831,11 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 
 	// Issue #30: Strictly reorder updates to fIdleCPUCount and fCPUCount.
 	// By decrementing fIdleCPUCount BEFORE fCPUCount, we ensure that during the
-	// transient window where only one has been updated, the idle ratio
-	// (fIdleCPUCount / fCPUCount) always remains <= 1.0. If we did the reverse,
-	// removing an idle CPU would briefly leave fIdleCPUCount > fCPUCount,
-	// potentially making a non-fully-idle core appear fully idle to concurrent
-	// searches in CPUGoesIdle/CPUWakesUp.
+	// transient window where only one has been updated, fIdleCPUCount / fCPUCount
+	// always produces a ratio <= 1.0. If we did the reverse, removing an idle
+	// CPU would briefly leave fIdleCPUCount > fCPUCount (e.g. 1 idle / 0 total),
+	// making a core appear fully idle while a thread might still be running or
+	// waking up on the remaining CPU.
 	if (CPUPriorityHeap::GetKey(cpu) == B_IDLE_PRIORITY)
 		atomic_add(&fIdleCPUCount, -1);
 
