@@ -455,8 +455,10 @@ CPUEntry::_TryStealWork()
 			int32 stolenPriority = -1;
 			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
-			if (stolen != NULL)
+			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
+				fCore->IncrementTotalThreadCount();
+			}
 
 			victim->UnlockRunQueue();
 
@@ -500,6 +502,7 @@ CPUEntry::_TryStealWork()
 
 			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
+				fCore->IncrementTotalThreadCount();
 				victim->UnlockRunQueue();
 				return true;
 			}
@@ -548,6 +551,7 @@ CPUEntry::_TryStealWork()
 
 			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
+				fCore->IncrementTotalThreadCount();
 				victim->UnlockRunQueue();
 				return true;
 			}
