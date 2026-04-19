@@ -16,6 +16,8 @@
 
 #include <OS.h>
 
+#include <algorithm>
+
 #include <AutoDeleter.h>
 #include <cpu.h>
 #include <debug.h>
@@ -1077,25 +1079,26 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	}
 
 	// Sort by L3 Topology ID
-	for (int32 i = 1; i < cpuCount; i++) {
-		int32 key = cpuList[i];
-		int32 topoKey = distinctTopology ? get_topology_id(key) : (key / 16); // Fake topology if missing
-		int32 j = i - 1;
+	struct TopologyComparator {
+		bool distinctTopology;
+		TopologyComparator(bool distinct) : distinctTopology(distinct) {}
 
-		while (j >= 0) {
-			int32 compare = cpuList[j];
-			int32 compareTopo = distinctTopology ? get_topology_id(compare) : (compare / 16);
-
-			if (compareTopo > topoKey
-				|| (compareTopo == topoKey && compare > key)) {
-				cpuList[j + 1] = cpuList[j];
-				j--;
-			} else {
-				break;
-			}
+		int32 GetTopoKey(int32 cpu) const
+		{
+			return distinctTopology ? get_topology_id(cpu) : (cpu / 16);
 		}
-		cpuList[j + 1] = key;
-	}
+
+		bool operator()(int32 a, int32 b) const
+		{
+			int32 topoA = GetTopoKey(a);
+			int32 topoB = GetTopoKey(b);
+			if (topoA != topoB)
+				return topoA < topoB;
+			return a < b;
+		}
+	} comparator(distinctTopology);
+
+	std::sort(cpuList, cpuList + cpuCount, comparator);
 
 	packageCount = 0;
 	nodeCount = 0;

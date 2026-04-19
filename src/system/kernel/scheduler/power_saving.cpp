@@ -114,6 +114,9 @@ choose_small_task_core(CPUEntry* cpu)
 	// the general packing logic.
 	if (sSmallTaskCore != NULL && gMinCoreType != gMaxCoreType) {
 		int32 currentNodeID = cpu->Core()->Package()->Node()->ID();
+		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
+			return NULL;
+
 		CoreEntry* current = (CoreEntry*)atomic_pointer_get(
 			&sSmallTaskCore[currentNodeID]);
 		if (current != NULL && current->Type() == gMinCoreType
@@ -165,6 +168,9 @@ choose_small_task_core(CPUEntry* cpu)
 		// capacity (all E-cores are already heavily loaded).
 		if (eCore != NULL) {
 			int32 nodeID = eCore->Package()->Node()->ID();
+			if (nodeID < 0 || nodeID >= gNodeCount)
+				return eCore;
+
 			while (true) {
 				CoreEntry* currentE = (CoreEntry*)atomic_pointer_get(
 					&sSmallTaskCore[nodeID]);
@@ -186,6 +192,9 @@ choose_small_task_core(CPUEntry* cpu)
 
 	if (sSmallTaskCore != NULL) {
 		int32 currentNodeID = cpu->Core()->Package()->Node()->ID();
+		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
+			return NULL;
+
 		CoreEntry* current = (CoreEntry*)atomic_pointer_get(
 			&sSmallTaskCore[currentNodeID]);
 		if (current != NULL && current->GetScore() < kHighLoad)
@@ -223,6 +232,9 @@ choose_small_task_core(CPUEntry* cpu)
 
 	if (sSmallTaskCore != NULL) {
 		int32 nodeID = core->Package()->Node()->ID();
+		if (nodeID < 0 || nodeID >= gNodeCount)
+			return core;
+
 		while (true) {
 			CoreEntry* current = (CoreEntry*)atomic_pointer_get(
 				&sSmallTaskCore[nodeID]);
@@ -601,7 +613,8 @@ rebalance(const ThreadData* threadData)
 		if (core->Package() != NULL && core->Package()->Node() != NULL)
 			nodeID = core->Package()->Node()->ID();
 
-		if (nodeID != -1 && sSmallTaskCore != NULL && atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {
+		if (nodeID >= 0 && nodeID < gNodeCount && sSmallTaskCore != NULL
+				&& atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {
 			atomic_pointer_set(&sSmallTaskCore[nodeID], (CoreEntry*)NULL);
 			CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 
@@ -732,6 +745,9 @@ rebalance(const ThreadData* threadData)
 		return core;
 
 	int32 nodeID = core->Package()->Node()->ID();
+	if (nodeID < 0 || nodeID >= gNodeCount)
+		return core;
+
 	CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 	if (smallTaskCore == NULL || (useMask && !smallTaskCore->CPUMask().Matches(mask)))
 		return core;
@@ -775,8 +791,10 @@ rebalance_irqs(bool idle)
 			&& currentCore->Package() != NULL
 			&& currentCore->Package()->Node() != NULL) {
 		int32 nodeID = currentCore->Package()->Node()->ID();
-		if (atomic_pointer_get(&sSmallTaskCore[nodeID]) == currentCore)
+		if (nodeID >= 0 && nodeID < gNodeCount
+				&& atomic_pointer_get(&sSmallTaskCore[nodeID]) == currentCore) {
 			return;
+		}
 	}
 
 	SpinLocker locker(cpu->irqs_lock);
@@ -807,7 +825,8 @@ rebalance_irqs(bool idle)
 				&& currentCore->Package() != NULL
 				&& currentCore->Package()->Node() != NULL) {
 			int32 nodeID = currentCore->Package()->Node()->ID();
-			other = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore[nodeID]);
+			if (nodeID >= 0 && nodeID < gNodeCount)
+				other = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore[nodeID]);
 		}
 	} else {
 		int32 bestScore = -2;

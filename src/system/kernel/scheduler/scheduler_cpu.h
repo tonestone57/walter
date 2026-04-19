@@ -774,17 +774,15 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	// Only clear the bit in gIdleNodeMask if this package was actually idle
 	// (bit was set in oldMask) AND it was the last idle package in this node
 	// (mask is now zero).
-	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == 0)
-		// Issue #39 (clarification): Between the atomic_and on fIdlePackageMask
-		// and the atomic_and on gIdleNodeMask, another CPU can call
-		// PackageGoesIdle on a different package in the same node, setting a
-		// new bit in fIdlePackageMask.  If that happens, we clear the node bit
-		// in gIdleNodeMask even though the node still has idle packages.  The
-		// inconsistency is self-healing: the next PackageGoesIdle will restore
-		// the node bit.  The window is small and the consequence is at most one
-		// scheduling quantum of missed idle-core wakeups — acceptable for a
-		// lock-free fast path.  A full fix requires a CAS retry loop here.
+	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == 0) {
 		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
+
+		// Double-check to resolve the race with PackageGoesIdle. If another
+		// package in this node went idle between the atomic_and64 calls
+		// above, we must restore the bit in gIdleNodeMask.
+		if (atomic_get64((int64*)&fIdlePackageMask) != 0)
+			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
+	}
 }
 
 

@@ -829,12 +829,20 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
-	// Only decrement fIdleCPUCount if the CPU being removed was actually idle.
+	// Issue #30: Strictly reorder updates to fIdleCPUCount and fCPUCount.
+	// By decrementing fIdleCPUCount BEFORE fCPUCount, we ensure that during the
+	// transient window where only one has been updated, the idle ratio
+	// (fIdleCPUCount / fCPUCount) always remains <= 1.0. If we did the reverse,
+	// removing an idle CPU would briefly leave fIdleCPUCount > fCPUCount,
+	// potentially making a non-fully-idle core appear fully idle to concurrent
+	// searches in CPUGoesIdle/CPUWakesUp.
 	if (CPUPriorityHeap::GetKey(cpu) == B_IDLE_PRIORITY)
 		atomic_add(&fIdleCPUCount, -1);
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
-	if (atomic_add(&fCPUCount, -1) == 1) {
+	int32 oldCPUCount = atomic_add(&fCPUCount, -1);
+
+	if (oldCPUCount == 1) {
 		// core has been disabled
 		scheduler_atomic_and(&fPackage->fEnabledCoreMask,
 			~((native_cpu_mask_t)1 << fPackageIndex));
@@ -1139,20 +1147,23 @@ CoreEntry*
 PackageEntry::GetIdleCore(int32 index) const
 {
 	native_cpu_mask_t mask = scheduler_atomic_get(&fIdleCoreMask);
-
-	// Find the N-th set bit (index-th)
-	for (int32 i = 0; i < index; i++) {
-		if (mask == 0)
-			return NULL;
-
-		int32 bit = scheduler_ctz(mask);
-		mask &= ~((native_cpu_mask_t)1 << bit);
-	}
-
 	if (mask == 0)
 		return NULL;
 
-	return fCores[scheduler_ctz(mask)];
+	native_cpu_mask_t currentMask = mask;
+
+	// Find the N-th set bit (index-th)
+	for (int32 i = 0; i < index; i++) {
+		int32 bit = scheduler_ctz(currentMask);
+		currentMask &= ~((native_cpu_mask_t)1 << bit);
+
+		if (currentMask == 0) {
+			// index out of bounds (race), fallback to the first idle core
+			return fCores[scheduler_ctz(mask)];
+		}
+	}
+
+	return fCores[scheduler_ctz(currentMask)];
 }
 
 

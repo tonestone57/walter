@@ -450,15 +450,13 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
 
-	if ((Element*)atomic_pointer_get((void**)&fBest) == element) {
-		// Issue #11 (clarification): The cache is cleared ONLY when the
-		// removed element IS fBest (conditional check above).  If the removed
-		// element is not fBest, the cache is untouched and remains valid.
-		// The original audit finding that "fBest is unconditionally set to NULL
-		// on any Remove" does not match the current code — this is already
-		// correct.  No code change required.
-		atomic_pointer_set((void**)&fBest, (Element*)NULL);
-	}
+	// Issue #18: Unconditionally clear the fBest cache on every removal.
+	// While clearing only when (fBest == element) is a valid optimization
+	// in a strictly locked single-queue context, it is vulnerable to ABA
+	// issues if the same pointer is reallocated and re-added before a
+	// concurrent PeekBest reader completes.  Clearing it unconditionally
+	// ensures the cache never points to an element no longer in the queue.
+	atomic_pointer_set((void**)&fBest, (Element*)NULL);
 }
 
 

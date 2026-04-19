@@ -583,6 +583,9 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		}
 
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
+		static_assert(kMaxDynamicPriority <= THREAD_MAX_SET_PRIORITY,
+			"kMaxDynamicPriority exceeds THREAD_MAX_SET_PRIORITY");
+
 		bigtime_t urgency = kMaxDynamicPriority - diff / bucketSize;
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
@@ -596,11 +599,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		fEffectivePriority = (int32)urgency;
 	}
 
-	int32 effectivePriority = GetEffectivePriority();
-	if (effectivePriority > THREAD_MAX_SET_PRIORITY)
-		effectivePriority = THREAD_MAX_SET_PRIORITY;
-
-	fBaseQuantum = atomic_get64(&sQuantumLengths[effectivePriority]);
+	fBaseQuantum = atomic_get64(&sQuantumLengths[GetEffectivePriority()]);
 }
 
 

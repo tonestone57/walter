@@ -278,13 +278,27 @@ public:
 		ASSERT(fHashTable == NULL
 			|| (uint8*)fHashTable - fNextAllocation == (ptrdiff_t)fRemainingBytes);
 #endif
-		if (size > fRemainingBytes)
-			return NULL;
+		while (true) {
+#if B_HAIKU_64_BIT
+			int64 remaining = atomic_get64((int64*)&fRemainingBytes);
+			if ((int64)size > remaining)
+				return NULL;
 
-		void* address = fNextAllocation;
-		fNextAllocation += size;
-		fRemainingBytes -= size;
-		return address;
+			if (atomic_test_and_set64((int64*)&fRemainingBytes,
+					remaining - (int64)size, remaining) == remaining) {
+				return (void*)atomic_add64((int64*)&fNextAllocation, (int64)size);
+			}
+#else
+			int32 remaining = atomic_get((int32*)&fRemainingBytes);
+			if ((int32)size > remaining)
+				return NULL;
+
+			if (atomic_test_and_set((int32*)&fRemainingBytes,
+					remaining - (int32)size, remaining) == remaining) {
+				return (void*)atomic_add((int32*)&fNextAllocation, (int32)size);
+			}
+#endif
+		}
 	}
 
 	void Insert(HashObject* object)
