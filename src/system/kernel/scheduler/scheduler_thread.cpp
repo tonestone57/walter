@@ -64,6 +64,7 @@ ThreadData::_InitBase()
 	fInteractivityScore = 500;
 
 	fIsForeground = fThread->team->fIsForeground;
+	fStolen = false;
 }
 
 

@@ -705,7 +705,7 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
-		// Issue #34 (clarification): The race between AddIdleCore (which holds
+		// Issue #4 (clarification): The race between AddIdleCore (which holds
 		// fCoreLock) and CoreGoesIdle (which does not hold fCoreLock) on the
 		// oldMask==0 → PackageGoesIdle path is benign in practice: both paths
 		// are guarded by the InterruptsBigSchedulerLocker at their call sites

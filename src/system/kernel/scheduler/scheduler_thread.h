@@ -139,6 +139,7 @@ private:
 			bool		fReady;
 			bool		fQuickStartCredit;
 			bool		fIsForeground;
+			bool		fStolen;
 
 			Thread*		fThread;
 
@@ -567,6 +568,11 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 	if (!pinned) {
 		CoreCPULocker cpuLocker(fCore);
 		CoreRunQueueLocker locker(fCore);
+
+		if (fStolen) {
+			fCore->DecrementTotalThreadCount();
+			fStolen = false;
+		}
 
 		// Check if the Core is still active under the lock.
 		if (fCore->CPUCount() == 0) {

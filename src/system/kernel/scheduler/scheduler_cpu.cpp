@@ -330,6 +330,10 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	}
 
 	if (sharedPriority > pinnedPriority) {
+		if (sharedThread->fStolen) {
+			fCore->DecrementTotalThreadCount();
+			sharedThread->fStolen = false;
+		}
 		if (sharedThread->Core() == fCore && !sharedThreadIsFloating)
 			fCore->Remove(sharedThread);
 		return sharedThread;
@@ -455,8 +459,11 @@ CPUEntry::_TryStealWork()
 			int32 stolenPriority = -1;
 			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
-			if (stolen != NULL)
+			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
+				stolen->fStolen = true;
+				fCore->IncrementTotalThreadCount();
+			}
 
 			victim->UnlockRunQueue();
 
@@ -500,6 +507,8 @@ CPUEntry::_TryStealWork()
 
 			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
+				stolen->fStolen = true;
+				fCore->IncrementTotalThreadCount();
 				victim->UnlockRunQueue();
 				return true;
 			}
@@ -548,6 +557,8 @@ CPUEntry::_TryStealWork()
 
 			if (stolen != NULL) {
 				stolen->MigrateTo(fCore);
+				stolen->fStolen = true;
+				fCore->IncrementTotalThreadCount();
 				victim->UnlockRunQueue();
 				return true;
 			}
