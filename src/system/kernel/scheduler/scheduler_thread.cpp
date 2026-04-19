@@ -482,12 +482,14 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 	bigtime_t timeLeft = quantum - fTimeUsed;
 	if (timeLeft > 0) {
 		// Donate remaining slice to the beneficiary.
-		// Issue #37: This acquires beneficiary->scheduler_lock.  Callers
-		// MUST NOT hold any run-queue spinlock when invoking this function;
-		// doing so inverts the documented lock ordering (Core/CPU queue lock →
-		// thread scheduler_lock) and risks deadlock.  Assert here in debug
-		// builds to catch future callers that violate the constraint.
-		ASSERT(!are_interrupts_enabled() || /* irqs already off */ true);
+		// Callers MUST NOT hold any run-queue spinlock when invoking this
+		// function; doing so inverts the lock ordering (Core/CPU queue lock
+		// → thread scheduler_lock) and risks deadlock.
+		// Issue 21: the original assertion was a tautology
+		// (!x || true == true always).  Assert what was actually intended:
+		// interrupts must be disabled on entry so the spinlock acquire below
+		// cannot be preempted.
+		ASSERT(!are_interrupts_enabled());
 		InterruptsSpinLocker locker(beneficiary->scheduler_lock);
 		beneficiaryData->fStolenTime += timeLeft;
 	}

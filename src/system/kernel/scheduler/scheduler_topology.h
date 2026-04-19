@@ -127,58 +127,37 @@ search_global_random(Action action)
 		return;
 	}
 
-	// Use a smaller fixed buffer on the stack (128 bytes = 1024 packages)
-	// which covers >99% of systems. For massive systems, we skip collision
-	// detection for indices beyond 1024 to save stack space.
-	const int32 kStackBitmaskSize = 1024;
+	// Issue 8: the original kStackBitmaskSize of 1024 meant that packages
+	// in the range [1024, 4096) fell into a coarse stripe-based fallback
+	// that visited at most 1 package per 64-package band, severely
+	// under-sampling large systems.  gPackageCount is capped at 4096, so a
+	// 512-byte (4096-bit) bitmask covers the entire valid range without any
+	// stripe approximation.  512 bytes is acceptable on a kernel stack that
+	// is at least 8 KB.
+	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
-	uint64 stripeVisited = 0;
 
-	// Always zero the entire array. The conditional initialization above
-	// only cleared as many words as needed for gPackageCount, leaving words
-	// beyond that range uninitialized. Any subsequent access with an index
-	// in [cleared_range, kStackBitmaskSize) read garbage, causing spurious
-	// "already visited" skips. Zeroing all 128 bytes unconditionally is
-	// negligible on the scheduler hot path.
+	// Zero all 512 bytes unconditionally; partial clears risk leaving stale
+	// bits that produce spurious "already visited" skips.
 	memset(visitedBits, 0, sizeof(visitedBits));
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-		// Multiplicative random mapping to avoid expensive modulo
 		int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 
-		// Issue #6: For indices >= kStackBitmaskSize we previously always
-		// incremented samplesTaken even for repeated probes, inflating the
-		// count and reducing effective coverage on systems with >1024 packages.
-		// Use a secondary per-call counter for the out-of-range region and
-		// only count the first visit to any given 64-entry stripe.
-		// Avoid checking the same package twice using the bitmask
+		// With kStackBitmaskSize == 4096 and gPackageCount <= 4096 every
+		// valid index i fits inside the bitmask.  The out-of-range branch
+		// is retained as a safety net in case the cap ever changes.
 		int32 word = i / 64;
-		int32 bit = i % 64;
+		int32 bit  = i % 64;
 
-		// Deduplication: skip packages already probed this call (within the
-		// stack bitmask range).
 		if (i < kStackBitmaskSize) {
 			if ((visitedBits[word] & (1ULL << bit)) != 0)
-				continue;	// Duplicate within bitmask range: do NOT count.
+				continue;
 			visitedBits[word] |= (1ULL << bit);
-
-			// Only count unique probes towards the statistical coverage goal.
-			samplesTaken++;
-		} else {
-			// Out-of-range: deduplicate per 64-package stripe via a compact
-			// uint64 stripe-visited bitmask (covers up to 4096 packages in
-			// 64 stripes of 64).
-			int32 stripe = (i - kStackBitmaskSize) / 64;
-			static const int32 kMaxStripes = 64;
-
-			if (stripe >= 0 && stripe < kMaxStripes) {
-				if ((stripeVisited & (1ULL << stripe)) != 0)
-					continue;
-				stripeVisited |= (1ULL << stripe);
-			}
-
-			samplesTaken++;
 		}
+		// For indices >= kStackBitmaskSize (unreachable today) allow the
+		// probe without deduplication; at worst we visit a package twice.
+		samplesTaken++;
 
 		if (action(&gPackageEntries[i]))
 			break;

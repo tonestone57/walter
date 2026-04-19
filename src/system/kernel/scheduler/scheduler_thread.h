@@ -398,12 +398,25 @@ ThreadData::GoesAway()
 
 	ASSERT(fReady);
 
-	if (!IsIdle())
-		// Issue #45: Saturate at zero to prevent the load-average EMA from
-		// receiving a negative thread count due to a double-call or other
-		// reference-count mismatch.
-		if (atomic_add(&gTotalRunnableThreads, -1) <= 0)
-			atomic_set(&gTotalRunnableThreads, 0);
+	if (!IsIdle()) {
+		// Issue 28: the original atomic_set(0) could overwrite a concurrent
+		// increment from another CPU that legitimately enqueued a thread in
+		// the window between our atomic_add and the atomic_set, permanently
+		// undercounting gTotalRunnableThreads.  Use a CAS retry loop that
+		// only resets the counter while it is still negative, so valid
+		// increments from concurrent CPUs are never lost.
+		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
+		if (prev <= 0) {
+			int32 cur = atomic_get(&gTotalRunnableThreads);
+			while (cur < 0) {
+				int32 was = atomic_test_and_set(&gTotalRunnableThreads, 0,
+					cur);
+				if (was == cur)
+					break;
+				cur = was;
+			}
+		}
+	}
 
 	if (!HasQuantumEnded(false, false)) {
 		fQuickStartCredit = true;
@@ -433,10 +446,21 @@ ThreadData::Dies()
 
 	ASSERT(fReady);
 
-	if (!IsIdle())
-		// Issue #45: Same saturation guard as GoesAway.
-		if (atomic_add(&gTotalRunnableThreads, -1) <= 0)
-			atomic_set(&gTotalRunnableThreads, 0);
+	if (!IsIdle()) {
+		// Issue 28: same CAS-based saturation as GoesAway to avoid
+		// overwriting concurrent increments.
+		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
+		if (prev <= 0) {
+			int32 cur = atomic_get(&gTotalRunnableThreads);
+			while (cur < 0) {
+				int32 was = atomic_test_and_set(&gTotalRunnableThreads, 0,
+					cur);
+				if (was == cur)
+					break;
+				cur = was;
+			}
+		}
+	}
 
 	if (gTrackCoreLoad)
 		fCore->RemoveLoad(fNeededLoad, true);

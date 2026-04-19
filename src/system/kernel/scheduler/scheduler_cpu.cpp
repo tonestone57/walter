@@ -780,6 +780,13 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 
 	atomic_add(&fIdleCPUCount, 1);
 	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
+
+	// Issue 33: Publish the CPU in fCPUSet BEFORE advertising the core as idle
+	// via AddIdleCore.  A concurrent choose_core that sees the idle-mask update
+	// will call _ChooseCPU(), which iterates fCPUSet.  If fCPUSet is still
+	// empty at that point it returns NULL and forces an unnecessary retry.
+	fCPUSet.SetBitAtomic(cpu->ID());
+
 	if (firstCPU) {
 		// core has been reenabled
 		fLoad = 0;
@@ -791,7 +798,6 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 
 		fPackage->AddIdleCore(this);
 	}
-	fCPUSet.SetBitAtomic(cpu->ID());
 
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
 		// Issue #32: Complete the rollback — zero the load fields that were
@@ -1248,7 +1254,9 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
 
-			if (mask != NULL && !mask->GetBit(candidate->ID()))
+			// Issue 3: candidate->ID() is a core ID; the mask is indexed by
+			// CPU ID.  Check whether the core has any CPU in the affinity set.
+			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 				continue;
@@ -1276,7 +1284,8 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		CoreEntry* candidate = fCores[i];
 		if (candidate == NULL)
 			continue;
-		if (mask != NULL && !mask->GetBit(candidate->ID()))
+		// Issue 3: same fix as the random sampling path above.
+		if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 			continue;
 		if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 			continue;
@@ -1327,7 +1336,8 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
 
-			if (mask != NULL && !mask->GetBit(candidate->ID()))
+			// Issue 3: candidate->ID() is a core ID; mask is indexed by CPU ID.
+			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 				continue;
@@ -1382,7 +1392,8 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			CoreEntry* candidate = fCores[i];
 			if (candidate == NULL)
 				continue;
-			if (mask != NULL && !mask->GetBit(candidate->ID()))
+			// Issue 3: same fix as PeekMinimumLoadCore.
+			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 				continue;

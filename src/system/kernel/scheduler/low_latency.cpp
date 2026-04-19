@@ -668,12 +668,12 @@ rebalance_irqs(bool idle)
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
 	_.Unlock();
 
-	CoreEntry* core = CoreEntry::GetCore(cpu->cpu_num);
-	if (other == core)
+	// Issue 6: use pre-lock snapshot; do NOT re-read via GetCore() here.
+	if (other == currentCore)
 		return;
 
 	int32 otherLoad = other->GetScore();
-	int32 coreLoad = core->GetScore();
+	int32 coreLoad = currentCore->GetScore();
 
 	if (otherLoad + kLoadDifference >= coreLoad)
 		return;
