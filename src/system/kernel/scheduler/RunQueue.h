@@ -527,7 +527,10 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 
 				current = sGetLink(current)->fNext;
 			}
-			atomic_pointer_set((void**)&fBest, best);
+			// Issue 3: CAS instead of unconditional set — a concurrent
+			// PushFront/PushBack may have installed a fresher best between
+			// our scan start and now; preserve their value if so.
+			atomic_pointer_test_and_set((void**)&fBest, best, (Element*)NULL);
 			return best;
 		}
 	}
@@ -621,8 +624,11 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 				totalBudget--;
 			}
 
+			// Issue 15: 'break' only exits the inner while(val!=0) loop.
+			// Return NULL to terminate the outer for-loop immediately when
+			// the budget is exhausted — remaining bitmap words are skipped.
 			if (totalBudget <= 0)
-				break;
+				return NULL;
 		}
 	}
 	return NULL;

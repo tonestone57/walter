@@ -607,6 +607,9 @@ private:
 					return;
 
 				strlcpy(waitObject->name, name, sizeof(waitObject->name));
+			// Issue 22/32: add missing break to prevent fall-through into
+			// THREAD_BLOCK_TYPE_OTHER_OBJECT and default cases.
+			break;
 			}
 
 			case THREAD_BLOCK_TYPE_OTHER_OBJECT:

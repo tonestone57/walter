@@ -145,6 +145,7 @@ choose_core(const ThreadData* threadData)
 
 	// Thread Coloring: Search for a core of the preferred type first
 	uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
+
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
 
@@ -259,6 +260,11 @@ choose_core(const ThreadData* threadData)
 		}
 	}
 
+	// Issue 37: if thread coloring found a result, do not enter the general
+	// idle-node scan which iterates all idle nodes and can overwrite a valid
+	// P-core selection with any idle core found (potentially an E-core).
+	bool skipIdleScan = ((preferMax || preferMin) && core != NULL);
+
 	// Check Home Package (NUMA/Memory Affinity)
 	// If the previous core was not suitable (or cache expired), we try to return
 	// the thread to its home package where its memory was likely allocated.
@@ -289,8 +295,8 @@ choose_core(const ThreadData* threadData)
 		}
 	}
 
-	// wake new package/core
-	while (idleNodeMask != 0) {
+	// wake new package/core — skipped when thread coloring already found one
+	while (!skipIdleScan && idleNodeMask != 0) {
 		int32 nodeIndex = __builtin_ctzll(idleNodeMask);
 		idleNodeMask &= ~(1ULL << nodeIndex);
 
@@ -411,12 +417,26 @@ choose_core(const ThreadData* threadData)
 
 	ASSERT(core != NULL);
 
-	if (previousCore != NULL && !cacheExpired) {
+	// If the selected core is not much better than previousCore, prefer
+	// previousCore for cache locality.
+	// Issue 21: re-evaluate cache expiry here; the value computed at function
+	// entry may be stale after hundreds of microseconds of search work.
+	const bool cacheExpiredTail = (previousCore != NULL)
+		? has_cache_expired(threadData) : true;
+	if (previousCore != NULL && !cacheExpiredTail) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
 			if (core != previousCore) {
-				// If the selected core is not significantly less loaded than the
-				// previous core, we prefer the previous core to maintain cache locality.
-				if (core->GetScore() + kLoadDifference >= previousCore->GetScore())
+				// Issue 29: enforce type preference in the soft-affinity check
+				// so an E-core previousCore is never returned for a P-coloured
+				// thread just because loads are similar.
+				bool typeOk = true;
+				if (preferMax && previousCore->Type() != gMaxCoreType)
+					typeOk = false;
+				else if (preferMin && previousCore->Type() != gMinCoreType)
+					typeOk = false;
+
+				if (typeOk &&
+					core->GetScore() + kLoadDifference >= previousCore->GetScore())
 					return previousCore;
 			}
 		}

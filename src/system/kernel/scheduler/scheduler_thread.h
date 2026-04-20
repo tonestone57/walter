@@ -37,7 +37,21 @@ public:
 
 	SCHEDULER_INLINE	int32		GetPriority() const	{ return fThread->priority; }
 	SCHEDULER_INLINE	Thread*		GetThread() const	{ return fThread; }
-	SCHEDULER_INLINE	CPUSet		GetCPUMask() const	{ return fThread->cpumask.And(gCPUEnabled); }
+	// Issue 19: gCPUEnabled is updated one word at a time by SetBitAtomic/
+	// ClearBitAtomic; there is no compound-And atomicity guarantee.  Read
+	// each word with atomic_get to minimise torn-read exposure across the
+	// word boundary (most relevant on systems with >32 CPUs).
+	SCHEDULER_INLINE	CPUSet		GetCPUMask() const
+	{
+		CPUSet enabled;
+		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+		for (int32 i = 0; i < kWords; i++) {
+			uint32 w = (uint32)atomic_get(
+				const_cast<int32*>((const int32*)gCPUEnabled.Bits() + i));
+			enabled.SetWord(i, w);
+		}
+		return fThread->cpumask.And(enabled);
+	}
 
 	SCHEDULER_INLINE	bool		IsRealTime() const;
 	SCHEDULER_INLINE	bool		IsIdle() const;
@@ -254,26 +268,27 @@ ThreadData::_UpdatePriorityBoost()
 
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// Issue #3: Take the snapshot before Remove.  If MigrateTo races
-			// between the snapshot and PushBack, fCore will have changed.
-			// After Remove (which clears fEnqueued), re-read fCore: if it
-			// changed, MigrateTo already moved the thread's logical home, so
-			// push onto the new core.  This narrows (but cannot eliminate) the
-			// race without restructuring the lock hierarchy.
-			CoreEntry* core = fCore;  // snapshot before Remove
+			// Issue #3: Take the snapshot before Remove.
+			CoreEntry* core = fCore;
 			if (core != NULL) {
 				core->Remove(this);
-				// Re-read after Remove; MigrateTo may have updated fCore.
 				CoreEntry* current = fCore;
-				if (current != NULL && current != core)
+				if (current != NULL && current != core) {
+					// Issue 36: acquiring the new core's lock here is safe because
+					// lock ordering requires Core-before-CPU and we hold no CPU
+					// lock; the old core's lock is held by the caller.
+					CoreRunQueueLocker newLock(current);
 					current->PushBack(this, newPriority);
-				else
+				} else
 					core->PushBack(this, newPriority);
+
+				// Issue 1: set fEnqueued immediately after PushBack while still
+				// inside the critical section; the thread is in the queue now.
+				fEnqueued = true;
 			}
 
 			fEnqueuedInCPURunQueue = false;
 		}
-		fEnqueued = true;
 	}
 }
 
@@ -523,9 +538,6 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		}
 
 		fReady = true;
-
-		if (!IsIdle())
-			atomic_add(&gTotalRunnableThreads, 1);
 	}
 
 	fThread->state = B_THREAD_READY;
@@ -545,6 +557,12 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		} else {
 			if (!wasReady && !IsRealTime())
 				_UpdateDeadline();
+
+			// Issue 40: defer the gTotalRunnableThreads increment until after the
+			// CPUCount guard in the non-pinned path (see below).  For the pinned
+			// path the CPU liveness check happens under CPURunQueueLocker.
+			if (!wasReady && !IsIdle())
+				atomic_add(&gTotalRunnableThreads, 1);
 
 			ASSERT(!fEnqueued);
 			fEnqueued = true;
@@ -569,21 +587,32 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		CoreCPULocker cpuLocker(fCore);
 		CoreRunQueueLocker locker(fCore);
 
+		// Issue 27: _ChooseCore can return NULL (all masked CPUs disabled);
+		// MigrateTo(NULL) sets fCore = NULL.  Guard before any deref.
+		if (fCore == NULL)
+			return false;
+
+		// Issue 7: move the fStolen decrement AFTER the CPUCount guard so
+		// that a return-false path never leaves TotalThreadCount decremented
+		// without a corresponding enqueue to balance it.
 		if (fStolen) {
+			if (fCore->CPUCount() == 0) {
+				fStolen = false;  // will be re-set by caller if re-stolen
+				return false;
+			}
 			fCore->DecrementTotalThreadCount();
 			fStolen = false;
-		}
-
-		// Check if the Core is still active under the lock.
-		if (fCore->CPUCount() == 0) {
-			// Do NOT consume fQuickStartCredit here. The enqueue will be
-			// retried via ChooseCoreAndCPU on a live core; the interactive
-			// boost credit should survive that retry.
+		} else if (fCore->CPUCount() == 0) {
 			return false;
 		}
 
 		if (!wasReady && !IsRealTime())
 			_UpdateDeadline();
+
+		// Issue 40: defer the gTotalRunnableThreads increment until after the
+		// CPUCount guard in the non-pinned path.
+		if (!wasReady && !IsIdle())
+			atomic_add(&gTotalRunnableThreads, 1);
 
 		ASSERT(!fEnqueued);
 		fEnqueued = true;

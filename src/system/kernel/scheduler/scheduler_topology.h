@@ -137,9 +137,12 @@ search_global_random(Action action)
 	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
-	// Zero all 512 bytes unconditionally; partial clears risk leaving stale
-	// bits that produce spurious "already visited" skips.
-	memset(visitedBits, 0, sizeof(visitedBits));
+	// Issue 10/23: zero only the words needed for gPackageCount instead of
+	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
+	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
+	int32 wordsNeeded = min_c((gPackageCount + 63) / 64,
+		(int32)(kStackBitmaskSize / 64));
+	memset(visitedBits, 0, (size_t)wordsNeeded * sizeof(uint64));
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 		int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);

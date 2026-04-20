@@ -78,6 +78,7 @@ static int32 sDPCPending = 0;
 // so exactly one CPU wins the race.  The flag is cleared by the timer callback
 // before it fires the DPC, allowing future re-arming.
 static int32 sTimerArmed = 0;
+static int32 sPendingDPCTarget = 0;  // Issue 30: 1000 or 5000
 
 
 static void
@@ -88,9 +89,11 @@ UpdateDeadlineScalingScalable()
 
 
 static void
-update_quantum_lengths_dpc(void* arg)
+update_quantum_lengths_dpc(void* /*arg*/)
 {
-	int64 targetResolution = (int64)(addr_t)arg;
+	// Issue 30: Use the latest requested target from sPendingDPCTarget
+	// instead of the stale value passed via arg.
+	int64 targetResolution = (int64)atomic_get(&sPendingDPCTarget);
 
 	{
 		InterruptsBigSchedulerLocker locker;
@@ -111,14 +114,19 @@ interaction_timer_hook(struct timer* timer)
 	// calls to scheduler_update_interaction_state() can re-arm if needed.
 	atomic_set(&sTimerArmed, 0);
 
-	// Offload resolution scaling to a DPC to avoid deadlock risk.
-	// Holding InterruptsBigSchedulerLocker (which acquires multiple write locks)
-	// in an interrupt context is unsafe if any CPU already holds a scheduler
-	// read lock.
+	// Issue 30: a scale-up DPC (target=1000) leaves sDPCPending==1 when it
+	// completes because update_quantum_lengths_dpc clears it.  If a scale-up
+	// is in flight when the timer fires, we must not silently drop the
+	// scale-down request.  Use a dedicated target variable so the DPC can
+	// service the latest requested target even if the DPC was queued for the
+	// wrong one.
+	atomic_set(&sPendingDPCTarget, 5000);
 	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
+		int64 target = (int64)atomic_get(&sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
-				&update_quantum_lengths_dpc, (void*)(addr_t)5000) != B_OK) {
+				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
+			atomic_set(&sPendingDPCTarget, 0);
 		}
 	}
 
@@ -168,10 +176,13 @@ scheduler_update_interaction_state()
 	// We must not hold scheduler locks here!
 	// scheduler_update_interaction_state is called from Enqueue, which HOLDS
 	// scheduler locks.
+	atomic_set(&sPendingDPCTarget, 1000);
 	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
+		int64 target = (int64)atomic_get(&sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
-				&update_quantum_lengths_dpc, (void*)(addr_t)1000) != B_OK) {
+				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
+			atomic_set(&sPendingDPCTarget, 0);
 		}
 	}
 
@@ -187,7 +198,7 @@ scheduler_update_interaction_state()
 using namespace Scheduler;
 
 
-static bool sSchedulerEnabled;
+static int32 sSchedulerEnabled;
 
 SchedulerListenerList gSchedulerListeners;
 rw_spinlock gSchedulerListenersLock = B_RW_SPINLOCK_INITIALIZER;
@@ -283,9 +294,16 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	// only the CPU whose (boost_epoch % cpuCount) matches its modular index
 	// within the core performs the scan.
 	int32 coreCPUCount = max_c(1, core->CPUCount());
-	// fRescheduleCount was post-incremented before the early-return check
-	// at the top of this function; subtract 1 to get the current epoch.
-	uint32 boostEpoch = (cpu->fRescheduleCount - 1) / 10;
+	// Issue 13/24: when fRescheduleCount wraps UINT32_MAX → 0, the post-
+	// increment is 0, so (0 % 10 == 0) fires and preCount becomes UINT32_MAX,
+	// making boostEpoch ≈ 429M.  This causes all CPUs to satisfy the modular
+	// ownership check simultaneously, producing a correlated scan burst.
+	// Treat the wrap as a normal epoch boundary by clamping preCount.
+	uint32 preCount = cpu->fRescheduleCount - 1;
+	if (cpu->fRescheduleCount == 0)
+		preCount = 0;  // just wrapped; treat as epoch 0, harmless miss
+
+	uint32 boostEpoch = preCount / 10;
 	bool ownsCoreQueueScan =
 		((int32)(boostEpoch % (uint32)coreCPUCount)
 			== (cpu->ID() % coreCPUCount));
@@ -345,13 +363,10 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	} else if (gSingleCore) {
 		targetCore = &gCoreEntries[0];
 	} else if (waker != NULL) {
-		// Snapshot Core() once: a concurrent UnassignCore() between the null
-		// check and the assignment could otherwise store NULL into targetCore,
-		// producing a spurious NULL that ChooseCoreAndCPU must then recover from.
-		// We also check CPUCount() to ensure the core is still enabled.
-		// Load validation is deferred to ChooseCoreAndCPU where it can be
-		// checked under the appropriate lock.
-		CoreEntry* wakerCore = waker->scheduler_data->Core();
+		// Issue 28: scheduler_on_thread_destroy NULLs scheduler_data before
+		// the thread is fully torn down; guard against a concurrent destroy.
+		ThreadData* wakerData = waker->scheduler_data;
+		CoreEntry* wakerCore = (wakerData != NULL) ? wakerData->Core() : NULL;
 		if (wakerCore != NULL && wakerCore->CPUCount() > 0)
 			targetCore = wakerCore;
 	} else if (threadData->Core() != NULL
@@ -363,6 +378,10 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	bool requestPreemption = false;
 	bool rescheduleNeeded = false;
 
+	// Issue 18: bound the retry loop so that a total hot-unplug (all cores
+	// disabled simultaneously during shutdown) cannot spin forever.
+	const int32 kMaxRetries = smp_get_num_cpus() * 2 + 8;
+	int32 enqueueAttempts = 0;
 	do {
 		rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU);
 
@@ -372,6 +391,11 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		if (!threadData->Enqueue(wasRunQueueEmpty, requestPreemption)) {
 			targetCore = NULL;
 			targetCPU = NULL;
+			if (++enqueueAttempts >= kMaxRetries) {
+				dprintf("scheduler: enqueue giving up after %d attempts "
+					"for thread %" B_PRId32 "\n", enqueueAttempts, thread->id);
+				break;
+			}
 		} else
 			break;
 	} while (true);
@@ -762,7 +786,7 @@ scheduler_reschedule(int32 nextState)
 	ASSERT(!are_interrupts_enabled());
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (!sSchedulerEnabled) {
+	if (!atomic_get(&sSchedulerEnabled)) {
 		Thread* thread = thread_get_current_thread();
 		if (thread != NULL && nextState != B_THREAD_READY)
 			panic("scheduler_reschedule_no_op() called in non-ready thread");
@@ -871,10 +895,13 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		{
 			CoreCPUHeapLocker heapLocker(core);
 			cpu->Start();
+			// Issue 35: clear the disabled flag BEFORE AddCPU so that
+			// any concurrent enqueue() → UpdatePriority() call that races
+			// the AddCPU does not hit the ASSERT(!disabled || priority==IDLE).
+			gCPU[cpuID].disabled = false;
+			gCPUEnabled.SetBitAtomic(cpuID);
 			core->AddCPU(cpu);
 		}
-		gCPU[cpuID].disabled = false;
-		gCPUEnabled.SetBitAtomic(cpuID);
 		cpu->UnlockScheduler();
 	} else {
 		cpu->LockScheduler();
@@ -1030,6 +1057,12 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 	// Safe upper bound allocation for mapping packages to nodes
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
+
+	// Issue 31: sPackageToNode is the only mapping array not zero-initialised.
+	// Packages that are never written (guard short-circuits) carry heap garbage,
+	// which init() then uses as a node index, mapping the package to a
+	// non-existent SchedulerNode.
+	memset(sPackageToNode, 0, sizeof(int32) * (cpuCount + 1));
 
 	// First pass: logical topology from ACPI/Device Tree
 	const cpu_topology_node* root = get_cpu_topology();
@@ -1612,7 +1645,8 @@ scheduler_init()
 void
 scheduler_enable_scheduling()
 {
-	sSchedulerEnabled = true;
+	// Issue 33: use atomic store so all CPUs observe the flag immediately.
+	atomic_set(&sSchedulerEnabled, 1);
 }
 
 

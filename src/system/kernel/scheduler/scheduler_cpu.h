@@ -601,20 +601,21 @@ CoreEntry::GetLoad() const
 	if (cpuCount <= 0)
 		return kMaxLoad;
 
-	// Issue #12: Avoid integer division on the most common SMT configurations.
-	// Added cases for 3 (tri-core dies) and 6 (hex-core SMT-2 packages).
+	// Issue 17: clamp each fast-path result to [0, kMaxLoad] so that a
+	// transiently negative fLoad from a concurrent RemoveLoad race does not
+	// propagate into load comparisons as a large positive number.
 	if (cpuCount == 1)
-		return min_c(load, kMaxLoad);
+		return min_c(max_c(load, 0), kMaxLoad);
 	if (cpuCount == 2)
-		return (int32)min_c(load >> 1, kMaxLoad);
+		return (int32)min_c(max_c(load >> 1, 0), kMaxLoad);
 	if (cpuCount == 3)
-		return (int32)min_c(load / 3, kMaxLoad);
+		return (int32)min_c(max_c(load / 3, 0), kMaxLoad);
 	if (cpuCount == 4)
-		return (int32)min_c(load >> 2, kMaxLoad);
+		return (int32)min_c(max_c(load >> 2, 0), kMaxLoad);
 	if (cpuCount == 6)
-		return (int32)min_c(load / 6, kMaxLoad);
+		return (int32)min_c(max_c(load / 6, 0), kMaxLoad);
 	if (cpuCount == 8)
-		return (int32)min_c(load >> 3, kMaxLoad);
+		return (int32)min_c(max_c(load >> 3, 0), kMaxLoad);
 
 	// Clamp negative load (Issue #21 defensive read-side guard).
 	if (load < 0)
@@ -750,7 +751,11 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
 		return;
 
-	uint64 oldMask = atomic_or64((int64*)&fIdlePackageMask, 1ULL << package->NodeIndex());
+	// Issue 26: fIdlePackageMask is native_cpu_mask_t (32-bit on 32-bit
+	// systems); atomic_or64 writes 8 bytes over a 4-byte field, corrupting
+	// adjacent struct memory.  Use scheduler_atomic_or throughout.
+	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdlePackageMask,
+		(native_cpu_mask_t)1 << package->NodeIndex());
 
 	if (oldMask == 0) {
 		// node goes idle (first package)
@@ -767,20 +772,19 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
 		return;
 
-	uint64 clearBit = 1ULL << package->NodeIndex();
-	uint64 oldMask = (uint64)atomic_and64((int64*)&fIdlePackageMask, ~clearBit);
+	// Issue 26: same fix — use scheduler_atomic_and for 32-bit safety.
+	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << package->NodeIndex();
+	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdlePackageMask, ~clearBit);
 
 	// Detect the transition from fully-idle to partially-active for the node.
 	// Only clear the bit in gIdleNodeMask if this package was actually idle
 	// (bit was set in oldMask) AND it was the last idle package in this node
 	// (mask is now zero).
-	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == 0) {
+	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == (native_cpu_mask_t)0) {
 		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
 
-		// Double-check to resolve the race with PackageGoesIdle. If another
-		// package in this node went idle between the atomic_and64 calls
-		// above, we must restore the bit in gIdleNodeMask.
-		if (atomic_get64((int64*)&fIdlePackageMask) != 0)
+		// Issue 38: narrow the TOCTOU window using the same atomic helper.
+		if (scheduler_atomic_get(&fIdlePackageMask) != (native_cpu_mask_t)0)
 			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
 	}
 }
@@ -790,7 +794,9 @@ inline uint64
 SchedulerNode::IdlePackageMask() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return atomic_get64((int64*)&fIdlePackageMask);
+	// Issue 26: use scheduler_atomic_get for 32-bit correctness.
+	return (uint64)scheduler_atomic_get(
+		const_cast<native_cpu_mask_t*>(&fIdlePackageMask));
 }
 
 
@@ -800,16 +806,13 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	// Issue #16: DecrementTotalThreadCount is correct here — each CPU slot
-	// transitions from "running a user thread" to "running the idle thread",
-	// so the count of active non-idle slots decreases by one regardless of
-	// whether the core as a whole becomes fully idle.  The paired increment
-	// in CPUWakesUp is symmetric.  Do NOT move this inside the CoreGoesIdle
-	// branch; that would cause TotalThreadCount to undercount on N-way SMT
-	// cores where only one CPU goes idle while siblings stay busy.
+	// Issue #16: snapshot fCPUCount once before the atomic_add to close the
+	// TOCTOU window — a concurrent RemoveCPU can decrement fCPUCount between
+	// the two reads, causing the CoreGoesIdle notification to be skipped.
 	ASSERT(atomic_get(&fIdleCPUCount) < atomic_get(&fCPUCount));
 	DecrementTotalThreadCount();
-	if (atomic_add(&fIdleCPUCount, 1) == atomic_get(&fCPUCount) - 1)
+	int32 cpuCountSnap = atomic_get(&fCPUCount);
+	if (atomic_add(&fIdleCPUCount, 1) == cpuCountSnap - 1)
 		fPackage->CoreGoesIdle(this);
 }
 
@@ -883,6 +886,10 @@ PackageEntry::GetLeastIdlePackage()
 		for (int32 i = 0; i < kMaxFallbackAttempts; i++) {
 			int32 idx = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 			PackageEntry* current = &gPackageEntries[idx];
+			// Issue 25: skip packages whose Init() was skipped (fNode == NULL);
+			// callers dereference Package()->Node()->ID() on the result.
+			if (current->fNode == NULL)
+				continue;
 			int32 count = atomic_get((int32*)&current->fIdleCoreCount);
 			if (count != 0 && (package == NULL || count < bestIdleCount)) {
 				package = current;
@@ -893,6 +900,8 @@ PackageEntry::GetLeastIdlePackage()
 		// Small system: full linear scan — every package is cheap to check.
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* current = &gPackageEntries[i];
+			if (current->fNode == NULL)
+				continue;
 			int32 count = atomic_get((int32*)&current->fIdleCoreCount);
 			if (count != 0 && (package == NULL || count < bestIdleCount)) {
 				package = current;

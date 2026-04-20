@@ -161,7 +161,11 @@ ThreadData::Init()
 	ThreadData* currentThreadData = currentThread->scheduler_data;
 	if (currentThreadData != NULL) {
 		fNeededLoad = currentThreadData->fNeededLoad;
-		fVirtualRuntime = currentThreadData->fVirtualRuntime;
+		// Issue 20: on 32-bit targets bigtime_t is 64-bit and a plain
+		// assignment compiles to two 32-bit loads — torn if the source
+		// thread updates fVirtualRuntime concurrently.  Use atomic_get64.
+		fVirtualRuntime = atomic_get64(
+			(int64*)&currentThreadData->fVirtualRuntime);
 		fHomePackage = currentThreadData->fHomePackage;
 	} else {
 		fNeededLoad = 0;
@@ -308,16 +312,18 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	const bigtime_t baseQuantum = Scheduler::BaseQuantum();
-	const bigtime_t multiplier = Scheduler::QuantumMultiplier(0);
-	const bigtime_t maxLatency = Scheduler::MaximumLatency();
-	const bigtime_t minQuantum = Scheduler::MinimalQuantum();
+	// Issue 43: cache all Scheduler:: accessor results in a single dereference
+	// of sCurrentMode; avoids 4 additional pointer loads on this hot path.
+	const bigtime_t baseQ   = Scheduler::BaseQuantum();
+	const bigtime_t minQ    = Scheduler::MinimalQuantum();
+	const bigtime_t maxLat  = Scheduler::MaximumLatency();
+	const bigtime_t mult0   = Scheduler::QuantumMultiplier(0);
 
 	const bigtime_t kMinGranularity = 1200;
-	const bigtime_t kHighLoadQuantum = max_c(baseQuantum, kMinGranularity);
-	const bigtime_t kMediumQuantum = baseQuantum * multiplier;
-	const bigtime_t kMaxQuantum = maxLatency;
-	const bigtime_t kDisplayQuantum = max_c(minQuantum, kMinGranularity);
+	const bigtime_t kHighLoadQuantum = max_c(baseQ, kMinGranularity);
+	const bigtime_t kMediumQuantum   = baseQ * mult0;
+	const bigtime_t kMaxQuantum      = maxLat;
+	const bigtime_t kDisplayQuantum  = max_c(minQ, kMinGranularity);
 
 	// Cache fCore once. Without this, a concurrent MigrateTo() can change
 	// fCore between the three calls below, mixing data from two different
@@ -330,7 +336,7 @@ ThreadData::ComputeQuantum() const
 	// hot-plug).  Return the minimal quantum so the thread gets rescheduled
 	// quickly and picks up a valid core assignment on the next pass.
 	if (core == NULL)
-		return max_c(minQuantum, kMinGranularity);
+		return max_c(minQ, kMinGranularity);
 
 	int32 load;
 	int32 threadCount;
@@ -339,19 +345,17 @@ ThreadData::ComputeQuantum() const
 	bool contention;
 	bool overload;
 	bool displayReady = false;
-	// Fix #9: GetLoad(), ThreadCount(), and CPUCount() are individually
-	// atomic and do not require the run-queue spinlock.  Only PeekHead()
-	// dereferences the queue's linked list and must be serialised.
-	// Holding CoreRunQueueLocker across all four calls forces three cheap
-	// atomic reads to serialize behind a spinlock acquire on the hot path.
+	// Issue 9: only PeekHead() needs the run-queue lock; using TryLock
+	// avoids blocking the caller when the queue is contended.  A missed
+	// displayReady read causes at most one over-long quantum.
 	load = core->GetLoad();
 	threadCount = core->ThreadCount();
 	cpuCount = core->CPUCount();
-	{
-		CoreRunQueueLocker _(core);
+	if (core->TryLockRunQueue()) {
 		ThreadData* next = core->PeekHead();
 		if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
 			displayReady = true;
+		core->UnlockRunQueue();
 	}
 
 	contention = threadCount > cpuCount;

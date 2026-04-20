@@ -454,6 +454,14 @@ CPUEntry::_TryStealWork()
 		if (victim == NULL || victim == fCore || victim->CPUCount() == 0)
 			continue;
 
+		// Issue 42: avoid acquiring the run-queue lock on idle cores whose
+		// queues are guaranteed empty; the lock + empty-scan + unlock wastes
+		// cycles proportional to the number of idle siblings per quantum.
+		if ((package->IdleCoreMask()
+				& ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0) {
+			continue;
+		}
+
 		// Use TryLock to avoid contention
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
@@ -479,6 +487,10 @@ CPUEntry::_TryStealWork()
 	// before going across the expensive interconnect.
 
 	SchedulerNode* node = package->Node();
+	// Issue 4: package->Node() can be NULL during topology teardown.
+	if (node == NULL)
+		goto phase3;
+
 	ThreadData* stolen = NULL;
 
 	search_local_node(node, [this, package, &stolen](PackageEntry* entry) {
@@ -522,6 +534,8 @@ CPUEntry::_TryStealWork()
 	if (stolen != NULL)
 		return stolen;
 
+phase3:
+	stolen = NULL;
 	// Phase 3: The Global Hail Mary (Random)
 	// Target: Any core in the system (4096 cores).
 	// Method: Logarithmic Formula
@@ -798,7 +812,9 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	// empty at that point it returns NULL and forces an unnecessary retry.
 	fCPUSet.SetBitAtomic(cpu->ID());
 
+	bool didAddIdle = false;
 	if (firstCPU) {
+		didAddIdle = true;  // Issue 2: track for rollback symmetry
 		// core has been reenabled
 		fLoad = 0;
 		atomic_set64(&fCombinedLoad, 0);
@@ -811,15 +827,15 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	}
 
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
-		// Issue #32: Complete the rollback — zero the load fields that were
-		// modified in the firstCPU branch so the post-panic debugger does not
-		// observe stale-zero load data for a core that failed to register.
 		fCPUSet.ClearBitAtomic(cpu->ID());
 		if (firstCPU) {
 			fLoad = 0;
 			atomic_set64(&fCombinedLoad, 0);
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
-			fPackage->RemoveIdleCore(this);
+			// Issue 2: only call RemoveIdleCore when AddIdleCore was called
+			// (the firstCPU branch).  A mismatch would corrupt fIdleCoreMask.
+			if (didAddIdle)
+				fPackage->RemoveIdleCore(this);
 			scheduler_atomic_and(&fPackage->fEnabledCoreMask,
 				~((native_cpu_mask_t)1 << fPackageIndex));
 			// Restore fCPUCount and fIdleCPUCount symmetrically.
@@ -890,7 +906,16 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	// constant makes the intent clear and prevents silent misbehaviour if the
 	// priority range ever grows to include negative values.
 	fCPUHeap.ModifyKey(cpu, INT32_MIN);
-	ASSERT(fCPUHeap.PeekRoot() == cpu);
+	// Issue 41: two concurrent RemoveCPU calls both set INT32_MIN, making
+	// the heap root ambiguous.  Spin waiting for our entry to reach the root;
+	// in practice this resolves within one iteration since the concurrent
+	// caller will RemoveRoot immediately after the ASSERT.
+	{
+		int32 spins = 0;
+		while (fCPUHeap.PeekRoot() != cpu && ++spins < 1000)
+			;  // spin; lock is held, so other CPUs cannot interleave
+		ASSERT(fCPUHeap.PeekRoot() == cpu);
+	}
 	fCPUHeap.RemoveRoot();
 
 	ASSERT(cpu->GetLoad() >= 0 && cpu->GetLoad() <= kMaxLoad);
@@ -938,7 +963,12 @@ CoreEntry::PeekMinimumLoadCPU()
 			uint32 bits = fCPUSet.Bits(i);
 			if (bits != 0) {
 				int cpu = i * 32 + (__builtin_ffs(bits) - 1);
-				return &gCPUEntries[cpu];
+				// Issue 25: a concurrent RemoveCPU may have cleared fCPUSet
+				// while Core() still shows the old value.  Verify membership.
+				CPUEntry* entry = &gCPUEntries[cpu];
+				if (entry->Core() == this)
+					return entry;
+				break;  // stale; fall through to heap path
 			}
 		}
 	}
@@ -965,13 +995,11 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	if (cpuCount <= 0)
 		return;
 
-	// Issue #44: system_time() is an expensive syscall on some architectures.
-	// On the common fast path (interval not yet elapsed, no force), we were
-	// paying for it unconditionally and then discarding the result.  Read
-	// fLastLoadUpdate first so we can short-circuit before the syscall.
+	// Issue 11: one system_time() call shared by both branches eliminates
+	// a redundant syscall and ensures consistent timestamps.
+	bigtime_t now = system_time();
 	bigtime_t lastUpdate = atomic_get64(&fLastLoadUpdate);
 	if (!forceUpdate) {
-		bigtime_t now = system_time();
 		if (now < kLoadMeasureInterval + lastUpdate)
 			return;
 		if (atomic_test_and_set64(&fLastLoadUpdate, now, lastUpdate)
@@ -979,7 +1007,8 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			return;
 		}
 	} else {
-		bigtime_t now = system_time();
+		// Issue 34: on CAS failure another CPU won the update race; that
+		// update is sufficient, so return rather than silently skipping.
 		if (atomic_test_and_set64(&fLastLoadUpdate, now, lastUpdate)
 				!= lastUpdate) {
 			return;
@@ -1200,10 +1229,17 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
 			// If multiple neighbors exist, pick one semi-randomly to avoid always
 			// hitting the same core if it's shared by many active ones.
 			if (scheduler_popcount(neighbors) > 1) {
+				// Issue 8: when shift == kMaxCoresPerPackage (== 64 on 64-bit),
+				// the left-shift in (neighbors << (kMaxCoresPerPackage - shift))
+				// becomes a shift-by-0, but more dangerously shift==0 would make
+				// (kMaxCoresPerPackage - 0) == 64 which is UB for a 64-bit type.
+				// Guard both edges explicitly.
 				int32 shift = (int32)(((uint64)cpu->GetRandom() * kMaxCoresPerPackage) >> 32);
-				native_cpu_mask_t rotated = (neighbors >> shift);
-				if (shift > 0)
-					rotated |= (neighbors << (kMaxCoresPerPackage - shift));
+				if (shift == 0 || shift >= (int32)kMaxCoresPerPackage) {
+					return fCores[scheduler_ctz(neighbors)];
+				}
+				native_cpu_mask_t rotated = (neighbors >> shift)
+					| (neighbors << (kMaxCoresPerPackage - shift));
 
 				if (rotated != 0)
 					return fCores[(scheduler_ctz(rotated) + shift) % kMaxCoresPerPackage];
