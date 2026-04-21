@@ -105,6 +105,7 @@ While the updated scheduler is highly responsive, its "Statistical Fairness" (bu
     *   **Strategy:** Expand `THREAD_MAX_SET_PRIORITY` from 99 to 255 (matching one byte).
     *   **Fairness Improvement:** **Moderate (Rank 2)**. Reduces bucket width from ~5ms to ~2ms, statistically reducing collisions by ~60%.
     *   **Performance Impact:** **Negligible**. Bitmaps grow slightly (from 4 words to 8 words), but `__builtin_ctz` efficiency remains identical.
+    *   **Status:** Partially addressed by Issue 40's multi-level `PeekBest` search.
 
 3.  ~~**Simplified Lag Tracking (Starvation Protection)**~~ - **REJECTED**
     *   **Strategy:** Add a `fLag` counter to track if a thread is skipped during a `TryLock` failure (work stealing) and forcefully boost its urgency if skipped too often.

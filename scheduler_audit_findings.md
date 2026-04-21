@@ -47,9 +47,11 @@ If `EnterFunction` hits the stack limit, it returns without pushing. `ExitFuncti
 **Description:** `new` without `ArrayDeleter` created potential memory leak on partial failure.
 **Fix:** Added `ArrayDeleter` for `sPackageToNode`.
 
-### 7. Stack-Based Collision Detection Limit
+### 7. Stack-Based Collision Detection Limit (Expanded)
 **Severity:** Low
-**Description:** `search_global_random` limited to 1024 packages for collision detection. Acceptable tradeoff.
+**Fixed In:** `scheduler-audit-fixes` branch
+**Description:** `search_global_random` was limited to 1024 packages.
+**Fix:** Increased `kStackBitmaskSize` to 4096 and optimized bitmask zeroing to match `gPackageCount`.
 
 ### 8. Mode-Specific Logic
 **Status:** Verified.
@@ -63,9 +65,9 @@ Dynamic calculation of `kRangeReciprocal` is correct.
 **Status:** Verified.
 `compute_load` logic in `load_tracking.h` guards against overflow for `n > 10`.
 
-### 11. RunQueue Fairness
+### 11. RunQueue Fairness (Improved)
 **Status:** Verified.
-`PeekBest` implements strictly priority-based selection with intra-priority O(1) scanning (depth 32) for fairness (vruntime). `ThreadDataOptimal` predicate correctly short-circuits for Real-Time threads.
+**PeekBest** now searches up to 3 non-empty priority levels to allow lower-priority threads with significantly earlier deadlines to preempt, while maintaining O(1) complexity.
 
 ### 12. Locking Hierarchy
 **Status:** Verified.

@@ -39,7 +39,7 @@ The scheduler uses a priority-based run queue implemented as an array of doubly-
 
 *   **Enqueue/Dequeue:** constant time pointer updates.
 *   **PeekMaximum:** Uses `fls` (find last set bit) on the bitmap to find the highest priority level in `O(1)`.
-*   **PeekBest:** Scans the highest priority list to find the thread with the lowest virtual runtime. This scan is strictly bounded by `kSearchDepth` (32), making the operation `O(1)` in the worst case.
+*   **PeekBest:** Scans up to 3 non-empty priority levels to find the best thread (lowest virtual runtime). This scan is strictly bounded by `kDeadlineLookaheadLevels` * `kSearchDepth` (3 * 32), making the operation `O(1)` in the worst case.
 
 ## 5. Team Enumeration
 **Complexity:** `O(1)` (Amortized)

@@ -242,7 +242,7 @@ choose_small_task_core(CPUEntry* cpu)
 	if (core == NULL)
 		return NULL;
 
-	// Issue 39: CheckPackageMinimumLoad can return cores from packages whose
+	// CheckPackageMinimumLoad can return cores from packages whose
 	// Init() was partially skipped (Package() or Node() is NULL).  Guard
 	// before the sSmallTaskCore update which dereferences both.
 	if (sSmallTaskCore != NULL && core != NULL) {
@@ -640,7 +640,7 @@ rebalance(const ThreadData* threadData)
 	CPUSet mask = threadData->GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
-	// Issue 6: returning NULL from rebalance signals "force full search" to
+	// Returning NULL from rebalance signals "force full search" to
 	// ChooseCoreAndCPU, which eventually calls MigrateTo().  If every core is
 	// disabled, MigrateTo(NULL) leaves fCore == NULL and Enqueue faults.
 	// Return the current core instead; ChooseCoreAndCPU will re-evaluate.
@@ -931,7 +931,7 @@ rebalance_irqs(bool idle)
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
 	_.Unlock();
 
-	// Issue 6: use pre-lock snapshot; do NOT re-read via GetCore() here.
+	// Use pre-lock snapshot; do NOT re-read via GetCore() here.
 	if (other == currentCore)
 		return;
 	if (!pack && other->GetScore() + kLoadDifference >= currentCore->GetScore())

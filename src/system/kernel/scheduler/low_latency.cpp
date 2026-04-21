@@ -61,7 +61,7 @@ choose_core(const ThreadData* threadData)
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* previousCore = threadData->PreviousCore();
 
-	// Issue #43: has_cache_expired() calls system_time() internally.  It is
+	// has_cache_expired() calls system_time() internally.  It is
 	// called up to three times in this function; cache the result to avoid
 	// redundant syscalls and ensure a consistent view within one scheduling
 	// decision.
@@ -273,16 +273,15 @@ choose_core(const ThreadData* threadData)
 		}
 	}
 
-	// Issue 37: if thread coloring found a result, do not enter the general
+	// If thread coloring found a result, do not enter the general
 	// idle-node scan which iterates all idle nodes and can overwrite a valid
 	// P-core selection with any idle core found (potentially an E-core).
 	bool skipIdleScan = ((preferMax || preferMin) && core != NULL);
 
-	// Issue 21 fix: respect skipIdleScan in the home-package check too.
+	// Respect skipIdleScan in the home-package check too.
 	// The previous code entered the home-package path unconditionally.
 	// By checking skipIdleScan we ensure that a valid colored core selection
-	// is not overwritten. The core == NULL check is redundant here because
-	// skipIdleScan is only false when core is NULL.
+	// is not overwritten.
 	int32 homePackageID = threadData->HomePackage();
 	if (!skipIdleScan && homePackageID >= 0 && homePackageID < gPackageCount) {
 		PackageEntry* homePackage = &gPackageEntries[homePackageID];
@@ -437,7 +436,7 @@ choose_core(const ThreadData* threadData)
 
 	// If the selected core is not much better than previousCore, prefer
 	// previousCore for cache locality.
-	// Issue 21: re-evaluate cache expiry here; the value computed at function
+	// Re-evaluate cache expiry here; the value computed at function
 	// entry may be stale after hundreds of microseconds of search work.
 	const bool cacheExpiredTail = (previousCore != NULL)
 		? has_cache_expired(threadData) : true;
@@ -718,7 +717,7 @@ rebalance_irqs(bool idle)
 	int32 newCPU = other->CPUHeap()->PeekRoot()->ID();
 	_.Unlock();
 
-	// Issue 6: use pre-lock snapshot; do NOT re-read via GetCore() here.
+	// Use pre-lock snapshot; do NOT re-read via GetCore() here.
 	if (other == currentCore)
 		return;
 

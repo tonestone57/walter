@@ -29,8 +29,8 @@ The scheduler uses a **Strict Priority + Vruntime** hybrid model.
     *   It **always** selects the highest priority queue that is non-empty. A thread with priority 20 will *always* preempt a thread with priority 19, regardless of vruntime.
 
 2.  **Secondary Key: Virtual Runtime (Vruntime)**
-    *   **Within the same priority level**, threads are ordered by `vruntime` (lowest first).
-    *   `PeekBest` scans the head of the highest-priority queue (up to `kSearchDepth` = 32) to find the thread with the minimum `vruntime`.
+    *   **Within priority levels**, threads are ordered by `vruntime` (lowest first).
+    *   `PeekBest` scans up to 3 non-empty priority levels (highest first) and finds the best candidate across them within a search depth of 32 per level. This allows threads with significantly earlier deadlines in slightly lower priority buckets to be considered.
 
 ---
 

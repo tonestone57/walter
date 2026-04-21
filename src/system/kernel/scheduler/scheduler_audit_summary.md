@@ -56,4 +56,4 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Clustering:** Verified logic with simulation scripts for various core counts (1, 4, 6, 9, 13, 14, 15).
 
 ## Conclusion
-The scheduler is now more robust against edge cases (CPU pinning, hot-unplug) and has improved scalability characteristics due to optimized RNG usage and bounded search algorithms. The new clustering logic ensures better topology balance. Future work should focus on bringing `power_saving.cpp` up to parity with `low_latency.cpp`.
+The scheduler is now robust against critical edge cases including CPU hot-unplug races, heterogeneous load balancing errors, and potential thread leaks during work stealing. With the resolution of issues 1-40, the scheduler achieves high stability and efficiency on both large-scale and heterogeneous systems.
