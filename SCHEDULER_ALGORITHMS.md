@@ -3,21 +3,18 @@
 ## Work Stealing Complexity
 Is Work Stealing O(1)? **No, not strictly in the current implementation.**
 
-### Current Behavior (Hybrid)
-1.  **Local Package:** Linear scan of all cores (`O(C)`).
-2.  **Remote Packages:** Iterates through **all** busy packages in the node using a bitmask (`O(P_busy)`).
-3.  **Victim Core:** Once a package is selected, it uses **Random Sampling** (max 4 attempts) to find a core (`O(1)`).
+### Current Behavior (Optimized Hybrid)
+1.  **Local Package:** Linear scan of all cores in the same package (`O(C)`). This is efficient for typical L3 domains (2-16 cores).
+2.  **Local Node:** Uses **Rotational Linear Scan** for small nodes (<= 8 packages) or **Random Sampling** for larger nodes. This bounds the search cost.
+3.  **Global Search:** Uses **Random Sampling** across all packages in the system. The number of samples is dynamically scaled based on system size (`gRandomSamples`), ensuring `O(1)` complexity relative to system size.
+4.  **Victim Selection:** Within a selected package, it samples cores (Power of Two Choices) if the package is large, or performs a linear scan for small packages.
 
-**Total Complexity:** `O(C + P_busy)`
+**Total Complexity:** `O(C + log P)` or `O(1)` depending on node size and sampling parameters. The implementation avoids the `O(N)` scan of all packages.
 
-### Reducing to O(1)
-To make work stealing strictly `O(1)`, we must eliminate the loops:
-1.  **Random Package Selection:** Instead of iterating `busyPackageMask` with `ctz`, we must **randomly sample** the mask (e.g., pick a random bit index and scan forward to the next set bit).
-2.  **Random Local Core:** Instead of scanning all local cores, we would randomly probe them (similar to the remote logic).
-
-**Bitmasks alone do not make it O(1).**
+**Bitmasks and Sampling:**
 *   `ctz` (Count Trailing Zeros) finds the *first* set bit in `O(1)` CPU cycles.
-*   However, if you loop `while (mask != 0) { ... mask &= ~(1<<bit); }`, you are still performing `N` iterations. This is `O(N)`, not `O(1)`.
+*   Hierarchical idle bitmasks (`gIdleNodeMask`, `fIdlePackageMask`) allow instant discovery of idle resources.
+*   Random sampling prevents lock contention and cache line bouncing on large systems.
 
 ---
 

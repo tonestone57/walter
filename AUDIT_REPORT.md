@@ -20,7 +20,7 @@ The scheduler implementation is **sound and accurate**. The architecture success
     3. Home Node Affinity.
     4. Global Idle Search (Hierarchical).
     5. Global Load Balancing (Random Sampling).
-- **Random Sampling**: The "Power of Two Choices" variant (sampling 16 packages) used in `choose_core` and `rebalance` ensures scalability on large systems by avoiding global locks and linear scans.
+- **Random Sampling**: The "Power of Two Choices" variant (sampling 16-64 packages depending on system size) used in `choose_core` and `rebalance` ensures scalability on large systems by avoiding global locks and linear scans.
 - **Fallback**: The fallback to linear scan ensures a core is always found even if random sampling fails, preventing starvation.
 
 ### 3. Power Saving Mode

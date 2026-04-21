@@ -267,7 +267,7 @@ public:
 	{
 		size = (size + 7) & ~(size_t)7;
 
-		// Fix #3 (defensive): fHashTable sits at the top of the buffer;
+		// (defensive): fHashTable sits at the top of the buffer;
 		// fNextAllocation grows upward from the bottom.  fRemainingBytes
 		// tracks the gap between them and is the single correct guard.
 		// The ASSERT below makes the buffer-layout invariant machine-checkable
@@ -280,7 +280,7 @@ public:
 #endif
 		while (true) {
 #if B_HAIKU_64_BIT
-			// Issue 28/38 fix: fNextAllocation is a uint8* and fRemainingBytes
+			/38 fix: fNextAllocation is a uint8* and fRemainingBytes
 			// is size_t. Casting them to int64* and calling atomic_get64 /
 			// atomic_add64 violates strict aliasing on 64-bit targets (accessing
 			// a pointer-sized object through an int64 lvalue is UB). Use
@@ -299,7 +299,7 @@ public:
 				return (void*)old;
 			}
 #else
-			// Issue 28/38 fix (32-bit): same aliasing fix for 32-bit targets.
+			/38 fix (32-bit): same aliasing fix for 32-bit targets.
 			uint32 remaining = (uint32)atomic_get((int32*)&fRemainingBytes);
 			if ((uint32)size > remaining)
 				return NULL;
@@ -621,7 +621,7 @@ private:
 					return;
 
 				strlcpy(waitObject->name, name, sizeof(waitObject->name));
-			// Issue 22/32: add missing break to prevent fall-through into
+			/32: add missing break to prevent fall-through into
 			// THREAD_BLOCK_TYPE_OTHER_OBJECT and default cases.
 			break;
 			}
@@ -919,7 +919,7 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 	if ((addr_t)buffer & 0x7) {
 		addr_t diff = (addr_t)buffer & 0x7;
-		// Issue #38: diff is in [1,7], so (8 - diff) is in [1,7].  On a
+		//: diff is in [1,7], so (8 - diff) is in [1,7].  On a
 		// 32-bit target size_t is 32 bits; the subtraction can only underflow
 		// if the caller passed size == 0, which is caught by the
 		// "size <= (size_t)(8 - diff)" guard immediately below.  The cast to
@@ -949,7 +949,7 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 	SchedulingAnalysisManager manager(buffer, size);
 
-	// Issue #9 (clarification): When fHashTable is NULL (buffer too small for
+	// (clarification): When fHashTable is NULL (buffer too small for
 	// even one entry), all Allocate() calls return NULL and all Insert/Lookup
 	// calls are no-ops.  The DEBUG assert in Allocate is guarded by
 	// "fHashTable == NULL" precisely to skip the layout-invariant check in

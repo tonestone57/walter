@@ -33,12 +33,12 @@ Estimates are based on algorithmic complexity analysis ($O(1)$ vs $O(\log N)$/$O
 *   **Responsiveness (-5%):** Linux's strict deadline fairness guarantees (lag) provide smoother interactive performance under mixed load than Haiku's static priorities.
 
 ### 256 Cores (4-Socket / Large 2-Socket)
-*   **Latency (+15%):** Haiku switches to random sampling (16 samples) here. This avoids the $O(N)$ scanning cost. Linux's domain balancing starts to consume more cycles.
+*   **Latency (+15%):** Haiku switches to random sampling (32 samples at this scale) here. This avoids the $O(N)$ scanning cost. Linux's domain balancing starts to consume more cycles.
 *   **Throughput (+5%):** Reduced lock contention in Haiku (per-package vs domain locks) saves "sys" time.
 *   **Responsiveness (0%):** Haiku's reduced overhead balances out Linux's better fairness algorithms.
 
 ### 384 Cores (Intermediate Scale)
-*   **Latency (+25%):** The gap widens. Haiku's placement remains $O(1)$ (16 samples). Linux's domain walk depth increases.
+*   **Latency (+25%):** The gap widens. Haiku's placement remains $O(1)$ (approx 35 samples). Linux's domain walk depth increases.
 *   **Throughput (+10%):** Haiku's removal of global counters (`sRescheduleCounter`) prevents cache line bouncing that begins to affect Linux at this scale if not tuned.
 *   **Responsiveness (+10%):** Under high load, Linux may throttle load balancing to save throughput, leading to temporary imbalances. Haiku's random placement continually spreads load without throttling.
 
@@ -67,7 +67,7 @@ Estimates are based on algorithmic complexity analysis ($O(1)$ vs $O(\log N)$/$O
 ## 3. Methodology
 
 1.  **Complexity**:
-    *   Haiku Placement: $C_{Haiku} = 16 \times (\text{Lock} + \text{Read}) \approx \text{Constant}$.
+    *   Haiku Placement: $C_{Haiku} = \text{samples} \times (\text{Lock} + \text{Read}) \approx \text{Constant}$.
     *   Linux Placement: $C_{Linux} \approx k \times \log(\text{Cores}) + \text{DomainWalk}$.
 2.  **Contention**:
     *   Haiku: Distributed (1/Package).

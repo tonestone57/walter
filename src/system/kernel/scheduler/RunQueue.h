@@ -236,7 +236,7 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 {
 	ASSERT(fList != NULL);
 
-	// Issue #31 (clarification): fPriority is unsigned int.  The guard
+	// (clarification): fPriority is unsigned int.  The guard
 	//   if (fPriority == 0) { fNext = NULL; return; }
 	// at the top of _FindNextPriority prevents the subtraction (fPriority - 1)
 	// from wrapping.  The subsequent topBit = (fPriority - 1) % 32 is
@@ -367,7 +367,7 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 			atomic_pointer_set((void**)&fBest, element);
 		else if (priority == bestPriority && sCompare(element, best))
 			atomic_pointer_set((void**)&fBest, element);
-		// Issue #2: priority < bestPriority OR (same priority, element not
+		//: priority < bestPriority OR (same priority, element not
 		// better) — the cached fBest is still the correct best candidate.
 		// Clearing it here forced an unnecessary O(N) rescan on every
 		// lower-priority enqueue; preserve the cache instead.
@@ -411,7 +411,7 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 			atomic_pointer_set((void**)&fBest, element);
 		else if (priority == bestPriority && sCompare(element, best))
 			atomic_pointer_set((void**)&fBest, element);
-		// Issue #2: Same reasoning as PushFront — preserve valid fBest cache
+		//: Same reasoning as PushFront — preserve valid fBest cache
 		// when the new element cannot displace the current best candidate.
 	} else {
 		atomic_pointer_set((void**)&fBest, element);
@@ -450,7 +450,7 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
 
-	// Issue #18: Unconditionally clear the fBest cache on every removal.
+	//: Unconditionally clear the fBest cache on every removal.
 	// While clearing only when (fBest == element) is a valid optimization
 	// in a strictly locked single-queue context, it is vulnerable to ABA
 	// issues if the same pointer is reallocated and re-added before a
@@ -527,7 +527,7 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 
 				current = sGetLink(current)->fNext;
 			}
-			// Issue 3: CAS instead of unconditional set — a concurrent
+			// CAS instead of unconditional set — a concurrent
 			// PushFront/PushBack may have installed a fresher best between
 			// our scan start and now; preserve their value if so.
 			atomic_pointer_test_and_set((void**)&fBest, best, (Element*)NULL);
@@ -610,7 +610,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			Element* current = fHeads[priority];
 			int count = 0;
 
-			// Fix #11: Give each priority level a fair, equal share of the
+			// Give each priority level a fair, equal share of the
 			// total budget.  The previous "/ 2 + 1" formula halved the budget
 			// at every level, causing the second priority band to receive only
 			// half as many probes as the first.  This under-served lower-
@@ -624,7 +624,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 				totalBudget--;
 			}
 
-			// Issue 15: 'break' only exits the inner while(val!=0) loop.
+			// 'break' only exits the inner while(val!=0) loop.
 			// Return NULL to terminate the outer for-loop immediately when
 			// the budget is exhausted — remaining bitmap words are skipped.
 			if (totalBudget <= 0)

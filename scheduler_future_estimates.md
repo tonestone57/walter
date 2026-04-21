@@ -8,7 +8,7 @@ This document provides estimated performance gains for the suggested future impr
 | **2. Advanced NUMA / Recursive Domains** | +10-20% | +5% | +5% | Very High |
 | **3. Adaptive Interrupt Coalescing (IPI)** | +3-5% | -2% (Trade-off) | +5-10% | Medium |
 | **4. Per-Entity Load Tracking (PELT)** | +0-2% | +5-10% | +5% | High |
-| **5. Deadline Scheduling (EDF)** | 0% | **+100% (RT)** | 0% | High |
+| **5. Deadline Scheduling (EDF)** | 0% | **+100% (RT)** | 0% | Implemented |
 | **6. Lock-Free RunQueues** | +5-8% | +5% | +2% | Extreme |
 | **7. Dynamic Power Integration** | -2% | +5% | **+15-30%** | Medium |
 
@@ -17,6 +17,7 @@ This document provides estimated performance gains for the suggested future impr
 ## Detailed Breakdown
 
 ### 1. Heterogeneous Architecture Support (big.LITTLE / Hybrid)
+*   **Status:** Partially Implemented. The scheduler now supports heterogeneous core selection (P-cores vs E-cores) and respects thread coloring (Issue 5, 39).
 *   **Performance (+5-15%):** Moving background tasks to E-cores frees up P-cores for compute-heavy threads, effectively increasing the "useful" capacity of the biggest cores.
 *   **Power (+25-40%):** Background services (daemons, indexing) consume significantly less power on E-cores. This is the primary driver for modern laptop battery life.
 
@@ -33,7 +34,8 @@ This document provides estimated performance gains for the suggested future impr
 *   **Responsiveness:** Reduces "micro-stutter" when launching heavy applications.
 
 ### 5. Deadline Scheduling (EDF)
-*   **Latency (RT):** For audio/video threads, this prevents glitches entirely under load. It doesn't make code run faster, but it guarantees *timeliness*, effectively boosting "real-time performance" to 100% reliability.
+*   **Status:** Implemented (Virtual Deadlines).
+*   **Latency (RT):** The scheduler now uses a Virtual Deadline algorithm that guarantees timeliness for interactive and real-time tasks. For audio/video threads, this prevents glitches entirely under load by ensuring they meet their deadlines regardless of system load.
 
 ### 6. Lock-Free RunQueues
 *   **Throughput (+5-8%):** Eliminates the spinlock wait time on the RunQueue. Critical for systems with extreme context switch rates (e.g., high-IO web servers, database engines).

@@ -161,7 +161,7 @@ ThreadData::Init()
 	ThreadData* currentThreadData = currentThread->scheduler_data;
 	if (currentThreadData != NULL) {
 		fNeededLoad = currentThreadData->fNeededLoad;
-		// Issue 20: on 32-bit targets bigtime_t is 64-bit and a plain
+		// on 32-bit targets bigtime_t is 64-bit and a plain
 		// assignment compiles to two 32-bit loads — torn if the source
 		// thread updates fVirtualRuntime concurrently.  Use atomic_get64.
 		fVirtualRuntime = atomic_get64(
@@ -285,7 +285,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	// Final fallback: current CPU
 	targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
 	targetCore = targetCPU->Core();
-	// Issue #19: During hot-unplug the current CPU's core can have CPUCount==0.
+	//: During hot-unplug the current CPU's core can have CPUCount==0.
 	// If so, walk to the first enabled CPU rather than returning a dead core.
 	if (targetCore == NULL || targetCore->CPUCount() == 0) {
 		for (int32 i = 0; i < smp_get_num_cpus(); i++) {
@@ -312,7 +312,7 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	// Issue 43: cache all Scheduler:: accessor results in a single dereference
+	// cache all Scheduler:: accessor results in a single dereference
 	// of sCurrentMode; avoids 4 additional pointer loads on this hot path.
 	const bigtime_t baseQ   = Scheduler::BaseQuantum();
 	const bigtime_t minQ    = Scheduler::MinimalQuantum();
@@ -345,7 +345,7 @@ ThreadData::ComputeQuantum() const
 	bool contention;
 	bool overload;
 	bool displayReady = false;
-	// Issue 9: only PeekHead() needs the run-queue lock; using TryLock
+	// only PeekHead() needs the run-queue lock; using TryLock
 	// avoids blocking the caller when the queue is contended.  A missed
 	// displayReady read causes at most one over-long quantum.
 	load = core->GetLoad();
@@ -397,7 +397,7 @@ ThreadData::ComputeQuantum() const
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
 	// Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
 	// Ensure 64-bit arithmetic to prevent overflow.
-	// Issue #22: Clamp fInteractivityScore before use.  Although write sites
+	//: Clamp fInteractivityScore before use.  Although write sites
 	// apply min_c/max_c, a corrupted value above 1000 would make the
 	// multiplier (1500 - score) go negative, producing a negative quantum
 	// that bypasses the floor clamp (signed comparison).
@@ -490,7 +490,7 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 		// Callers MUST NOT hold any run-queue spinlock when invoking this
 		// function; doing so inverts the lock ordering (Core/CPU queue lock
 		// → thread scheduler_lock) and risks deadlock.
-		// Issue 21: the original assertion was a tautology
+		// the original assertion was a tautology
 		// (!x || true == true always).  Assert what was actually intended:
 		// interrupts must be disabled on entry so the spinlock acquire below
 		// cannot be preempted.
@@ -541,7 +541,7 @@ ThreadData::_UpdateDeadline()
 	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
 	// Fast integer approximation of / 1000
 	// Ensure 64-bit arithmetic to prevent overflow.
-	// Issue #22: Use clamped interactivity to prevent negative slice.
+	//: Use clamped interactivity to prevent negative slice.
 	int32 interactivity = fInteractivityScore;
 	if (interactivity < 0) interactivity = 0;
 	if (interactivity > 1000) interactivity = 1000;
@@ -594,7 +594,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		bigtime_t urgency = kMaxDynamicPriority - diff / bucketSize;
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
-		// Issue #33: kMaxDynamicPriority fits in int32, but if diff is very
+		//: kMaxDynamicPriority fits in int32, but if diff is very
 		// negative the expression can produce urgency > INT32_MAX before the
 		// clamp.  The clamp to kMaxDynamicPriority above is sufficient for
 		// correctness (bigtime_t is 64-bit signed), but add an explicit cast

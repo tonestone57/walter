@@ -70,3 +70,21 @@ The `pack_irqs` function was removed. `rebalance_irqs` was updated to handle the
 ### Deep Dive: Thread Migration
 **Status:** Verified Safe.
 - **Race Conditions:** The interaction between `ChooseCoreAndCPU` and `Enqueue` handles concurrent CPU disabling correctly. The `Enqueue` method re-verifies `fCore->CPUCount()` under the runqueue lock and forces a retry if the core has gone offline.
+
+## 4. Stolen Thread Loss during Hot-Unplug [FIXED]
+**File:** `src/system/kernel/scheduler/scheduler_cpu.cpp`
+**Function:** `CPUEntry::ChooseNextThread()`
+**Description:** Stolen threads could be lost if the second enqueue attempt failed due to a concurrent hot-unplug.
+**Resolution:** Added log warning and forced fallback to current CPU's core to prevent permanent thread leaks.
+
+## 5. NULL Dereference in Enqueue [FIXED]
+**File:** `src/system/kernel/scheduler/scheduler_thread.h`
+**Function:** `ThreadData::Enqueue()`
+**Description:** `fCore` could be NULL during a hot-unplug race, causing a crash when constructing RAII lockers.
+**Resolution:** Added a NULL guard for `fCore` before locker construction and a second check under the lock.
+
+## 6. Dying Thread Re-enqueue [FIXED]
+**File:** `src/system/kernel/scheduler/scheduler.cpp`
+**Function:** `reschedule()`
+**Description:** A thread in `THREAD_STATE_FREE_ON_RESCHED` could theoretically be re-enqueued if migration logic interfered.
+**Resolution:** Explicitly cleared `enqueueOldThread` for dying threads.

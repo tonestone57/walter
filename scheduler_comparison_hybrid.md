@@ -1,8 +1,8 @@
-# Scheduler Comparison: Current Method vs. Virtual Deadline (O(1) Deadlines)
+# Scheduler Comparison: Legacy Method vs. Virtual Deadline (Implemented)
 
-This document analyzes the "Virtual Deadline" scheduler design against the original Haiku scheduler implementation.
+This document analyzes the "Virtual Deadline" scheduler implementation against the original legacy Haiku scheduler design.
 
-## The Virtual Deadline Design
+## The Virtual Deadline Implementation (Current)
 **Deadline-Based Round Robin**
 *   **Structure:** Uses the existing Priority Bitmap/RunQueue structure but re-interprets "Priority" as "Deadline Urgency".
 *   **Sorting Key:** `Urgency` (derived from Virtual Deadline). Highest Urgency (Earliest Deadline) runs next.
@@ -13,7 +13,7 @@ This document analyzes the "Virtual Deadline" scheduler design against the origi
 
 ## Comparison Table
 
-| Metric | Original Method (Strict Priority) | Virtual Deadline Design |
+| Metric | Legacy Method (Strict Priority) | Virtual Deadline (Implemented) |
 | :--- | :--- | :--- |
 | **Starvation** | **Possible.** Strict priority means low-priority threads never run if high-priority is busy (mitigated by reactive boosting). | **Eliminated.** Every task gets a deadline. As time passes, even low-priority tasks become "Urgent" and eventually preempt high-priority tasks. |
 | **Latency (Scheduling)** | **O(1) Constant.** Bitmap scan + Priority Queue is extremely fast and deterministic. | **O(1) Constant.** Uses the same Bitmap structure! Deadlines are mapped to buckets, preserving O(1) performance without complex trees. |

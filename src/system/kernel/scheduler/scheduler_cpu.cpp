@@ -3,8 +3,8 @@
  * Distributed under the terms of the MIT License.
  */
 
-// Patch: Fix node->NodeIndex() calls, PeekMaximumLoadCore null deref,
-// and double-modification of fIdlePackageMask in AddIdleCore / RemoveIdleCore.
+
+
 
 
 #include "scheduler_cpu.h"
@@ -123,7 +123,7 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 
 	fInteractionUpdateCounter = 0;
 	fReschedulePending = 0;
-	fLastLocalPackageIndex = 0;	// Fix #14
+	fLastLocalPackageIndex = 0;	//
 }
 
 
@@ -317,12 +317,12 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 			cpuLocker.Unlock();
 			bool wasRunQueueEmpty;
 			bool requestPreemption;
-			// Issue #35: Enqueue can fail if the target core has CPUCount==0
+			//: Enqueue can fail if the target core has CPUCount==0
 			// (hot-unplug race).  If it fails the thread is neither running
 			// nor queued — it would be silently lost.  Re-enqueue via the
 			// global enqueue path which handles core selection retry.
 			if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption)) {
-				// Issue #35: Re-enqueue via global path if core was disabled.
+				//: Re-enqueue via global path if core was disabled.
 				enqueue(sharedThread->GetThread(), false, NULL);
 			}
 		}
@@ -345,7 +345,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		cpuLocker.Unlock();
 		bool wasRunQueueEmpty;
 		bool requestPreemption;
-		// Issue #35: Re-enqueue via global path if core was disabled.
+		//: Re-enqueue via global path if core was disabled.
 		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption))
 			enqueue(sharedThread->GetThread(), false, NULL);
 	}
@@ -378,7 +378,7 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
 		fMeasureActiveTime += active;
 		fCore->IncreaseActiveTime(active);
 
-		// Fix #6: Compute system_time() once and pass it to UpdateActivity so
+		// Compute system_time() once and pass it to UpdateActivity so
 		// the virtual-runtime ceiling uses the same timestamp as the rest of
 		// this scheduling decision.  Avoids a redundant syscall on the hot path.
 		oldThreadData->UpdateActivity(active, system_time());
@@ -433,10 +433,10 @@ CPUEntry::_TryStealWork()
 	if (registeredCores <= 1)
 		return NULL;
 
-	// Issue #14 (clarification): The subtraction-wrap "index -= registeredCores"
+	// (clarification): The subtraction-wrap "index -= registeredCores"
 	// is safe because startIndex < registeredCores and i < registeredCores,
 	// so startIndex + i < 2 * registeredCores, requiring at most one subtraction.
-	// Issue #7 (clarification): GetIdleCorePacking shift guard — when shift==0
+	// (clarification): GetIdleCorePacking shift guard — when shift==0
 	// the left-shift by kMaxCoresPerPackage is already guarded by "if (shift > 0)"
 	// in PackageEntry::GetIdleCorePacking; no undefined behaviour occurs.
 	// Pick a random starting point to avoid convoys
@@ -454,7 +454,7 @@ CPUEntry::_TryStealWork()
 		if (victim == NULL || victim == fCore || victim->CPUCount() == 0)
 			continue;
 
-		// Issue 42: avoid acquiring the run-queue lock on idle cores whose
+		// avoid acquiring the run-queue lock on idle cores whose
 		// queues are guaranteed empty; the lock + empty-scan + unlock wastes
 		// cycles proportional to the number of idle siblings per quantum.
 		if ((package->IdleCoreMask()
@@ -482,12 +482,12 @@ CPUEntry::_TryStealWork()
 
 	// Phase 2: The Local NUMA Node (Random)
 	// Target: Cores on the same physical socket/die (e.g., 64-128 cores).
-	// Method: Fixed Random (e.g., 4-8 probes).
+	// Method: Random Sampling
 	// Why: Stealing here is fast (local RAM). You want to exhaust reasonable options here
 	// before going across the expensive interconnect.
 
 	SchedulerNode* node = package->Node();
-	// Issue 4: package->Node() can be NULL during topology teardown.
+	// package->Node() can be NULL during topology teardown.
 	if (node == NULL)
 		goto phase3;
 
@@ -773,7 +773,7 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Issue #40: Explicitly exclude idle threads from steal candidates.
+	//: Explicitly exclude idle threads from steal candidates.
 	// Idle threads must only live in CPU run queues; stealing one into a
 	// CoreEntry queue would violate the idle-thread invariant and trigger
 	// the ASSERT(!thread->IsIdle()) in CoreEntry::Remove.
@@ -806,7 +806,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	atomic_add(&fIdleCPUCount, 1);
 	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
 
-	// Issue 33: Publish the CPU in fCPUSet BEFORE advertising the core as idle
+	// Publish the CPU in fCPUSet BEFORE advertising the core as idle
 	// via AddIdleCore.  A concurrent choose_core that sees the idle-mask update
 	// will call _ChooseCPU(), which iterates fCPUSet.  If fCPUSet is still
 	// empty at that point it returns NULL and forces an unnecessary retry.
@@ -814,7 +814,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 
 	bool didAddIdle = false;
 	if (firstCPU) {
-		didAddIdle = true;  // Issue 2: track for rollback symmetry
+		didAddIdle = true;  // track for rollback symmetry
 		// core has been reenabled
 		fLoad = 0;
 		atomic_set64(&fCombinedLoad, 0);
@@ -832,7 +832,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 			fLoad = 0;
 			atomic_set64(&fCombinedLoad, 0);
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
-			// Issue 2: only call RemoveIdleCore when AddIdleCore was called
+			// only call RemoveIdleCore when AddIdleCore was called
 			// (the firstCPU branch).  A mismatch would corrupt fIdleCoreMask.
 			if (didAddIdle)
 				fPackage->RemoveIdleCore(this);
@@ -856,7 +856,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
-	// Issue #30: Strictly reorder updates to fIdleCPUCount and fCPUCount.
+	//: Strictly reorder updates to fIdleCPUCount and fCPUCount.
 	// By decrementing fIdleCPUCount BEFORE fCPUCount, we ensure that during the
 	// transient window where only one has been updated, fIdleCPUCount / fCPUCount
 	// always produces a ratio <= 1.0. If we did the reverse, removing an idle
@@ -900,13 +900,13 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// eliminates the latent hazard.
 	}
 
-	// Fix #4: Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
+	// Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
 	// less than every valid scheduler priority (minimum B_IDLE_PRIORITY == 0),
 	// so the CPU is guaranteed to bubble to the heap root.  The explicit
 	// constant makes the intent clear and prevents silent misbehaviour if the
 	// priority range ever grows to include negative values.
 	fCPUHeap.ModifyKey(cpu, INT32_MIN);
-	// Issue 41: two concurrent RemoveCPU calls both set INT32_MIN, making
+	// two concurrent RemoveCPU calls both set INT32_MIN, making
 	// the heap root ambiguous.  Spin waiting for our entry to reach the root;
 	// in practice this resolves within one iteration since the concurrent
 	// caller will RemoveRoot immediately after the ASSERT.
@@ -963,7 +963,7 @@ CoreEntry::PeekMinimumLoadCPU()
 			uint32 bits = fCPUSet.Bits(i);
 			if (bits != 0) {
 				int cpu = i * 32 + (__builtin_ffs(bits) - 1);
-				// Issue 25: a concurrent RemoveCPU may have cleared fCPUSet
+				// a concurrent RemoveCPU may have cleared fCPUSet
 				// while Core() still shows the old value.  Verify membership.
 				CPUEntry* entry = &gCPUEntries[cpu];
 				if (entry->Core() == this)
@@ -995,7 +995,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	if (cpuCount <= 0)
 		return;
 
-	// Issue 11: one system_time() call shared by both branches eliminates
+	// one system_time() call shared by both branches eliminates
 	// a redundant syscall and ensures consistent timestamps.
 	bigtime_t now = system_time();
 	bigtime_t lastUpdate = atomic_get64(&fLastLoadUpdate);
@@ -1007,7 +1007,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			return;
 		}
 	} else {
-		// Issue 34: on CAS failure another CPU won the update race; that
+		// on CAS failure another CPU won the update race; that
 		// update is sufficient, so return rather than silently skipping.
 		if (atomic_test_and_set64(&fLastLoadUpdate, now, lastUpdate)
 				!= lastUpdate) {
@@ -1049,7 +1049,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			//
 			// Instead, compute the delta from the last snapshotted value and
 			// add it atomically.
-			// Issue #21: delta can be negative if concurrent RemoveLoad calls
+			//: delta can be negative if concurrent RemoveLoad calls
 			// raced between the CAS and here.  Clamp to prevent fLoad from
 			// going negative and corrupting all downstream load calculations.
 			int32 delta = currentLoad - prevLoad;
@@ -1229,7 +1229,7 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
 			// If multiple neighbors exist, pick one semi-randomly to avoid always
 			// hitting the same core if it's shared by many active ones.
 			if (scheduler_popcount(neighbors) > 1) {
-				// Issue 8: when shift == kMaxCoresPerPackage (== 64 on 64-bit),
+				// when shift == kMaxCoresPerPackage (== 64 on 64-bit),
 				// the left-shift in (neighbors << (kMaxCoresPerPackage - shift))
 				// becomes a shift-by-0, but more dangerously shift==0 would make
 				// (kMaxCoresPerPackage - 0) == 64 which is UB for a 64-bit type.
@@ -1289,7 +1289,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
-	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	// Fix #15
+	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	//
 		uint64 sampledCores = 0;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
@@ -1312,7 +1312,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
 
-			// Issue 3: candidate->ID() is a core ID; the mask is indexed by
+			// candidate->ID() is a core ID; the mask is indexed by
 			// CPU ID.  Check whether the core has any CPU in the affinity set.
 			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
@@ -1342,7 +1342,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		CoreEntry* candidate = fCores[i];
 		if (candidate == NULL)
 			continue;
-		// Issue 3: same fix as the random sampling path above.
+		// same fix as the random sampling path above.
 		if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 			continue;
 		if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
@@ -1371,7 +1371,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 	// Use "Power of Two Choices" random sampling if the core count is large.
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
-	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	// Fix #15
+	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	//
 		uint64 sampledCores = 0;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
@@ -1394,7 +1394,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
 
-			// Issue 3: candidate->ID() is a core ID; mask is indexed by CPU ID.
+			// candidate->ID() is a core ID; mask is indexed by CPU ID.
 			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
@@ -1417,7 +1417,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 	// Linear Scan (Robust Path for small clusters or fallback)
 	int32 count = scheduler_popcount(enabledMask);
-	// Issue #20: When count==1 (or enabledMask is sparse relative to
+	//: When count==1 (or enabledMask is sparse relative to
 	// kMaxCoresPerPackage) the random startBit can exceed all set bits,
 	// making upperMask == 0 and the entire scan fall into lowerMask — the
 	// randomisation becomes a no-op.  Guard: if upperMask is empty, set
@@ -1450,7 +1450,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			CoreEntry* candidate = fCores[i];
 			if (candidate == NULL)
 				continue;
-			// Issue 3: same fix as PeekMinimumLoadCore.
+			// same fix as PeekMinimumLoadCore.
 			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)

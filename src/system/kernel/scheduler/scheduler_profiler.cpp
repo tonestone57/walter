@@ -81,7 +81,7 @@ bool
 Profiler::EnterFunction(int32 cpu, const char* functionName)
 {
 	InterruptsLocker _;
-	// Issue #25 (clarification): fFunctionStackPointers[cpu] is incremented
+	// (clarification): fFunctionStackPointers[cpu] is incremented
 	// with a plain ++.  This is safe because:
 	//   1. InterruptsLocker disables interrupts, preventing preemption on this
 	//      CPU — no other thread on this CPU can enter concurrently.

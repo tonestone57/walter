@@ -50,7 +50,7 @@ has_cache_expired(const ThreadData* threadData)
 	SCHEDULER_ENTER_FUNCTION();
 	if (threadData->WentSleepActive() == 0)
 		return false;
-	// Issue 34 fix (power_saving): same as low_latency — use PreviousCore().
+	 fix (power_saving): same as low_latency — use PreviousCore().
 	CoreEntry* core = threadData->PreviousCore();
 	if (core == NULL)
 		return true;
@@ -111,7 +111,7 @@ choose_small_task_core(CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Issue 14/33 fix: cpu->Core() can return NULL during hot-unplug.
+	/33 fix: cpu->Core() can return NULL during hot-unplug.
 	// Guard ALL dereferences of cpu->Core()->Package()->Node() up front
 	// since both the heterogeneous and homogeneous paths use this chain.
 	CoreEntry* cpuCore = cpu->Core();
@@ -445,7 +445,7 @@ choose_core(const ThreadData* threadData)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-			// Issue 35 fix (power_saving): same early-exit as low_latency.
+			 fix (power_saving): same early-exit as low_latency.
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
@@ -456,7 +456,7 @@ choose_core(const ThreadData* threadData)
 			}
 		}
 
-		// Issue 5 fix (power_saving): same as low_latency — use GetLoad().
+		 fix (power_saving): same as low_latency — use GetLoad().
 		if (preferMin && core != NULL && core->GetLoad() > kHighLoad)
 			core = NULL;
 
@@ -556,7 +556,7 @@ choose_core(const ThreadData* threadData)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-			// Issue 35 fix (power_saving).
+			 fix (power_saving).
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
@@ -571,7 +571,7 @@ choose_core(const ThreadData* threadData)
 
 		if (core == NULL) {
 			core = choose_idle_core(cpu);
-			// Issue 39 fix: also enforce thread-coloring type preference on
+			// also enforce thread-coloring type preference on
 			// the idle-core result. choose_idle_core() ignores both affinity
 			// masks and core-type constraints; without this guard a background
 			// thread (preferMin) could receive a P-core, or a high-priority
@@ -782,7 +782,7 @@ rebalance(const ThreadData* threadData)
 	if (coreScore >= kMediumLoad)
 		return core;
 
-	// Issue #10: Package() and Node() can return NULL during topology
+	//: Package() and Node() can return NULL during topology
 	// teardown or if this core was never fully initialised.  Guard all
 	// three pointer dereferences before accessing nodeID.
 	if (core->Package() == NULL || core->Package()->Node() == NULL)
@@ -882,7 +882,7 @@ rebalance_irqs(bool idle)
 
 		if (tryRandom) {
 			// Phase 2: Local Node
-			// Fix #5: Do NOT re-read CoreEntry::GetCore() here.  currentCore
+			// Do NOT re-read CoreEntry::GetCore() here.  currentCore
 			// was snapshotted at function entry.  Re-reading it after the
 			// SpinLocker unlock creates a TOCTOU window: a concurrent CPU
 			// hot-unplug can change the assignment between the two reads,
@@ -912,7 +912,7 @@ rebalance_irqs(bool idle)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-			// Issue 35 fix (power_saving).
+			 fix (power_saving).
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)

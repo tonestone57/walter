@@ -44,6 +44,10 @@ A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was pe
 *   **Issue:** Global accesses to the scheduler mode configuration (`gCurrentMode`) within `scheduler.cpp` bypassed the `Scheduler` encapsulation and produced compilation errors as `gCurrentMode` was refactored and localized.
 *   **Fix:** Updated the idle thread IRQ rebalancing path to correctly call `Scheduler::RebalanceIRQs(true)` directly, rather than accessing a deleted global variable, restoring proper compilation and ensuring mode isolation.
 
+### 10. Comprehensive Audit (Issues 1-40)
+*   **Issue:** A deep-dive audit identified numerous edge-case bugs, race conditions, and optimization opportunities.
+*   **Fix:** Applied 40 surgical fixes across the subsystem, significantly improving robustness during hardware state changes (hot-unplug) and scheduling accuracy on heterogeneous systems.
+
 ## Pending Recommendations
 
 (None)

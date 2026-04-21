@@ -37,7 +37,7 @@ public:
 
 	SCHEDULER_INLINE	int32		GetPriority() const	{ return fThread->priority; }
 	SCHEDULER_INLINE	Thread*		GetThread() const	{ return fThread; }
-	// Issue 19: gCPUEnabled is updated one word at a time by SetBitAtomic/
+	// gCPUEnabled is updated one word at a time by SetBitAtomic/
 	// ClearBitAtomic; there is no compound-And atomicity guarantee.  Read
 	// each word with atomic_get to minimise torn-read exposure across the
 	// word boundary (most relevant on systems with >32 CPUs).
@@ -92,7 +92,7 @@ public:
 	SCHEDULER_INLINE	bool		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption);
 	SCHEDULER_INLINE	bool		Dequeue();
 
-	// Fix #6: Accept an optional pre-computed 'now' timestamp.  The caller
+	// Accept an optional pre-computed 'now' timestamp.  The caller
 	// (CPUEntry::UpdateActiveTime) already holds a fresh system_time() result
 	// and can pass it here to eliminate a redundant syscall.  Passing 0 (the
 	// default) falls back to an internal system_time() call for compatibility.
@@ -268,13 +268,13 @@ ThreadData::_UpdatePriorityBoost()
 
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// Issue #3: Take the snapshot before Remove.
+			//: Take the snapshot before Remove.
 			CoreEntry* core = fCore;
 			if (core != NULL) {
 				core->Remove(this);
 				CoreEntry* current = fCore;
 				if (current != NULL && current != core) {
-					// Issue 36: acquiring the new core's lock here is safe because
+					// acquiring the new core's lock here is safe because
 					// lock ordering requires Core-before-CPU and we hold no CPU
 					// lock; the old core's lock is held by the caller.
 					CoreRunQueueLocker newLock(current);
@@ -282,7 +282,7 @@ ThreadData::_UpdatePriorityBoost()
 				} else
 					core->PushBack(this, newPriority);
 
-				// Issue 1: set fEnqueued immediately after PushBack while still
+				// set fEnqueued immediately after PushBack while still
 				// inside the critical section; the thread is in the queue now.
 				fEnqueued = true;
 			}
@@ -415,7 +415,7 @@ ThreadData::GoesAway()
 	ASSERT(fReady);
 
 	if (!IsIdle()) {
-		// Issue 28: the original atomic_set(0) could overwrite a concurrent
+		// the original atomic_set(0) could overwrite a concurrent
 		// increment from another CPU that legitimately enqueued a thread in
 		// the window between our atomic_add and the atomic_set, permanently
 		// undercounting gTotalRunnableThreads.  Use a CAS retry loop that
@@ -441,7 +441,7 @@ ThreadData::GoesAway()
 
 	fLastInterruptTime = 0;
 
-	// Issue #28: Cache system_time() once; calling it twice gives slightly
+	//: Cache system_time() once; calling it twice gives slightly
 	// different timestamps under heavy interrupt load, skewing sleep-time
 	// accounting.  fWentSleepActive uses core active time, not wall time,
 	// so no second call is needed for it.
@@ -463,7 +463,7 @@ ThreadData::Dies()
 	ASSERT(fReady);
 
 	if (!IsIdle()) {
-		// Issue 28: same CAS-based saturation as GoesAway to avoid
+		// same CAS-based saturation as GoesAway to avoid
 		// overwriting concurrent increments.
 		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
 		if (prev <= 0) {
@@ -558,7 +558,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 			if (!wasReady && !IsRealTime())
 				_UpdateDeadline();
 
-			// Issue 40: defer the gTotalRunnableThreads increment until after the
+			// defer the gTotalRunnableThreads increment until after the
 			// CPUCount guard in the non-pinned path (see below).  For the pinned
 			// path the CPU liveness check happens under CPURunQueueLocker.
 			if (!wasReady && !IsIdle())
@@ -587,12 +587,12 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		CoreCPULocker cpuLocker(fCore);
 		CoreRunQueueLocker locker(fCore);
 
-		// Issue 27: _ChooseCore can return NULL (all masked CPUs disabled);
+		// _ChooseCore can return NULL (all masked CPUs disabled);
 		// MigrateTo(NULL) sets fCore = NULL.  Guard before any deref.
 		if (fCore == NULL)
 			return false;
 
-		// Issue 7: move the fStolen decrement AFTER the CPUCount guard so
+		// move the fStolen decrement AFTER the CPUCount guard so
 		// that a return-false path never leaves TotalThreadCount decremented
 		// without a corresponding enqueue to balance it.
 		if (fStolen) {
@@ -609,7 +609,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		if (!wasReady && !IsRealTime())
 			_UpdateDeadline();
 
-		// Issue 40: defer the gTotalRunnableThreads increment until after the
+		// defer the gTotalRunnableThreads increment until after the
 		// CPUCount guard in the non-pinned path.
 		if (!wasReady && !IsIdle())
 			atomic_add(&gTotalRunnableThreads, 1);

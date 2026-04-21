@@ -3,15 +3,15 @@
 This document summarizes the time complexity of key scheduler algorithms, ranked from highest (worst-case) to lowest.
 
 ## 1. Topology-Aware Work Stealing
-**Complexity:** `O(P + C)`
-*Where `P` is the number of packages in the NUMA node and `C` is the number of cores per package.*
+**Complexity:** `O(C + log P)` or `O(1)`
+*Where `C` is the number of cores per package and `P` is the number of packages.*
 
 When a core becomes idle, it attempts to steal work from other cores to maintain high utilization.
-1.  **Local Package Scan:** Linearly scans all `C` cores in the local package.
-2.  **Node Package Scan:** If local stealing fails, it iterates through sibling packages (`P`) in the same NUMA node.
-3.  **Victim Selection:** For each busy sibling package, it attempts to steal from a random core (up to 4 attempts).
+1.  **Local Package Scan:** Linearly scans all `C` cores in the local package. This is acceptable for small `C` (L3 domain).
+2.  **Local Node Scan:** For small NUMA nodes, it uses a rotational linear scan. For larger nodes, it switches to **Random Sampling**, bounding the cost.
+3.  **Global Random Search:** Probes a fixed number of random packages across the entire system.
 
-This is the most expensive operation in the scheduler's hot path, scaling with the complexity of the CPU topology.
+This implementation ensures that the work-stealing overhead does not scale linearly with system size, enabling efficient operation on many-core systems (up to 4096 cores).
 
 ## 2. Linear Core Selection (Small Clusters)
 **Complexity:** `O(C)`

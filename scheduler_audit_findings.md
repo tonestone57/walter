@@ -67,9 +67,17 @@ Dynamic calculation of `kRangeReciprocal` is correct.
 
 ### 11. RunQueue Fairness (Improved)
 **Status:** Verified.
-**PeekBest** now searches up to 3 non-empty priority levels to allow lower-priority threads with significantly earlier deadlines to preempt, while maintaining O(1) complexity.
+**PeekBest** now searches up to 3 non-empty priority levels to allow lower-priority threads with significantly earlier deadlines to preempt, while maintaining O(1) complexity (Issue 40).
 
-### 12. Locking Hierarchy
+### 12. Hot-Unplug Robustness
+**Status:** Fixed.
+Multiple race conditions and NULL pointer dereferences during CPU hot-unplug were resolved, including stolen thread recovery, Core pointer guarding, and re-enqueue prevention for dying threads (Issues 14, 23, 24, 29, 30, 32, 33).
+
+### 13. Heterogeneous Scheduling Accuracy
+**Status:** Fixed.
+Improved E-core utilization by switching from capacity-normalized scores to raw load for threshold guards, and enforced thread coloring on idle core selection (Issues 5, 39).
+
+### 14. Locking Hierarchy
 **Status:** Verified.
 Locking order `Core -> CPU` is consistently respected. `TryLock` is used for cross-core stealing. Deadlocks are structurally prevented.
 

@@ -43,7 +43,7 @@ This report compares the theoretical performance of the Haiku Scheduler (audited
 **Throughput** is the total work completed per unit time. Scheduler overhead (locking, cache misses) reduces throughput.
 
 ### Haiku Implementation
-*   **Load Balancing:** Uses **"Power of Two Choices"** random sampling. When a thread is created or rebalanced, it samples K (16) random packages to find the least loaded one.
+*   **Load Balancing:** Uses **"Power of Two Choices"** random sampling. When a thread is created or rebalanced, it samples K (16-64, depending on system size) random packages to find the least loaded one.
 *   **Overhead:** Constant cost regardless of system size. Accesses random memory locations, spreading interconnect traffic.
 *   **Interconnect:** "Local Bias" ensures threads prefer local packages/nodes first, reducing cross-socket traffic.
 
@@ -82,12 +82,12 @@ This report compares the theoretical performance of the Haiku Scheduler (audited
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **64** | ~0.5 us | ~0.8 us | Low (Random) | Low (Domain) | Minimal | Minimal |
 | **128** | ~0.5 us | ~1.2 us | Low (Random) | Low (Domain) | Minimal | Minimal |
-| **256** | ~0.5 us | ~2.5 us | Low (Random) | Medium | Very Low | Low |
-| **512** | ~0.5 us | ~5.0 us | Low (Random) | Medium | Very Low | Medium |
-| **1024** | ~0.6 us | ~12.0 us | Low (Random) | High (Throttled) | Very Low | High (Global Locks) |
-| **2048** | ~0.6 us | ~25.0 us+ | Low (Random) | Very High | Low | Very High |
-| **4096** | ~0.7 us | ~50.0 us+ | Low (Random) | Extremely High | Low | Critical |
-| **8192** | ~0.7 us | ~100.0 us+ | Low (Random) | Prohibitive | Low | Critical |
+| **256** | ~0.5 us | ~2.5 us | Low (16+ samples) | Medium | Very Low | Low |
+| **512** | ~0.5 us | ~5.0 us | Low (22+ samples) | Medium | Very Low | Medium |
+| **1024** | ~0.6 us | ~12.0 us | Low (32+ samples) | High (Throttled) | Very Low | High (Global Locks) |
+| **2048** | ~0.6 us | ~25.0 us+ | Low (45+ samples) | Very High | Low | Very High |
+| **4096** | ~0.7 us | ~50.0 us+ | Low (64 samples) | Extremely High | Low | Critical |
+| **8192** | ~0.7 us | ~100.0 us+ | Low (64 samples) | Prohibitive | Low | Critical |
 
 *Note: Linux latency estimates assume standard configuration; specialized RT kernels or partitioning can improve this but reduce throughput.*
 

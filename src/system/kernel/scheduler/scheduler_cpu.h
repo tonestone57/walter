@@ -176,7 +176,7 @@ private:
 						uint32			fInteractionUpdateCounter;
 
 						int32			fReschedulePending;
-						// Fix #14: Moved from CoreEntry to eliminate false sharing.
+						// Moved from CoreEntry to eliminate false sharing.
 						// This field is written on every search_local_node call by
 						// the searching CPU.  Placing it in CoreEntry dirtied the
 						// core's hot read-mostly cache line on every sibling CPU.
@@ -354,7 +354,7 @@ public:
 	inline				void				SetPackageCount(int32 count)
 											{ fPackageCount = count; }
 
-	// Fix #13: SetPackageIdle removed — it was never called from any
+	// SetPackageIdle removed — it was never called from any
 	// translation unit.  All idle-mask updates go through PackageGoesIdle /
 	// PackageWakesUp.  Leaving dead code here invited future callers to
 	// bypass the node-level gIdleNodeMask updates performed by those methods.
@@ -601,7 +601,7 @@ CoreEntry::GetLoad() const
 	if (cpuCount <= 0)
 		return kMaxLoad;
 
-	// Issue 17: clamp each fast-path result to [0, kMaxLoad] so that a
+	// clamp each fast-path result to [0, kMaxLoad] so that a
 	// transiently negative fLoad from a concurrent RemoveLoad race does not
 	// propagate into load comparisons as a large positive number.
 	if (cpuCount == 1)
@@ -617,7 +617,7 @@ CoreEntry::GetLoad() const
 	if (cpuCount == 8)
 		return (int32)min_c(max_c(load >> 3, 0), kMaxLoad);
 
-	// Clamp negative load (Issue #21 defensive read-side guard).
+	// Clamp negative load .
 	if (load < 0)
 		return 0;
 	return (int32)min_c(load / cpuCount, kMaxLoad);
@@ -706,7 +706,7 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
-		// Issue #4 (clarification): The race between AddIdleCore (which holds
+		// (clarification): The race between AddIdleCore (which holds
 		// fCoreLock) and CoreGoesIdle (which does not hold fCoreLock) on the
 		// oldMask==0 → PackageGoesIdle path is benign in practice: both paths
 		// are guarded by the InterruptsBigSchedulerLocker at their call sites
@@ -751,7 +751,7 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
 		return;
 
-	// Issue 26: fIdlePackageMask is native_cpu_mask_t (32-bit on 32-bit
+	// fIdlePackageMask is native_cpu_mask_t (32-bit on 32-bit
 	// systems); atomic_or64 writes 8 bytes over a 4-byte field, corrupting
 	// adjacent struct memory.  Use scheduler_atomic_or throughout.
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdlePackageMask,
@@ -772,7 +772,7 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
 		return;
 
-	// Issue 26: same fix — use scheduler_atomic_and for 32-bit safety.
+	// same fix — use scheduler_atomic_and for 32-bit safety.
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << package->NodeIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdlePackageMask, ~clearBit);
 
@@ -783,7 +783,7 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == (native_cpu_mask_t)0) {
 		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
 
-		// Issue 38: narrow the TOCTOU window using the same atomic helper.
+		// narrow the TOCTOU window using the same atomic helper.
 		if (scheduler_atomic_get(&fIdlePackageMask) != (native_cpu_mask_t)0)
 			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
 	}
@@ -794,7 +794,7 @@ inline uint64
 SchedulerNode::IdlePackageMask() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	// Issue 26: use scheduler_atomic_get for 32-bit correctness.
+	// use scheduler_atomic_get for 32-bit correctness.
 	return (uint64)scheduler_atomic_get(
 		const_cast<native_cpu_mask_t*>(&fIdlePackageMask));
 }
@@ -806,7 +806,7 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	// Issue #16: snapshot fCPUCount once before the atomic_add to close the
+	//: snapshot fCPUCount once before the atomic_add to close the
 	// TOCTOU window — a concurrent RemoveCPU can decrement fCPUCount between
 	// the two reads, causing the CoreGoesIdle notification to be skipped.
 	ASSERT(atomic_get(&fIdleCPUCount) < atomic_get(&fCPUCount));
@@ -827,7 +827,7 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 
 	int32 cpuCount = atomic_get(&fCPUCount);
 	IncrementTotalThreadCount();
-	// Issue #1: The only valid "fully idle → first active" transition is when
+	//: The only valid "fully idle → first active" transition is when
 	// the OLD value of fIdleCPUCount equals cpuCount (all CPUs were idle).
 	// Using >= would incorrectly fire CoreWakesUp if fIdleCPUCount ever
 	// transiently exceeds cpuCount due to an AddCPU/RemoveCPU race, producing
@@ -874,7 +874,7 @@ PackageEntry::GetLeastIdlePackage()
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	if (gPackageCount > kRandomSearchThreshold) {
-		// Issue #17 (clarification): CoreCPULocker and CoreRunQueueLocker in
+		// (clarification): CoreCPULocker and CoreRunQueueLocker in
 		// ThreadData::Enqueue use fCPULock and fQueueLock respectively — they
 		// are DISTINCT spinlocks and do NOT deadlock.  No code change needed.
 
@@ -886,7 +886,7 @@ PackageEntry::GetLeastIdlePackage()
 		for (int32 i = 0; i < kMaxFallbackAttempts; i++) {
 			int32 idx = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 			PackageEntry* current = &gPackageEntries[idx];
-			// Issue 25: skip packages whose Init() was skipped (fNode == NULL);
+			// skip packages whose Init() was skipped (fNode == NULL);
 			// callers dereference Package()->Node()->ID() on the result.
 			if (current->fNode == NULL)
 				continue;

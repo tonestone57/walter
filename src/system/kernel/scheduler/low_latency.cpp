@@ -36,7 +36,7 @@ has_cache_expired(const ThreadData* threadData)
 	SCHEDULER_ENTER_FUNCTION();
 	if (threadData->WentSleepActive() == 0)
 		return false;
-	// Issue 34 fix: use PreviousCore() instead of Core(). fCore is updated
+	// use PreviousCore() instead of Core(). fCore is updated
 	// by rebalance while the thread sleeps; fWentSleepActive was recorded
 	// against the *old* core's active time. Comparing against the new core's
 	// active time is meaningless and can incorrectly report cache-expired=false
@@ -71,7 +71,7 @@ choose_core(const ThreadData* threadData)
 	// Stage 0: Hot-Idle Fast Path
 	// If the core we previously ran on is idle and in the same package,
 	// use it immediately to preserve cache warmth and skip expensive search.
-	// Issue 32 fix: cpu->Core() can return NULL during hot-unplug; guard it.
+	// cpu->Core() can return NULL during hot-unplug; guard it.
 	if (previousCore != NULL && previousCore->GetScore() == 0) {
 		CoreEntry* currentCore = cpu->Core();
 		if (currentCore != NULL
@@ -215,7 +215,7 @@ choose_core(const ThreadData* threadData)
 				}
 			}
 
-			// Issue 5 fix: use GetLoad() (raw utilisation) instead of GetScore()
+			// use GetLoad() (raw utilisation) instead of GetScore()
 			// (capacity-normalised) for the E-core guard. GetScore() scales by
 			// 1/capacity, so an E-core at 10% raw load already exceeds kHighLoad
 			// (~700) because its capacity is ~1/8th of a P-core. This made the
@@ -392,7 +392,7 @@ choose_core(const ThreadData* threadData)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-			// Issue 35 fix: honour the return value of CheckPackageMinimumLoad.
+			// honour the return value of CheckPackageMinimumLoad.
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
@@ -443,7 +443,7 @@ choose_core(const ThreadData* threadData)
 	if (previousCore != NULL && !cacheExpiredTail) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
 			if (core != previousCore) {
-				// Issue 29: enforce type preference in the soft-affinity check
+				// enforce type preference in the soft-affinity check
 				// so an E-core previousCore is never returned for a P-coloured
 				// thread just because loads are similar.
 				bool typeOk = true;
@@ -510,7 +510,7 @@ rebalance(const ThreadData* threadData)
 			: 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-		// Issue 35 fix: honour the return value of CheckPackageMinimumLoad.
+		// honour the return value of CheckPackageMinimumLoad.
 		for (int32 i = 0; i < attempts; i++) {
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
@@ -542,7 +542,7 @@ rebalance(const ThreadData* threadData)
 
 	// If the current core is significantly lagging behind the other core,
 	// we lower the threshold for migration to improve latency.
-	// Issue 12 fix: the "coreVRuntime > 0" guard prevents congestion detection
+	// the "coreVRuntime > 0" guard prevents congestion detection
 	// when all threads have just started (vruntime near zero). The meaningful
 	// condition is whether the other core is ahead in virtual time; use an
 	// absolute difference check instead.
@@ -633,11 +633,11 @@ rebalance_irqs(bool idle)
 		return;
 
 	cpu_ent* cpu = get_cpu_struct();
-	// Issue #30: Snapshot currentCore BEFORE releasing irqs_lock.  A
+	//: Snapshot currentCore BEFORE releasing irqs_lock.  A
 	// concurrent hot-unplug can change the CPU-to-core mapping in the window
 	// between Unlock() and a second GetCore() call, producing a stale Package()
 	// or Node() pointer.  This mirrors the identical fix applied to
-	// power_saving.cpp (Fix #5 in the audit summary).
+
 	CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
 
 	SpinLocker locker(cpu->irqs_lock);
@@ -672,7 +672,7 @@ rebalance_irqs(bool idle)
 
 	if (tryRandom) {
 		// Phase 2: Local Node
-		// Use the pre-lock snapshot (Issue #30).
+		// Use the pre-lock snapshot .
 		if (currentCore != NULL && currentCore->Package() != NULL) {
 			SchedulerNode* node = currentCore->Package()->Node();
 			search_local_node(node, [&](PackageEntry* entry) {
@@ -695,7 +695,7 @@ rebalance_irqs(bool idle)
 			: 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-		// Issue 35 fix: honour the return value of CheckPackageMinimumLoad.
+		// honour the return value of CheckPackageMinimumLoad.
 		// It returns true when a near-idle core is found (<15% load),
 		// signalling that further search is unnecessary. The original loops
 		// always ran all kMaxFallbackAttempts iterations even after finding

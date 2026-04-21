@@ -34,7 +34,7 @@ The most significant architectural improvement is the deep integration of system
     *   Hierarchical Bitmaps (`fIdleCoreMask` in Package, `fIdlePackageMask` in Node, `gIdleNodeMask` global) allow the scheduler to find the nearest idle core in O(1) time without scanning lists.
 *   **Random Sampling (Power of Two Choices):**
     *   For large systems (`gPackageCount > kRandomSearchThreshold`), the scheduler switches from linear scans to **Random Sampling** (`search_global_random`, `search_local_node`).
-    *   This statistically ensures O(1) selection time even with thousands of cores, avoiding the O(N) cache line bouncing of global scans.
+    *   The number of random samples scales dynamically with system size (from 16 up to 64), ensuring O(1) selection time even with thousands of cores, avoiding the O(N) cache line bouncing of global scans.
 
 ## 4. Work Stealing Strategy
 
@@ -98,8 +98,8 @@ Based on the architectural changes (Virtual Deadlines, O(1) Scalability, Active 
 While the updated scheduler is highly responsive, its "Statistical Fairness" (bucketized priority) can theoretically lag behind Linux EEVDF's precise fairness. The following recommendations are ranked by their ability to improve fairness:
 
 1.  **Intra-Bucket Heuristics (Highest Fairness Impact) - COMPLETED**
-    *   **Strategy:** Implement a "Best of 8" search within the highest priority bucket instead of taking the first thread (FIFO). The scheduler peeks at the first 8 threads and picks the one with the absolute lowest `virtual_runtime`.
-    *   **Status:** Implemented in `RunQueue::PeekMaximum`. This directly addresses the primary source of unfairness (collisions within the bucket) and approximates strict deadline sorting without breaking O(1) bounds.
+    *   **Strategy:** Implement a "Best of N" search within priority buckets instead of taking the first thread (FIFO). The scheduler peeks at threads and picks the one with the absolute lowest `virtual_runtime`.
+    *   **Status:** Implemented in `RunQueue::PeekBest`. It uses a search depth of 32 to find the best candidate within the bucket. Additionally, it now searches up to 3 non-empty priority levels to find the overall best deadline (Issue 40).
 
 2.  **Increase Priority Resolution**
     *   **Strategy:** Expand `THREAD_MAX_SET_PRIORITY` from 99 to 255 (matching one byte).

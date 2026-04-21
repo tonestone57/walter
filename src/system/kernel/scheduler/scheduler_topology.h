@@ -3,14 +3,14 @@
  * Distributed under the terms of the MIT License.
  */
 
-// Issue #42 (clarification — PackageEntry::RegisterCore): The fMaxAttempts
+// (clarification — PackageEntry::RegisterCore): The fMaxAttempts
 // formula uses fRegisteredCoreCount AFTER it has already been updated by
 //   fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
 // so it correctly reflects the new count including the just-registered core.
 // No code change is needed; the original audit finding was based on reading
 // the pre-update value, which is not what the code does.
 //
-// Issue #29 (note — CPUEntry::Init RNG seed): Improving entropy requires a
+// (note — CPUEntry::Init RNG seed): Improving entropy requires a
 // platform-specific hardware RNG (rdtsc/mrs cntvct) call per CPU during
 // init.  This is architecture-dependent and deferred to a follow-up patch.
 // The current Xorshift64 mixing is sufficient for scheduling fairness even
@@ -49,7 +49,7 @@ search_local_node(SchedulerNode* node, Action action)
 	// from the last searched position improves coverage and reduces collisions
 	// between CPUs searching the same node.
 	//
-	// Fix #14: Use cpu->fLastLocalPackageIndex (per-CPU) rather than the old
+	// Use cpu->fLastLocalPackageIndex (per-CPU) rather than the old
 	// core->fLastLocalPackageIndex.  The CoreEntry field was written on every
 	// call by every CPU sharing the core, producing false sharing on the core's
 	// hot read-mostly cache line.  The per-CPU field is private to one CPU so
@@ -57,8 +57,8 @@ search_local_node(SchedulerNode* node, Action action)
 	if (packagesInNode <= 8) {
 		int32 start = (cpu->fLastLocalPackageIndex + 1) % packagesInNode;
 		for (int32 i = 0; i < packagesInNode; i++) {
-			// Issue #23 (clarification): fLastLocalPackageIndex is per-CPU
-			// (Fix #14 already moved it from CoreEntry).  Updating it on
+			// (clarification): fLastLocalPackageIndex is per-CPU
+			// .  Updating it on
 			// every iteration gives correct round-robin coverage: next call
 			// starts from the element after the last one checked.  No change
 			// needed; the existing behaviour is intentional.
@@ -68,7 +68,7 @@ search_local_node(SchedulerNode* node, Action action)
 			int32 index = nodeBaseIndex + offset;
 			if (index >= gPackageCount)
 				continue;
-			// Issue 25 fix: update fLastLocalPackageIndex only when action()
+			// update fLastLocalPackageIndex only when action()
 			// returns true (successful match). The previous code updated on
 			// every iteration, so after a full scan fLastLocalPackageIndex
 			// held the last-checked (not last-matched) index. Next call then
@@ -85,7 +85,7 @@ search_local_node(SchedulerNode* node, Action action)
 	// For larger nodes, use logarithmic random sampling.  Duplicate probes
 	// become statistically rare once N is large enough.
 	//
-	// Fix #2 (documentation): The visitedBits array in search_global_random is
+	// (documentation): The visitedBits array in search_global_random is
 	// a fixed 128-byte stack allocation (kStackBitmaskSize == 1024 packages).
 	// For systems with >1024 packages deduplication is skipped but the loop
 	// still terminates within kMaxAttempts, bounding stack use unconditionally.
@@ -134,7 +134,7 @@ search_global_random(Action action)
 		return;
 	}
 
-	// Issue 8: the original kStackBitmaskSize of 1024 meant that packages
+	// the original kStackBitmaskSize of 1024 meant that packages
 	// in the range [1024, 4096) fell into a coarse stripe-based fallback
 	// that visited at most 1 package per 64-package band, severely
 	// under-sampling large systems.  gPackageCount is capped at 4096, so a
@@ -144,7 +144,7 @@ search_global_random(Action action)
 	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
-	// Issue 10/23: zero only the words needed for gPackageCount instead of
+	/23: zero only the words needed for gPackageCount instead of
 	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
 	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
 	int32 wordsNeeded = min_c((gPackageCount + 63) / 64,
@@ -190,7 +190,7 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 		if (score <= kLowLoadThreshold) {
 			bestCore = candidate;
 			bestLoad = score;
-			return true; // Issue 35: callers must check this return value
+			return true; // callers must check this return value
 		}
 
 		if (bestCore == NULL || score < bestLoad) {
@@ -199,7 +199,7 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 		}
 	}
 
-	return false; // Issue 35: continue searching
+	return false; // continue searching
 }
 
 
@@ -211,7 +211,7 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	const int32 cpuCount = smp_get_num_cpus();
 	PackageEntry* lastPackage = NULL;
 
-	// Issue #27: lastPackage only deduplicates *consecutive* visits.  Two
+	//: lastPackage only deduplicates *consecutive* visits.  Two
 	// CPU IDs in non-contiguous positions can belong to the same package and
 	// cause it to be checked twice.  Use a small visited bitmask keyed on the
 	// package's global index (capped at 64 entries on the hot path).  For

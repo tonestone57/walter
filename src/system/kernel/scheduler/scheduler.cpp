@@ -71,14 +71,14 @@ atomic_int32 gTotalRunnableThreads = 0;
 static timer sInteractionTimer;
 static int64 sLastInteractionTime;
 static int32 sDPCPending = 0;
-// Fix #12: Atomic guard for sInteractionTimer arming.
+// Atomic guard for sInteractionTimer arming.
 // timer_is_active() followed by add_timer() is not atomic: two CPUs can both
 // observe the timer as inactive and call add_timer() concurrently, corrupting
 // the shared timer_entry.  This flag serialises the arm with a compare-and-set
 // so exactly one CPU wins the race.  The flag is cleared by the timer callback
 // before it fires the DPC, allowing future re-arming.
 static int32 sTimerArmed = 0;
-static int32 sPendingDPCTarget = 0;  // Issue 30: 1000 or 5000
+static int32 sPendingDPCTarget = 0;  // 1000 or 5000
 
 
 static void
@@ -91,7 +91,7 @@ UpdateDeadlineScalingScalable()
 static void
 update_quantum_lengths_dpc(void* /*arg*/)
 {
-	// Issue 30: Use the latest requested target from sPendingDPCTarget
+	// Use the latest requested target from sPendingDPCTarget
 	// instead of the stale value passed via arg.
 	int64 targetResolution = (int64)atomic_get(&sPendingDPCTarget);
 
@@ -110,11 +110,11 @@ update_quantum_lengths_dpc(void* /*arg*/)
 static status_t
 interaction_timer_hook(struct timer* timer)
 {
-	// Fix #12: Clear the armed flag before queuing the DPC so that subsequent
+	// Clear the armed flag before queuing the DPC so that subsequent
 	// calls to scheduler_update_interaction_state() can re-arm if needed.
 	atomic_set(&sTimerArmed, 0);
 
-	// Issue 30: a scale-up DPC (target=1000) leaves sDPCPending==1 when it
+	// a scale-up DPC (target=1000) leaves sDPCPending==1 when it
 	// completes because update_quantum_lengths_dpc clears it.  If a scale-up
 	// is in flight when the timer fires, we must not silently drop the
 	// scale-down request.  Use a dedicated target variable so the DPC can
@@ -142,7 +142,7 @@ scheduler_update_interaction_state()
 	if (cpu->fInteractionUpdateCounter++ % 32 != 0)
 		return;
 
-	// Issue #13: Cache gDeadlineBucketSize once — it is read twice below and
+	//: Cache gDeadlineBucketSize once — it is read twice below and
 	// the two reads could observe different values if a concurrent DPC is
 	// updating it.  A single cached read is also cheaper on the hot path.
 	int64 currentBucketSize = atomic_get64(&gDeadlineBucketSize);
@@ -163,7 +163,7 @@ scheduler_update_interaction_state()
 	}
 
 	if (currentBucketSize == 1000) {
-		// Fix #12: Replace non-atomic timer_is_active()+add_timer() pair
+		// Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
 		if (atomic_get_and_set(&sTimerArmed, 1) == 0) {
 			add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
@@ -224,7 +224,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Issue #15: This mask is recomputed from a compile-time constant on every
+	//: This mask is recomputed from a compile-time constant on every
 	// reschedule.  Hoist it to a static const so the compiler evaluates it
 	// once at startup.
 	static const uint32 kTopWordMask =
@@ -257,7 +257,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 			// THREAD_MAX_SET_PRIORITY % 32 == 31, but a future change to
 			// THREAD_MAX_SET_PRIORITY could silently violate that.
 			if (i == ThreadRunQueue::kBitmapSize - 1)
-				// Issue #15: Use pre-computed mask.
+				//: Use pre-computed mask.
 				val &= kTopWordMask;
 
 			if (val == 0)
@@ -288,13 +288,13 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	};
 
 	// Check Core RunQueue first to maintain Core -> CPU lock ordering
-	// Fix #10: On an N-way SMT core, all N CPUs previously scanned the shared
+	// On an N-way SMT core, all N CPUs previously scanned the shared
 	// core run queue every 10 reschedules, contending on CoreRunQueueLocker N×
 	// more often than necessary.  Gate the scan with round-robin ownership:
 	// only the CPU whose (boost_epoch % cpuCount) matches its modular index
 	// within the core performs the scan.
 	int32 coreCPUCount = max_c(1, core->CPUCount());
-	// Issue 13/24: when fRescheduleCount wraps UINT32_MAX → 0, the post-
+	/24: when fRescheduleCount wraps UINT32_MAX → 0, the post-
 	// increment is 0, so (0 % 10 == 0) fires and preCount becomes UINT32_MAX,
 	// making boostEpoch ≈ 429M.  This causes all CPUs to satisfy the modular
 	// ownership check simultaneously, producing a correlated scan burst.
@@ -309,7 +309,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 			== (cpu->ID() % coreCPUCount));
 
 	CoreRunQueueLocker coreLocker(core, false);
-	// Issue #41: The thread-count check was done without the lock; a thread
+	//: The thread-count check was done without the lock; a thread
 	// could be removed between the check and lock acquisition, making the
 	// locked scan a wasted spinlock round-trip.  Re-check inside the lock.
 	if (ownsCoreQueueScan) {
@@ -363,7 +363,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	} else if (gSingleCore) {
 		targetCore = &gCoreEntries[0];
 	} else if (waker != NULL) {
-		// Issue 28: scheduler_on_thread_destroy NULLs scheduler_data before
+		// scheduler_on_thread_destroy NULLs scheduler_data before
 		// the thread is fully torn down; guard against a concurrent destroy.
 		ThreadData* wakerData = waker->scheduler_data;
 		CoreEntry* wakerCore = (wakerData != NULL) ? wakerData->Core() : NULL;
@@ -378,7 +378,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	bool requestPreemption = false;
 	bool rescheduleNeeded = false;
 
-	// Issue 18: bound the retry loop so that a total hot-unplug (all cores
+	// bound the retry loop so that a total hot-unplug (all cores
 	// disabled simultaneously during shutdown) cannot spin forever.
 	const int32 kMaxRetries = smp_get_num_cpus() * 2 + 8;
 	int32 enqueueAttempts = 0;
@@ -747,7 +747,7 @@ reschedule(int32 nextState)
 	if (nextThread != oldThread || oldThread->cpu->preempted) {
 		// Dynamic Quantum Scaling:
 		// Reduce quantum if the core is crowded to maintain interactivity.
-		// Issue #18: ThreadCount() can transiently return 0 during a remove
+		//: ThreadCount() can transiently return 0 during a remove
 		// race.  If load == 1, (load - 1) == 0 causes division by zero.
 		// Clamp divisor to at least 1.
 		int32 load = core->ThreadCount();
@@ -895,7 +895,7 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		{
 			CoreCPUHeapLocker heapLocker(core);
 			cpu->Start();
-			// Issue 35: clear the disabled flag BEFORE AddCPU so that
+			// clear the disabled flag BEFORE AddCPU so that
 			// any concurrent enqueue() → UpdatePriority() call that races
 			// the AddCPU does not hit the ASSERT(!disabled || priority==IDLE).
 			gCPU[cpuID].disabled = false;
@@ -920,7 +920,7 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 
 		// flush CPU run queue
 		while (true) {
-			// Issue #36 (clarification): The flush loop holds CPURunQueueLocker
+			// (clarification): The flush loop holds CPURunQueueLocker
 			// per iteration but NOT CoreRunQueueLocker.  Concurrent readers of
 			// the core queue (via ChooseNextThread on other CPUs) can observe
 			// threads mid-migration.  This is safe because cpu->LockScheduler()
@@ -1058,7 +1058,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	// Safe upper bound allocation for mapping packages to nodes
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
 
-	// Issue 31: sPackageToNode is the only mapping array not zero-initialised.
+	// sPackageToNode is the only mapping array not zero-initialised.
 	// Packages that are never written (guard short-circuits) carry heap garbage,
 	// which init() then uses as a node index, mapping the package to a
 	// non-existent SchedulerNode.
@@ -1198,7 +1198,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 						sPackageToNode[packageCount] = currentNodeID;
 					} else {
-						// Issue #5: When the package limit is reached, assign
+						//: When the package limit is reached, assign
 						// remaining CPUs to the last valid package.
 					}
 				}
@@ -1210,7 +1210,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 				coresInCurrentNode++;
 			}
 
-			// Fix #7: Use >= cpuCount — logically equivalent to the old
+			// Use >= cpuCount — logically equivalent to the old
 			// "packageCount + 1 > cpuCount" but states the invariant directly:
 			// stop before packageCount reaches cpuCount so that the final
 			// packageCount++ keeps the index within the sPackageToNode allocation
@@ -1222,7 +1222,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		l3Start = l3End;
 	}
 
-	// Issue #24 (clarification): scheduler_on_team_foreground_changed reads
+	// (clarification): scheduler_on_team_foreground_changed reads
 	// fThread->team->fIsForeground without the team lock in choose_core.
 	// This is a single-byte read that is atomic on all supported architectures;
 	// a torn read is impossible and the worst outcome is a one-quantum stale
@@ -1645,7 +1645,7 @@ scheduler_init()
 void
 scheduler_enable_scheduling()
 {
-	// Issue 33: use atomic store so all CPUs observe the flag immediately.
+	// use atomic store so all CPUs observe the flag immediately.
 	atomic_set(&sSchedulerEnabled, 1);
 }
 

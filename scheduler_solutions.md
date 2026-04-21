@@ -49,6 +49,7 @@ This document outlines technical proposals to address the weaknesses identified 
 1.  **Implemented (Responsiveness & Starvation):**
     *   **Proactive Boosting:** Updated `_ComputeEffectivePriority` to start boosting threads slightly earlier (75% of interval) to prevent edge-case starvation.
     *   **Latency Bonus:** Increased the vruntime "head start" for waking threads (from 2ms to 5ms) to improve interactive responsiveness (Hybrid Feature).
+    *   **Multi-level search:** Updated `RunQueue::PeekBest` to search up to 3 non-empty priority levels, allowing threads with significantly earlier deadlines in lower priority buckets to preempt (Issue 40).
 
 2.  **Future Work (Deadlock Mitigation):**
     *   **Priority Inheritance:** Requires modifying the `mutex` structure (ABI change) to store the owner thread ID. This is critical for preventing priority inversion but requires a synchronized kernel/driver rebuild.
