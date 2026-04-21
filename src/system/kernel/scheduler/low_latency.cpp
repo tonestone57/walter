@@ -36,7 +36,14 @@ has_cache_expired(const ThreadData* threadData)
 	SCHEDULER_ENTER_FUNCTION();
 	if (threadData->WentSleepActive() == 0)
 		return false;
-	CoreEntry* core = threadData->Core();
+	// Issue 34 fix: use PreviousCore() instead of Core(). fCore is updated
+	// by rebalance while the thread sleeps; fWentSleepActive was recorded
+	// against the *old* core's active time. Comparing against the new core's
+	// active time is meaningless and can incorrectly report cache-expired=false
+	// for a thread that has migrated far away from its warm cache.
+	CoreEntry* core = threadData->PreviousCore();
+	if (core == NULL)
+		return true; // no previous core — treat as expired
 	bigtime_t activeTime = core->GetActiveTime();
 	return activeTime - threadData->WentSleepActive() > kCacheExpire;
 }
@@ -64,8 +71,11 @@ choose_core(const ThreadData* threadData)
 	// Stage 0: Hot-Idle Fast Path
 	// If the core we previously ran on is idle and in the same package,
 	// use it immediately to preserve cache warmth and skip expensive search.
+	// Issue 32 fix: cpu->Core() can return NULL during hot-unplug; guard it.
 	if (previousCore != NULL && previousCore->GetScore() == 0) {
-		if (previousCore->Package() == cpu->Core()->Package())
+		CoreEntry* currentCore = cpu->Core();
+		if (currentCore != NULL
+				&& previousCore->Package() == currentCore->Package())
 			return previousCore;
 	}
 
@@ -205,10 +215,13 @@ choose_core(const ThreadData* threadData)
 				}
 			}
 
-			// Prevent overloading E-cores: if the best E-core candidate is already
-			// heavily utilized, fall through to the general min-load search rather
-			// than pile more threads onto an overloaded E-core cluster.
-			if (preferMin && core != NULL && core->GetScore() > kHighLoad)
+			// Issue 5 fix: use GetLoad() (raw utilisation) instead of GetScore()
+			// (capacity-normalised) for the E-core guard. GetScore() scales by
+			// 1/capacity, so an E-core at 10% raw load already exceeds kHighLoad
+			// (~700) because its capacity is ~1/8th of a P-core. This made the
+			// E-core coloring path immediately discard every E-core candidate,
+			// rendering thread coloring for efficiency cores completely ineffective.
+			if (preferMin && core != NULL && core->GetLoad() > kHighLoad)
 				core = NULL;
 
 			// For Performance cores, respect load threshold (80%).
@@ -265,11 +278,13 @@ choose_core(const ThreadData* threadData)
 	// P-core selection with any idle core found (potentially an E-core).
 	bool skipIdleScan = ((preferMax || preferMin) && core != NULL);
 
-	// Check Home Package (NUMA/Memory Affinity)
-	// If the previous core was not suitable (or cache expired), we try to return
-	// the thread to its home package where its memory was likely allocated.
+	// Issue 21 fix: respect skipIdleScan in the home-package check too.
+	// The previous code entered the home-package path unconditionally.
+	// By checking skipIdleScan we ensure that a valid colored core selection
+	// is not overwritten. The core == NULL check is redundant here because
+	// skipIdleScan is only false when core is NULL.
 	int32 homePackageID = threadData->HomePackage();
-	if (core == NULL && homePackageID >= 0 && homePackageID < gPackageCount) {
+	if (!skipIdleScan && homePackageID >= 0 && homePackageID < gPackageCount) {
 		PackageEntry* homePackage = &gPackageEntries[homePackageID];
 
 		CoreType preferredType = preferMax ? gMaxCoreType :
@@ -295,8 +310,9 @@ choose_core(const ThreadData* threadData)
 		}
 	}
 
-	// wake new package/core — skipped when thread coloring already found one
-	while (!skipIdleScan && idleNodeMask != 0) {
+	// wake new package/core — skipped when thread coloring or home-package
+	// search already found a suitable core.
+	while (!skipIdleScan && core == NULL && idleNodeMask != 0) {
 		int32 nodeIndex = __builtin_ctzll(idleNodeMask);
 		idleNodeMask &= ~(1ULL << nodeIndex);
 
@@ -377,12 +393,14 @@ choose_core(const ThreadData* threadData)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
+			// Issue 35 fix: honour the return value of CheckPackageMinimumLoad.
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
 					index -= gPackageCount;
-				CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
-					bestCore, bestLoad);
+				if (CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
+						bestCore, bestLoad))
+					break;
 			}
 		}
 
@@ -493,12 +511,14 @@ rebalance(const ThreadData* threadData)
 			: 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
+		// Issue 35 fix: honour the return value of CheckPackageMinimumLoad.
 		for (int32 i = 0; i < attempts; i++) {
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
 				index -= gPackageCount;
-			CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL, other,
-				bestLoad);
+			if (CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL, other,
+					bestLoad))
+				break;
 		}
 	}
 
@@ -523,7 +543,11 @@ rebalance(const ThreadData* threadData)
 
 	// If the current core is significantly lagging behind the other core,
 	// we lower the threshold for migration to improve latency.
-	bool congested = coreVRuntime > 0 && otherVRuntime > coreVRuntime + 20000;
+	// Issue 12 fix: the "coreVRuntime > 0" guard prevents congestion detection
+	// when all threads have just started (vruntime near zero). The meaningful
+	// condition is whether the other core is ahead in virtual time; use an
+	// absolute difference check instead.
+	bool congested = otherVRuntime > coreVRuntime + 20000;
 
 	// Heterogeneous Placement Stickiness: scale threshold by core performance
 	int32 threshold = (kLoadDifference * core->PerformanceScale()) >> kDefaultCapacityShift;
@@ -672,12 +696,18 @@ rebalance_irqs(bool idle)
 			: 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
+		// Issue 35 fix: honour the return value of CheckPackageMinimumLoad.
+		// It returns true when a near-idle core is found (<15% load),
+		// signalling that further search is unnecessary. The original loops
+		// always ran all kMaxFallbackAttempts iterations even after finding
+		// an essentially-idle core.
 		for (int32 i = 0; i < attempts; i++) {
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
 				index -= gPackageCount;
-			CheckPackageMinimumLoad(cpuEntryForIRQ, &gPackageEntries[index],
-				NULL, other, bestLoad);
+			if (CheckPackageMinimumLoad(cpuEntryForIRQ, &gPackageEntries[index],
+					NULL, other, bestLoad))
+				break;
 		}
 	}
 

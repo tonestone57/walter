@@ -68,9 +68,16 @@ search_local_node(SchedulerNode* node, Action action)
 			int32 index = nodeBaseIndex + offset;
 			if (index >= gPackageCount)
 				continue;
-			cpu->fLastLocalPackageIndex = offset;
-			if (action(&gPackageEntries[index]))
+			// Issue 25 fix: update fLastLocalPackageIndex only when action()
+			// returns true (successful match). The previous code updated on
+			// every iteration, so after a full scan fLastLocalPackageIndex
+			// held the last-checked (not last-matched) index. Next call then
+			// started from last-checked+1, creating systematic gaps that
+			// leave some packages chronically under-probed.
+			if (action(&gPackageEntries[index])) {
+				cpu->fLastLocalPackageIndex = offset;
 				break;
+			}
 		}
 		return;
 	}
@@ -183,7 +190,7 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 		if (score <= kLowLoadThreshold) {
 			bestCore = candidate;
 			bestLoad = score;
-			return true;
+			return true; // Issue 35: callers must check this return value
 		}
 
 		if (bestCore == NULL || score < bestLoad) {
@@ -192,7 +199,7 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 		}
 	}
 
-	return false;
+	return false; // Issue 35: continue searching
 }
 
 

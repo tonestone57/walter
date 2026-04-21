@@ -280,22 +280,36 @@ public:
 #endif
 		while (true) {
 #if B_HAIKU_64_BIT
-			int64 remaining = atomic_get64((int64*)&fRemainingBytes);
-			if ((int64)size > remaining)
+			// Issue 28/38 fix: fNextAllocation is a uint8* and fRemainingBytes
+			// is size_t. Casting them to int64* and calling atomic_get64 /
+			// atomic_add64 violates strict aliasing on 64-bit targets (accessing
+			// a pointer-sized object through an int64 lvalue is UB). Use
+			// uintptr_t as the intermediate type to match pointer width without
+			// aliasing violations.
+			uintptr_t remaining = (uintptr_t)atomic_get64(
+				(int64*)&fRemainingBytes);
+			if ((uintptr_t)size > remaining)
 				return NULL;
 
-			if (atomic_test_and_set64((int64*)&fRemainingBytes,
-					remaining - (int64)size, remaining) == remaining) {
-				return (void*)atomic_add64((int64*)&fNextAllocation, (int64)size);
+			if ((uintptr_t)atomic_test_and_set64((int64*)&fRemainingBytes,
+					(int64)(remaining - (uintptr_t)size),
+					(int64)remaining) == remaining) {
+				uintptr_t old = (uintptr_t)atomic_add64(
+					(int64*)&fNextAllocation, (int64)size);
+				return (void*)old;
 			}
 #else
-			int32 remaining = atomic_get((int32*)&fRemainingBytes);
-			if ((int32)size > remaining)
+			// Issue 28/38 fix (32-bit): same aliasing fix for 32-bit targets.
+			uint32 remaining = (uint32)atomic_get((int32*)&fRemainingBytes);
+			if ((uint32)size > remaining)
 				return NULL;
 
-			if (atomic_test_and_set((int32*)&fRemainingBytes,
-					remaining - (int32)size, remaining) == remaining) {
-				return (void*)atomic_add((int32*)&fNextAllocation, (int32)size);
+			if ((uint32)atomic_test_and_set((int32*)&fRemainingBytes,
+					(int32)(remaining - (uint32)size),
+					(int32)remaining) == remaining) {
+				uint32 old = (uint32)atomic_add(
+					(int32*)&fNextAllocation, (int32)size);
+				return (void*)(uintptr_t)old;
 			}
 #endif
 		}

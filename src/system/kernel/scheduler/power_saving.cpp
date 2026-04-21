@@ -50,7 +50,10 @@ has_cache_expired(const ThreadData* threadData)
 	SCHEDULER_ENTER_FUNCTION();
 	if (threadData->WentSleepActive() == 0)
 		return false;
-	CoreEntry* core = threadData->Core();
+	// Issue 34 fix (power_saving): same as low_latency — use PreviousCore().
+	CoreEntry* core = threadData->PreviousCore();
+	if (core == NULL)
+		return true;
 	bigtime_t activeTime = core->GetActiveTime();
 	return activeTime - threadData->WentSleepActive() > kCacheExpire;
 }
@@ -108,12 +111,21 @@ choose_small_task_core(CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Issue 14/33 fix: cpu->Core() can return NULL during hot-unplug.
+	// Guard ALL dereferences of cpu->Core()->Package()->Node() up front
+	// since both the heterogeneous and homogeneous paths use this chain.
+	CoreEntry* cpuCore = cpu->Core();
+	if (cpuCore == NULL || cpuCore->Package() == NULL
+			|| cpuCore->Package()->Node() == NULL) {
+		return NULL;
+	}
+
 	// On heterogeneous systems, small-task packing should prefer E-cores
 	// (gMinCoreType) to keep P-cores available for high-priority foreground
 	// work. On homogeneous systems packType is UNKNOWN and we fall through to
 	// the general packing logic.
 	if (sSmallTaskCore != NULL && gMinCoreType != gMaxCoreType) {
-		int32 currentNodeID = cpu->Core()->Package()->Node()->ID();
+		int32 currentNodeID = cpuCore->Package()->Node()->ID();
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
@@ -191,7 +203,7 @@ choose_small_task_core(CPUEntry* cpu)
 	int32 bestScore = -1;
 
 	if (sSmallTaskCore != NULL) {
-		int32 currentNodeID = cpu->Core()->Package()->Node()->ID();
+		int32 currentNodeID = cpuCore->Package()->Node()->ID();
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
@@ -433,18 +445,19 @@ choose_core(const ThreadData* threadData)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
+			// Issue 35 fix (power_saving): same early-exit as low_latency.
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
 					index -= gPackageCount;
-				check_package_packing(cpu, &gPackageEntries[index], NULL, core,
-					bestScore, foundNonOverloaded, preferredType);
+				if (CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
+						core, bestScore, preferredType))
+					break;
 			}
 		}
 
-		// Prevent overloading E-cores: if the best E-core is already heavily
-		// utilized, fall through rather than pile more background threads on.
-		if (preferMin && core != NULL && core->GetScore() > kHighLoad)
+		// Issue 5 fix (power_saving): same as low_latency — use GetLoad().
+		if (preferMin && core != NULL && core->GetLoad() > kHighLoad)
 			core = NULL;
 
 		// For P-cores, respect the 80% raw-load ceiling.
@@ -543,12 +556,14 @@ choose_core(const ThreadData* threadData)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
+			// Issue 35 fix (power_saving).
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
 					index -= gPackageCount;
-				CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
-					bestCore, bestScore);
+				if (CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
+						bestCore, bestScore))
+					break;
 			}
 		}
 
@@ -556,8 +571,22 @@ choose_core(const ThreadData* threadData)
 
 		if (core == NULL) {
 			core = choose_idle_core(cpu);
-			if (core != NULL && useMask && !core->CPUMask().Matches(mask))
-				core = NULL;
+			// Issue 39 fix: also enforce thread-coloring type preference on
+			// the idle-core result. choose_idle_core() ignores both affinity
+			// masks and core-type constraints; without this guard a background
+			// thread (preferMin) could receive a P-core, or a high-priority
+			// foreground thread (preferMax) an E-core, defeating the coloring
+			// decisions made higher up.
+			if (core != NULL) {
+				if (useMask && !core->CPUMask().Matches(mask))
+					core = NULL;
+				else if (preferMax && core->Type() != gMaxCoreType
+						&& gMinCoreType != gMaxCoreType)
+					core = NULL;
+				else if (preferMin && core->Type() != gMinCoreType
+						&& gMinCoreType != gMaxCoreType)
+					core = NULL;
+			}
 		}
 	}
 
@@ -883,12 +912,14 @@ rebalance_irqs(bool idle)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
+			// Issue 35 fix (power_saving).
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
 					index -= gPackageCount;
-				CheckPackageMinimumLoad(cpuEntryForIRQ, &gPackageEntries[index],
-					NULL, other, bestScore);
+				if (CheckPackageMinimumLoad(cpuEntryForIRQ, &gPackageEntries[index],
+						NULL, other, bestScore))
+					break;
 			}
 		}
 	}
