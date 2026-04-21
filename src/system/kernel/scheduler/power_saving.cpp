@@ -50,7 +50,7 @@ has_cache_expired(const ThreadData* threadData)
 	SCHEDULER_ENTER_FUNCTION();
 	if (threadData->WentSleepActive() == 0)
 		return false;
-	 fix (power_saving): same as low_latency — use PreviousCore().
+// Issue 34 fix (power_saving): same as low_latency — use PreviousCore().
 	CoreEntry* core = threadData->PreviousCore();
 	if (core == NULL)
 		return true;
@@ -445,7 +445,7 @@ choose_core(const ThreadData* threadData)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-			 fix (power_saving): same early-exit as low_latency.
+// Issue 34 fix (power_saving): same early-exit as low_latency.
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
@@ -556,7 +556,7 @@ choose_core(const ThreadData* threadData)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-			 fix (power_saving).
+// Issue 35 fix (power_saving).
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
@@ -782,7 +782,7 @@ rebalance(const ThreadData* threadData)
 	if (coreScore >= kMediumLoad)
 		return core;
 
-	//: Package() and Node() can return NULL during topology
+	// Issue fix: Package() and Node() can return NULL during topology
 	// teardown or if this core was never fully initialised.  Guard all
 	// three pointer dereferences before accessing nodeID.
 	if (core->Package() == NULL || core->Package()->Node() == NULL)
@@ -912,7 +912,7 @@ rebalance_irqs(bool idle)
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-			 fix (power_saving).
+// Issue 35 fix (power_saving).
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)

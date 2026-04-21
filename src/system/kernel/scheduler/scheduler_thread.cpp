@@ -285,7 +285,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	// Final fallback: current CPU
 	targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
 	targetCore = targetCPU->Core();
-	//: During hot-unplug the current CPU's core can have CPUCount==0.
+	// Issue fix: During hot-unplug the current CPU's core can have CPUCount==0.
 	// If so, walk to the first enabled CPU rather than returning a dead core.
 	if (targetCore == NULL || targetCore->CPUCount() == 0) {
 		for (int32 i = 0; i < smp_get_num_cpus(); i++) {
@@ -397,7 +397,7 @@ ThreadData::ComputeQuantum() const
 	// Context-aware quantum scaling: scale by interactivity score (0.5x - 1.5x)
 	// Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
 	// Ensure 64-bit arithmetic to prevent overflow.
-	//: Clamp fInteractivityScore before use.  Although write sites
+	// Issue fix: Clamp fInteractivityScore before use.  Although write sites
 	// apply min_c/max_c, a corrupted value above 1000 would make the
 	// multiplier (1500 - score) go negative, producing a negative quantum
 	// that bypasses the floor clamp (signed comparison).
@@ -541,7 +541,7 @@ ThreadData::_UpdateDeadline()
 	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
 	// Fast integer approximation of / 1000
 	// Ensure 64-bit arithmetic to prevent overflow.
-	//: Use clamped interactivity to prevent negative slice.
+	// Issue fix: Use clamped interactivity to prevent negative slice.
 	int32 interactivity = fInteractivityScore;
 	if (interactivity < 0) interactivity = 0;
 	if (interactivity > 1000) interactivity = 1000;
@@ -594,7 +594,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		bigtime_t urgency = kMaxDynamicPriority - diff / bucketSize;
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
-		//: kMaxDynamicPriority fits in int32, but if diff is very
+		// Issue fix: kMaxDynamicPriority fits in int32, but if diff is very
 		// negative the expression can produce urgency > INT32_MAX before the
 		// clamp.  The clamp to kMaxDynamicPriority above is sufficient for
 		// correctness (bigtime_t is 64-bit signed), but add an explicit cast

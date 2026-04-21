@@ -636,7 +636,7 @@ rebalance_irqs(bool idle)
 		return;
 
 	cpu_ent* cpu = get_cpu_struct();
-	//: Snapshot currentCore BEFORE releasing irqs_lock.  A
+	// Issue fix: Snapshot currentCore BEFORE releasing irqs_lock.  A
 	// concurrent hot-unplug can change the CPU-to-core mapping in the window
 	// between Unlock() and a second GetCore() call, producing a stale Package()
 	// or Node() pointer.  This mirrors the identical fix applied to

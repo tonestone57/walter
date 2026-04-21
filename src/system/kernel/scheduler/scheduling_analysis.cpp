@@ -621,7 +621,7 @@ private:
 					return;
 
 				strlcpy(waitObject->name, name, sizeof(waitObject->name));
-			/32: add missing break to prevent fall-through into
+// Issue 32 fix: add missing break to prevent fall-through into
 			// THREAD_BLOCK_TYPE_OTHER_OBJECT and default cases.
 			break;
 			}
@@ -919,7 +919,7 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 	if ((addr_t)buffer & 0x7) {
 		addr_t diff = (addr_t)buffer & 0x7;
-		//: diff is in [1,7], so (8 - diff) is in [1,7].  On a
+		// Issue fix: diff is in [1,7], so (8 - diff) is in [1,7].  On a
 		// 32-bit target size_t is 32 bits; the subtraction can only underflow
 		// if the caller passed size == 0, which is caught by the
 		// "size <= (size_t)(8 - diff)" guard immediately below.  The cast to

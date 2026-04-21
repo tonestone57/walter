@@ -351,13 +351,7 @@ scheduler_dump_thread_data(Thread* thread)
 }
 
 
-bool
-enqueue_safe(Thread* thread)
-{
-	// Use the same safety logic as ChooseNextThread retry loop
-	enqueue(thread, false, NULL);
-	return thread->scheduler_data->IsEnqueued();
-}
+
 
 
 static void
@@ -437,6 +431,15 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 			}
 		}
 	}
+}
+
+
+bool
+enqueue_safe(Thread* thread)
+{
+	// Use the same safety logic as ChooseNextThread retry loop
+	enqueue(thread, false, NULL);
+	return thread->scheduler_data->IsEnqueued();
 }
 
 
@@ -1219,10 +1222,11 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 				if (currentPackageSize >= clusterSize) {
 					if (packageCount + 1 < cpuCount) {
-						packageCount++;
+						// Issue 22 fix: increment packageCount BEFORE writing to
+						// sPackageToNode[packageCount].
 						currentPackageSize = 0;
 						clusterIndex++;
-
+						packageCount++;
 						sPackageToNode[packageCount] = currentNodeID;
 					} else {
 						// Issue 22: When the package limit is reached, assign

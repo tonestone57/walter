@@ -144,7 +144,7 @@ search_global_random(Action action)
 	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
-	/23: zero only the words needed for gPackageCount instead of
+// Issue 23 fix: zero only the words needed for gPackageCount instead of
 	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
 	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
 	int32 wordsNeeded = min_c((gPackageCount + 63) / 64,
@@ -211,7 +211,7 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	const int32 cpuCount = smp_get_num_cpus();
 	PackageEntry* lastPackage = NULL;
 
-	//: lastPackage only deduplicates *consecutive* visits.  Two
+	// Issue fix: lastPackage only deduplicates *consecutive* visits.  Two
 	// CPU IDs in non-contiguous positions can belong to the same package and
 	// cause it to be checked twice.  Use a small visited bitmask keyed on the
 	// package's global index (capped at 64 entries on the hot path).  For
