@@ -495,8 +495,15 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	if (bestCandidate != NULL)
 		return bestCandidate;
 
-	// Strict priority: only look at the highest priority queue that has threads.
-	for (int i = kBitmapSize - 1; i >= 0; i--) {
+	// search up to kDeadlineLookaheadLevels non-empty priority
+	// levels (highest first) so a lower-priority thread with an earlier virtual
+	// deadline can preempt when the top level has no advantage.  The bound
+	// keeps worst-case complexity O(kDeadlineLookaheadLevels * kSearchDepth).
+	const int kDeadlineLookaheadLevels = 3;
+	int levelsSearched = 0;
+	Element* globalBest = NULL;
+
+	for (int i = kBitmapSize - 1; i >= 0 && levelsSearched < kDeadlineLookaheadLevels; i--) {
 		uint32 val = fBitmap[i];
 		if (val != 0) {
 			if (i == kBitmapSize - 1)
@@ -505,36 +512,38 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 			if (val == 0)
 				continue;
 
-			int bit = fls(val) - 1;
-			unsigned int priority = i * 32 + bit;
-			Element* current = fHeads[priority];
+			while (val != 0 && levelsSearched < kDeadlineLookaheadLevels) {
+				int bit = fls(val) - 1;
+				val &= ~(1UL << bit);
+				unsigned int priority = i * 32 + bit;
+				Element* current = fHeads[priority];
+				if (current == NULL)
+					continue;
 
-			// We found the highest priority. Now find the best candidate
-			// strictly within this priority level.
-			//
-			// Adaptive/Dynamic Search Depth:
-			// Scan up to 32 items to find the best candidate (lowest virtual runtime).
-			// This mimics "queue" behavior for short lists and "tree-like"
-			// fairness for deep lists without the overhead of an actual tree.
-			const int kSearchDepth = 32;
-
-			Element* best = current;
-			current = sGetLink(current)->fNext;
-
-			for (int j = 1; j < kSearchDepth && current != NULL; j++) {
-				if (sCompare(current, best))
-					best = current;
-
+				// We found a non-empty priority level. Now find the best candidate
+				// strictly within this priority level.
+				const int kSearchDepth = 32;
+				Element* best = current;
 				current = sGetLink(current)->fNext;
+
+				for (int j = 1; j < kSearchDepth && current != NULL; j++) {
+					if (sCompare(current, best))
+						best = current;
+					current = sGetLink(current)->fNext;
+				}
+
+				if (globalBest == NULL || sCompare(best, globalBest))
+					globalBest = best;
+
+				levelsSearched++;
 			}
-			// CAS instead of unconditional set — a concurrent
-			// PushFront/PushBack may have installed a fresher best between
-			// our scan start and now; preserve their value if so.
-			atomic_pointer_test_and_set((void**)&fBest, best, (Element*)NULL);
-			return best;
 		}
 	}
-	return NULL;
+
+	if (globalBest != NULL)
+		atomic_pointer_test_and_set((void**)&fBest, globalBest, (Element*)NULL);
+
+	return globalBest;
 }
 
 

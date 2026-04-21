@@ -317,14 +317,24 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 			cpuLocker.Unlock();
 			bool wasRunQueueEmpty;
 			bool requestPreemption;
-			//: Enqueue can fail if the target core has CPUCount==0
-			// (hot-unplug race).  If it fails the thread is neither running
-			// nor queued — it would be silently lost.  Re-enqueue via the
-			// global enqueue path which handles core selection retry.
 			if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption)) {
-				//: Re-enqueue via global path if core was disabled.
-				enqueue(sharedThread->GetThread(), false, NULL);
+			// Issue 23 fix: Enqueue can fail when the target core has
+			// CPUCount==0 (hot-unplug race). At this point sharedThread has
+			// already been removed from the victim's run queue by StealThread.
+			// If the second enqueue also fails the thread would be lost.
+			// Log and attempt a best-effort re-enqueue via the global path;
+			// if that too fails we have a permanent thread leak which is
+			// preferable to silently hiding it.
+			if (!enqueue_safe(sharedThread->GetThread())) {
+				dprintf("scheduler: WARNING: stolen thread %" B_PRId32
+					" lost during hot-unplug — forcing to current CPU\n",
+					sharedThread->GetThread()->id);
+				// Last resort: pin to current CPU's core.
+				sharedThread->MigrateTo(fCore);
+				bool dummy1, dummy2;
+				sharedThread->Enqueue(dummy1, dummy2);
 			}
+		}
 		}
 		return oldThread;
 	}
@@ -347,7 +357,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		bool requestPreemption;
 		//: Re-enqueue via global path if core was disabled.
 		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption))
-			enqueue(sharedThread->GetThread(), false, NULL);
+			enqueue_safe(sharedThread->GetThread());
 	}
 
 	if (!cpuLocker.IsLocked())
@@ -486,12 +496,15 @@ CPUEntry::_TryStealWork()
 	// Why: Stealing here is fast (local RAM). You want to exhaust reasonable options here
 	// before going across the expensive interconnect.
 
+	// Issue 6/15 fix: declare 'stolen' BEFORE the 'goto phase3' to avoid
+	// jumping over a variable initialisation, which is ill-formed in C++
+	// (UB even for trivial types when an initialiser is present).
+	ThreadData* stolen = NULL;
+
+	{
 	SchedulerNode* node = package->Node();
-	// package->Node() can be NULL during topology teardown.
 	if (node == NULL)
 		goto phase3;
-
-	ThreadData* stolen = NULL;
 
 	search_local_node(node, [this, package, &stolen](PackageEntry* entry) {
 		if (stolen != NULL)
@@ -533,9 +546,10 @@ CPUEntry::_TryStealWork()
 
 	if (stolen != NULL)
 		return stolen;
+	}
 
 phase3:
-	stolen = NULL;
+	stolen = NULL; // reset for phase 3 (may be non-null if fell through with result)
 	// Phase 3: The Global Hail Mary (Random)
 	// Target: Any core in the system (4096 cores).
 	// Method: Logarithmic Formula
@@ -856,7 +870,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
-	//: Strictly reorder updates to fIdleCPUCount and fCPUCount.
+	// Issue 31: Strictly reorder updates to fIdleCPUCount and fCPUCount.
 	// By decrementing fIdleCPUCount BEFORE fCPUCount, we ensure that during the
 	// transient window where only one has been updated, fIdleCPUCount / fCPUCount
 	// always produces a ratio <= 1.0. If we did the reverse, removing an idle
@@ -1033,31 +1047,30 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
-			// Read fLoad BEFORE the CAS (or re-read on retry). Concurrent
-			// AddLoad() calls that detect the epoch change AFTER the CAS will
-			// do atomic_add(&fLoad, load) directly. By reading it before we
-			// commit the reset, we ensure that the delta is computed against
-			// a baseline that does not yet include those new-epoch additions,
-			// preventing us from "double-subtracting" them.
-
-			// Use atomic_add rather than atomic_set.  Between the CAS above
-			// (which resets the upper 32 bits of fCombinedLoad to 0 and bumps
-			// the epoch) and here, concurrent AddLoad() calls that detect the
-			// epoch change do atomic_add(&fLoad, load) directly.  An atomic_set
-			// here would silently overwrite those additions, dropping load
-			// contributions for threads that woke up in this window.
-			//
-			// Instead, compute the delta from the last snapshotted value and
-			// add it atomically.
-			//: delta can be negative if concurrent RemoveLoad calls
-			// raced between the CAS and here.  Clamp to prevent fLoad from
-			// going negative and corrupting all downstream load calculations.
+			// Issue 37 fix: re-read fLoad immediately after winning the CAS.
+			// The first-attempt prevLoad snapshot was taken before the CAS
+			// loop; concurrent AddLoad/RemoveLoad calls in that window can
+			// change fLoad so that (currentLoad - prevLoad) is computed
+			// against a stale baseline, producing a wrong delta.  Re-reading
+			// inside the CAS critical section gives the freshest baseline.
+			prevLoad = atomic_get(&fLoad);
 			int32 delta = currentLoad - prevLoad;
 			if (delta != 0) {
 				int32 result = atomic_add(&fLoad, delta) + delta;
+				// Issue 20 fix: use a CAS-based saturation instead of a
+				// blind atomic_add(-result).  The blind add races with
+				// concurrent RemoveLoad calls and can drive fLoad even more
+				// negative, making the "fix" worse than the bug.
 				if (result < 0) {
-					// Saturate at zero; a small over-correction is acceptable.
-					atomic_add(&fLoad, -result);
+					int32 cur = result;
+					while (cur < 0) {
+						int32 was = atomic_test_and_set(&fLoad, 0, cur);
+						if (was == cur)
+							break;
+						cur = was;
+						if (cur >= 0)
+							break;
+					}
 				}
 			}
 			break;
@@ -1241,8 +1254,16 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
 				native_cpu_mask_t rotated = (neighbors >> shift)
 					| (neighbors << (kMaxCoresPerPackage - shift));
 
-				if (rotated != 0)
-					return fCores[(scheduler_ctz(rotated) + shift) % kMaxCoresPerPackage];
+				if (rotated != 0) {
+					// Un-rotate: a bit at rotated position p came from original
+					// position (p + shift) % kMaxCoresPerPackage.
+					int32 origIdx = (scheduler_ctz(rotated) + shift) % kMaxCoresPerPackage;
+					if (origIdx >= 0 && origIdx < kMaxCoresPerPackage
+							&& fCores[origIdx] != NULL)
+						return fCores[origIdx];
+					// Fallback if index maps to a NULL slot (sparse package).
+					return fCores[scheduler_ctz(neighbors)];
+				}
 			}
 			return fCores[scheduler_ctz(neighbors)];
 		}
@@ -1417,7 +1438,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 	// Linear Scan (Robust Path for small clusters or fallback)
 	int32 count = scheduler_popcount(enabledMask);
-	//: When count==1 (or enabledMask is sparse relative to
+	// Issue 19: When count==1 (or enabledMask is sparse relative to
 	// kMaxCoresPerPackage) the random startBit can exceed all set bits,
 	// making upperMask == 0 and the entire scan fall into lowerMask — the
 	// randomisation becomes a no-op.  Guard: if upperMask is empty, set

@@ -72,6 +72,7 @@ choose_core(const ThreadData* threadData)
 	// If the core we previously ran on is idle and in the same package,
 	// use it immediately to preserve cache warmth and skip expensive search.
 	// cpu->Core() can return NULL during hot-unplug; guard it.
+	// Issue 32 fix: cpu->Core() can return NULL during hot-unplug; guard it.
 	if (previousCore != NULL && previousCore->GetScore() == 0) {
 		CoreEntry* currentCore = cpu->Core();
 		if (currentCore != NULL
@@ -210,8 +211,9 @@ choose_core(const ThreadData* threadData)
 					int32 index = startIndex + i;
 					if (index >= gPackageCount)
 						index -= gPackageCount;
-					CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
-						core, bestScore, preferredType);
+					if (CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
+						core, bestScore, preferredType))
+					break;
 				}
 			}
 
@@ -263,8 +265,9 @@ choose_core(const ThreadData* threadData)
 					int32 index = startIndex2 + i;
 					if (index >= gPackageCount)
 						index -= gPackageCount;
-					CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
-						core, stdBestScore, CORE_TYPE_STANDARD);
+					if (CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
+						core, stdBestScore, CORE_TYPE_STANDARD))
+					break;
 				}
 			}
 
@@ -283,7 +286,7 @@ choose_core(const ThreadData* threadData)
 	// By checking skipIdleScan we ensure that a valid colored core selection
 	// is not overwritten.
 	int32 homePackageID = threadData->HomePackage();
-	if (!skipIdleScan && homePackageID >= 0 && homePackageID < gPackageCount) {
+	if (!skipIdleScan && core == NULL && homePackageID >= 0 && homePackageID < gPackageCount) {
 		PackageEntry* homePackage = &gPackageEntries[homePackageID];
 
 		CoreType preferredType = preferMax ? gMaxCoreType :

@@ -111,7 +111,7 @@ choose_small_task_core(CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	/33 fix: cpu->Core() can return NULL during hot-unplug.
+	// Issue 33 fix: cpu->Core() can return NULL during hot-unplug.
 	// Guard ALL dereferences of cpu->Core()->Package()->Node() up front
 	// since both the heterogeneous and homogeneous paths use this chain.
 	CoreEntry* cpuCore = cpu->Core();
@@ -456,7 +456,7 @@ choose_core(const ThreadData* threadData)
 			}
 		}
 
-		 fix (power_saving): same as low_latency — use GetLoad().
+		// Issue 5 fix (power_saving): same as low_latency — use GetLoad().
 		if (preferMin && core != NULL && core->GetLoad() > kHighLoad)
 			core = NULL;
 

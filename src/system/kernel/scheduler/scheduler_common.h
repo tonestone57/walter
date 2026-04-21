@@ -173,6 +173,7 @@ extern bool gHasStandardCores;
 
 void init_debug_commands();
 void scheduler_update_interaction_state();
+bool enqueue_safe(struct Thread* thread);
 
 
 class Scheduler {

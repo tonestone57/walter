@@ -370,7 +370,20 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	ASSERT(timeUsed >= 0);
 	fTimeUsed += timeUsed;
 
-	bigtime_t timeLeft = ComputeQuantum() - fTimeUsed;
+	bigtime_t quantum = ComputeQuantum();
+
+	// if the quantum shrank (e.g. core load increased since the
+	// last scheduling decision) fTimeUsed may already exceed the new quantum.
+	// Without this guard 'timeLeft' goes negative, bypasses the skipTime
+	// check below, and the thread runs a full extra quantum before the
+	// negative value eventually wraps the interactivity score.
+	if (fTimeUsed >= quantum) {
+		fTimeUsed = 0;
+		_UpdateDeadline();
+		return true;
+	}
+
+	bigtime_t timeLeft = quantum - fTimeUsed;
 	timeLeft = max_c(bigtime_t(0), timeLeft);
 
 	// too little time left, it's better make the next quantum a bit longer
@@ -441,13 +454,14 @@ ThreadData::GoesAway()
 
 	fLastInterruptTime = 0;
 
-	//: Cache system_time() once; calling it twice gives slightly
+	// Cache system_time() once; calling it twice gives slightly
 	// different timestamps under heavy interrupt load, skewing sleep-time
-	// accounting.  fWentSleepActive uses core active time, not wall time,
-	// so no second call is needed for it.
+	// accounting.
 	bigtime_t now = system_time();
 	fWentSleep = now;
-	fWentSleepActive = fCore->GetActiveTime();
+	// fCore can be transiently NULL during a hot-unplug race
+	// where UnassignCore() races with GoesAway(). Guard before dereferencing.
+	fWentSleepActive = (fCore != NULL) ? fCore->GetActiveTime() : 0;
 
 	if (gTrackCoreLoad)
 		fLoadMeasurementEpoch = fCore->RemoveLoad(fNeededLoad, false);
@@ -584,13 +598,24 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 	}
 
 	if (!pinned) {
+		// guard fCore NULL before constructing the RAII lockers.
+		// MigrateTo(NULL) can set fCore=NULL when all masked CPUs are disabled.
+		// Both CoreCPULocker and CoreRunQueueLocker dereference their argument
+		// in the constructor; a NULL fCore here causes a null-dereference panic
+		// before we even reach the existing null check below.
+		if (fCore == NULL)
+			return false;
+
 		CoreCPULocker cpuLocker(fCore);
 		CoreRunQueueLocker locker(fCore);
 
-		// _ChooseCore can return NULL (all masked CPUs disabled);
-		// MigrateTo(NULL) sets fCore = NULL.  Guard before any deref.
-		if (fCore == NULL)
+		// Re-check under the lock — fCore may have been set to NULL between
+		// the guard above and lock acquisition.
+		if (fCore == NULL) {
+			cpuLocker.Unlock();
+			locker.Unlock();
 			return false;
+		}
 
 		// move the fStolen decrement AFTER the CPUCount guard so
 		// that a return-false path never leaves TotalThreadCount decremented

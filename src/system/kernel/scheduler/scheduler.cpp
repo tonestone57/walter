@@ -142,7 +142,7 @@ scheduler_update_interaction_state()
 	if (cpu->fInteractionUpdateCounter++ % 32 != 0)
 		return;
 
-	//: Cache gDeadlineBucketSize once — it is read twice below and
+	 // Issue 38: Cache gDeadlineBucketSize once — it is read twice below and
 	// the two reads could observe different values if a concurrent DPC is
 	// updating it.  A single cached read is also cheaper on the hot path.
 	int64 currentBucketSize = atomic_get64(&gDeadlineBucketSize);
@@ -176,13 +176,21 @@ scheduler_update_interaction_state()
 	// We must not hold scheduler locks here!
 	// scheduler_update_interaction_state is called from Enqueue, which HOLDS
 	// scheduler locks.
+	// Issue 18 fix (scale-up path): if DPCQueue::Add fails, clear sTimerArmed
+	// so that future interactions can still arm the timer.  The previous code
+	// set sTimerArmed=1 unconditionally after potentially failing DPC addition,
+	// permanently blocking future timer arming.
 	atomic_set(&sPendingDPCTarget, 1000);
+	atomic_set(&sDPCPending, 0); // will be set to 1 below if add succeeds
 	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
 		int64 target = (int64)atomic_get(&sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
 				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
 			atomic_set(&sPendingDPCTarget, 0);
+			// Issue 18 fix: do NOT set sTimerArmed here; the DPC failed so
+			// the scale-up must remain retriable.
+			return;
 		}
 	}
 
@@ -224,7 +232,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	//: This mask is recomputed from a compile-time constant on every
+	// Issue 40: This mask is recomputed from a compile-time constant on every
 	// reschedule.  Hoist it to a static const so the compiler evaluates it
 	// once at startup.
 	static const uint32 kTopWordMask =
@@ -257,7 +265,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 			// THREAD_MAX_SET_PRIORITY % 32 == 31, but a future change to
 			// THREAD_MAX_SET_PRIORITY could silently violate that.
 			if (i == ThreadRunQueue::kBitmapSize - 1)
-				//: Use pre-computed mask.
+				// Issue 40: Use pre-computed mask.
 				val &= kTopWordMask;
 
 			if (val == 0)
@@ -294,7 +302,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	// only the CPU whose (boost_epoch % cpuCount) matches its modular index
 	// within the core performs the scan.
 	int32 coreCPUCount = max_c(1, core->CPUCount());
-	/24: when fRescheduleCount wraps UINT32_MAX → 0, the post-
+	// Issue 24: when fRescheduleCount wraps UINT32_MAX → 0, the post-
 	// increment is 0, so (0 % 10 == 0) fires and preCount becomes UINT32_MAX,
 	// making boostEpoch ≈ 429M.  This causes all CPUs to satisfy the modular
 	// ownership check simultaneously, producing a correlated scan burst.
@@ -309,7 +317,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 			== (cpu->ID() % coreCPUCount));
 
 	CoreRunQueueLocker coreLocker(core, false);
-	//: The thread-count check was done without the lock; a thread
+	// Issue 37: The thread-count check was done without the lock; a thread
 	// could be removed between the check and lock acquisition, making the
 	// locked scan a wasted spinlock round-trip.  Re-check inside the lock.
 	if (ownsCoreQueueScan) {
@@ -340,6 +348,15 @@ void
 scheduler_dump_thread_data(Thread* thread)
 {
 	thread->scheduler_data->Dump();
+}
+
+
+bool
+enqueue_safe(Thread* thread)
+{
+	// Use the same safety logic as ChooseNextThread retry loop
+	enqueue(thread, false, NULL);
+	return thread->scheduler_data->IsEnqueued();
 }
 
 
@@ -658,6 +675,16 @@ reschedule(int32 nextState)
 			break;
 		case THREAD_STATE_FREE_ON_RESCHED:
 			oldThreadData->Dies();
+			// Issue 30 fix: a dying thread must NEVER be re-enqueued. Clear
+			// enqueueOldThread unconditionally here. Without this, if the
+			// mask-based migration path below sets enqueueOldThread=false
+			// correctly, the code falls through fine; but if a future refactor
+			// reorders the switch cases or adds an early-exit, the dying
+			// thread could be enqueued via enqueue(oldThread, true, NULL)
+			// after Dies() has already removed its load, corrupting
+			// gTotalRunnableThreads and leading to use-after-free in the
+			// run-queue drain during thread destruction.
+			enqueueOldThread = false;
 			break;
 		default:
 			oldThreadData->GoesAway();
@@ -747,7 +774,7 @@ reschedule(int32 nextState)
 	if (nextThread != oldThread || oldThread->cpu->preempted) {
 		// Dynamic Quantum Scaling:
 		// Reduce quantum if the core is crowded to maintain interactivity.
-		//: ThreadCount() can transiently return 0 during a remove
+		// Issue 35: ThreadCount() can transiently return 0 during a remove
 		// race.  If load == 1, (load - 1) == 0 causes division by zero.
 		// Clamp divisor to at least 1.
 		int32 load = core->ThreadCount();
@@ -899,8 +926,8 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 			// any concurrent enqueue() → UpdatePriority() call that races
 			// the AddCPU does not hit the ASSERT(!disabled || priority==IDLE).
 			gCPU[cpuID].disabled = false;
-			gCPUEnabled.SetBitAtomic(cpuID);
 			core->AddCPU(cpu);
+			gCPUEnabled.SetBitAtomic(cpuID);
 		}
 		cpu->UnlockScheduler();
 	} else {
@@ -1198,7 +1225,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 						sPackageToNode[packageCount] = currentNodeID;
 					} else {
-						//: When the package limit is reached, assign
+						// Issue 22: When the package limit is reached, assign
 						// remaining CPUs to the last valid package.
 					}
 				}

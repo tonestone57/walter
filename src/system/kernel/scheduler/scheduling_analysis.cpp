@@ -280,7 +280,7 @@ public:
 #endif
 		while (true) {
 #if B_HAIKU_64_BIT
-			/38 fix: fNextAllocation is a uint8* and fRemainingBytes
+			// Issue 28/38 fix: fNextAllocation is a uint8* and fRemainingBytes
 			// is size_t. Casting them to int64* and calling atomic_get64 /
 			// atomic_add64 violates strict aliasing on 64-bit targets (accessing
 			// a pointer-sized object through an int64 lvalue is UB). Use
@@ -299,7 +299,7 @@ public:
 				return (void*)old;
 			}
 #else
-			/38 fix (32-bit): same aliasing fix for 32-bit targets.
+			// Issue 28/38 fix (32-bit): same aliasing fix for 32-bit targets.
 			uint32 remaining = (uint32)atomic_get((int32*)&fRemainingBytes);
 			if ((uint32)size > remaining)
 				return NULL;

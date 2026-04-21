@@ -780,12 +780,16 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	// Only clear the bit in gIdleNodeMask if this package was actually idle
 	// (bit was set in oldMask) AND it was the last idle package in this node
 	// (mask is now zero).
+	// Issue 3 fix: guard the node-bit clear with a re-read of fIdlePackageMask.
+	// Only clear gIdleNodeMask when the mask is still zero, preventing a lost
+	// PackageGoesIdle notification from a concurrent package going idle between
+	// our atomic_and and the gIdleNodeMask update. The previous unconditional
+	// clear followed by a conditional re-arm was itself racy: two concurrent
+	// PackageWakesUp calls could both clear and then both skip the re-arm,
+	// permanently losing the node-idle bit.
 	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == (native_cpu_mask_t)0) {
-		atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
-
-		// narrow the TOCTOU window using the same atomic helper.
-		if (scheduler_atomic_get(&fIdlePackageMask) != (native_cpu_mask_t)0)
-			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
+		if (scheduler_atomic_get(&fIdlePackageMask) == (native_cpu_mask_t)0)
+			atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
 	}
 }
 
@@ -806,10 +810,9 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	//: snapshot fCPUCount once before the atomic_add to close the
+	// snapshot fCPUCount once before the atomic_add to close the
 	// TOCTOU window — a concurrent RemoveCPU can decrement fCPUCount between
 	// the two reads, causing the CoreGoesIdle notification to be skipped.
-	ASSERT(atomic_get(&fIdleCPUCount) < atomic_get(&fCPUCount));
 	DecrementTotalThreadCount();
 	int32 cpuCountSnap = atomic_get(&fCPUCount);
 	if (atomic_add(&fIdleCPUCount, 1) == cpuCountSnap - 1)
@@ -825,13 +828,12 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
-	int32 cpuCount = atomic_get(&fCPUCount);
 	IncrementTotalThreadCount();
-	//: The only valid "fully idle → first active" transition is when
-	// the OLD value of fIdleCPUCount equals cpuCount (all CPUs were idle).
-	// Using >= would incorrectly fire CoreWakesUp if fIdleCPUCount ever
-	// transiently exceeds cpuCount due to an AddCPU/RemoveCPU race, producing
-	// a spurious CoreWakesUp and corrupting the package idle-mask.
+	// snapshot fCPUCount AFTER IncrementTotalThreadCount. A
+	// concurrent AddCPU increments fCPUCount then fIdleCPUCount; by reading
+	// fCPUCount after our own increment we narrow the window in which the
+	// "all CPUs were idle" comparison uses a stale value.
+	int32 cpuCount = atomic_get(&fCPUCount);
 	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }

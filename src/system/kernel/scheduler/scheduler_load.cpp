@@ -42,9 +42,19 @@ _LoadavgUpdate(void *data, int iteration)
 
 	SpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {
-		sAverageRunnable.ldavg[i]
-			= (sCExp[i] * (uint64)sAverageRunnable.ldavg[i]
-				+ (uint64)threadCount * (kFScale - sCExp[i]) * kFScale) >> kFShift;
+		// Issue 11 fix: use unsigned 128-bit intermediate to prevent overflow.
+		// With kFScale=2048 and threadCount up to INT32_MAX (~2^31):
+		//   (uint64)threadCount * (kFScale - sCExp[i]) * kFScale
+		//   <= 2^31 * 2048 * 2048 = 2^53  (fits in uint64)
+		// But sCExp[i] * ldavg[i] where ldavg can accumulate to ~threadCount*kFScale:
+		//   2^11 * (2^31 * 2^11) = 2^53  (fits in uint64 too, with margin)
+		// The overflow is marginal today but use __uint128_t to be safe and
+		// future-proof against larger kFScale or thread count expansions.
+		unsigned __int128 acc =
+			(unsigned __int128)sCExp[i] * sAverageRunnable.ldavg[i]
+			+ (unsigned __int128)(uint64)threadCount
+				* (kFScale - sCExp[i]) * kFScale;
+		sAverageRunnable.ldavg[i] = (uint64)(acc >> kFShift);
 	}
 }
 
