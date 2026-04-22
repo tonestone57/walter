@@ -98,7 +98,8 @@ CPUEntry::CPUEntry()
 	fMeasureTime(0),
 	fUpdateLoadEvent(false),
 	fRandomState(1),
-	fRescheduleCount(0)
+	fRescheduleCount(0),
+	fCoreLocalIndex(0)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -334,7 +335,9 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 			cpuLocker.Unlock();
 			bool wasRunQueueEmpty;
 			bool requestPreemption;
-			if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption)) {
+			bool updateInteraction;
+			if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
+					updateInteraction)) {
 			// Issue 6/23 fix: cache the Thread* once; sharedThread->GetThread()
 			// is called multiple times below and the pointer must be consistent.
 			Thread* const stolenThread = sharedThread->GetThread();
@@ -345,12 +348,16 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 				sharedThread->MigrateTo(fCore);
 				bool dummy1, dummy2;
 				// Issue 6 fix: check return value; log if the last-resort also fails.
-				if (!sharedThread->Enqueue(dummy1, dummy2)) {
+				if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction)) {
 					dprintf("scheduler: CRITICAL: thread %" B_PRId32
 						" could not be re-enqueued after forced migration;"
 						" scheduler state is inconsistent\n", stolenThread->id);
 				}
 			}
+
+			// Issue 20 fix: call while NOT holding run-queue locks.
+			if (updateInteraction)
+				scheduler_update_interaction_state();
 		}
 		}
 		return oldThread;
@@ -372,9 +379,13 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		cpuLocker.Unlock();
 		bool wasRunQueueEmpty;
 		bool requestPreemption;
+		bool updateInteraction;
 		// Re-enqueue via global path if core was disabled.
-		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption))
+		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
+				updateInteraction)) {
 			enqueue_safe(sharedThread->GetThread());
+		} else if (updateInteraction)
+			scheduler_update_interaction_state();
 	}
 
 	if (!cpuLocker.IsLocked())
@@ -566,7 +577,11 @@ CPUEntry::_TryStealWork()
 	}
 
 phase3:
-	stolen = NULL; // reset for phase 3 (may be non-null if fell through with result)
+	// Issue 19 fix: removed the unconditional stolen = NULL reset.
+	// If Phase 2 fell through with a valid stolen thread, the reset would
+	// lose it.  If Phase 2 jumped here (node == NULL) stolen is already NULL.
+	// Phase 3 correctly checks (stolen != NULL) in its first lambda probe.
+
 	// Phase 3: The Global Hail Mary (Random)
 	// Target: Any core in the system (4096 cores).
 	// Method: Logarithmic Formula
@@ -744,6 +759,8 @@ CoreEntry::CoreEntry()
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
+	// Issue 13 fix: initialise the counter used to assign fCoreLocalIndex.
+	fNextCoreLocalIndex = 0;
 }
 
 
@@ -822,10 +839,12 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 	ThreadData* thread = fRunQueue.PeekOption([&](ThreadData* thread) {
 		if (thread->IsIdle())
 			return false;
+
+		// Issue 26 fix: reorder to check the cheap affinity fast-path
+		// first for non-idle threads, reducing atomic operations on the
+		// steal hot-path.
 		const CPUSet& mask = thread->GetCPUMask();
-		if (mask.GetBit(thiefCPU))
-			return true;
-		if (mask.IsEmpty())
+		if (mask.IsEmpty() || mask.GetBit(thiefCPU))
 			return true;
 
 		return false;
@@ -853,6 +872,12 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	// will call _ChooseCPU(), which iterates fCPUSet.  If fCPUSet is still
 	// empty at that point it returns NULL and forces an unnecessary retry.
 	fCPUSet.SetBitAtomic(cpu->ID());
+
+	// Issue 13 fix: assign a sequential local index to this CPU within the
+	// core.  Unlike cpu->ID() % CPUCount(), this is guaranteed unique even
+	// when global CPU IDs are non-sequential within the core (common on SMT
+	// systems where sibling IDs are interleaved, e.g. 0,2,4,6).
+	cpu->fCoreLocalIndex = atomic_add(&fNextCoreLocalIndex, 1);
 
 	bool didAddIdle = false;
 	if (firstCPU) {
@@ -1078,25 +1103,23 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			// change fLoad so that (currentLoad - prevLoad) is computed
 			// against a stale baseline, producing a wrong delta.  Re-reading
 			// inside the CAS critical section gives the freshest baseline.
-			prevLoad = atomic_get(&fLoad);
-			int32 delta = currentLoad - prevLoad;
-			if (delta != 0) {
-				int32 result = atomic_add(&fLoad, delta) + delta;
-				// Issue 20 fix: use a CAS-based saturation instead of a
-				// blind atomic_add(-result).  The blind add races with
-				// concurrent RemoveLoad calls and can drive fLoad even more
-				// negative, making the "fix" worse than the bug.
-				if (result < 0) {
-					int32 cur = result;
-					while (cur < 0) {
-						int32 was = atomic_test_and_set(&fLoad, 0, cur);
-						if (was == cur)
-							break;
-						cur = was;
-						if (cur >= 0)
-							break;
-					}
-				}
+			// Issue 25 fix: use a CAS retry loop to apply the delta.
+			// Re-reading fLoad and then using atomic_add (Issue 37) still had
+			// a race where fLoad could change between the re-read and the add.
+			// This CAS loop ensures the update is applied against the most
+			// current value of fLoad.
+			int32 currentFLoad = atomic_get(&fLoad);
+			while (true) {
+				int32 delta = currentLoad - prevLoad;
+				int32 newFLoad = currentFLoad + delta;
+				if (newFLoad < 0)
+					newFLoad = 0;
+
+				int32 actual = atomic_test_and_set(&fLoad, newFLoad,
+					currentFLoad);
+				if (actual == currentFLoad)
+					break;
+				currentFLoad = actual;
 			}
 			break;
 		}

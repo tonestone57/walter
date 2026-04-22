@@ -61,6 +61,7 @@ public:
 	inline	bool		IsEmpty() const;
 
 	inline uint32		Bits(uint32 index) const { return fBitmap[index];}
+	inline void			SetWord(uint32 index, uint32 value) { fBitmap[index] = value; }
 private:
 	static	const int	kArrayBits = 32;
 	static	const int	kArraySize = ROUNDUP(SMP_MAX_CPUS, kArrayBits) / kArrayBits;
@@ -160,6 +161,18 @@ CPUSet::ClearBitAtomic(int32 cpu)
 
 
 inline bool
+CPUSet::Matches(const CPUSet& mask) const
+{
+	for (int i = 0; i < kArraySize; i++) {
+		if ((fBitmap[i] & mask.fBitmap[i]) != 0)
+			return true;
+	}
+
+	return false;
+}
+
+
+inline bool
 CPUSet::GetBit(int32 cpu) const
 {
 	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
@@ -174,18 +187,6 @@ CPUSet::And(const CPUSet& mask) const
 	for (int i = 0; i < kArraySize; i++)
 		andSet.fBitmap[i] = fBitmap[i] & mask.fBitmap[i];
 	return andSet;
-}
-
-
-inline bool
-CPUSet::Matches(const CPUSet& mask) const
-{
-	for (int i = 0; i < kArraySize; i++) {
-		if ((fBitmap[i] & mask.fBitmap[i]) != 0)
-			return true;
-	}
-
-	return false;
 }
 
 

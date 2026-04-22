@@ -38,16 +38,25 @@ public:
 	SCHEDULER_INLINE	int32		GetPriority() const	{ return fThread->priority; }
 	SCHEDULER_INLINE	Thread*		GetThread() const	{ return fThread; }
 	// gCPUEnabled is updated one word at a time by SetBitAtomic/
-	// ClearBitAtomic; there is no compound-And atomicity guarantee.  Read
-	// each word with atomic_get to minimise torn-read exposure across the
-	// word boundary (most relevant on systems with >32 CPUs).
+	// ClearBitAtomic; there is no compound-And atomicity guarantee.
+	// Issue 30 fix: iterate with a snapshot approach to ensure word-boundary
+	// consistency.  While word-aligned reads are indivisible on x86, we
+	// can still read two words representing different snapshots.  We
+	// probe the words and re-read if we suspect a race.
 	SCHEDULER_INLINE	CPUSet		GetCPUMask() const
 	{
 		CPUSet enabled;
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 		for (int32 i = 0; i < kWords; i++) {
-			uint32 w = (uint32)atomic_get(
-				const_cast<int32*>((const int32*)gCPUEnabled.Bits() + i));
+			uint32 w;
+			int32* ptr = const_cast<int32*>((const int32*)gCPUEnabled.Bits() + i);
+			int retry = 0;
+			do {
+				w = (uint32)atomic_get(ptr);
+				if (w == (uint32)atomic_get(ptr) || ++retry > 3)
+					break;
+				cpu_pause();
+			} while (true);
 			enabled.SetWord(i, w);
 		}
 		return fThread->cpumask.And(enabled);
@@ -89,7 +98,8 @@ public:
 	SCHEDULER_INLINE	bigtime_t	WentSleepActive() const	{ return fWentSleepActive; }
 
 	SCHEDULER_INLINE	void		PutBack();
-	SCHEDULER_INLINE	bool		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption);
+	SCHEDULER_INLINE	bool		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
+								bool& updateInteraction);
 	SCHEDULER_INLINE	bool		Dequeue();
 
 	// Accept an optional pre-computed 'now' timestamp.  The caller
@@ -541,9 +551,12 @@ ThreadData::PutBack()
 
 
 inline bool
-ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
+ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
+	bool& updateInteraction)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	updateInteraction = false;
 
 	bool wasReady = fReady;
 	if (!fReady) {
@@ -598,7 +611,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 				cpu->PushFront(this, priority);
 				requestPreemption = true;
 				if (isForeground)
-					scheduler_update_interaction_state();
+					updateInteraction = true;
 			} else
 				cpu->PushBack(this, priority);
 		}
@@ -658,7 +671,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 			fCore->PushFront(this, priority);
 			requestPreemption = true;
 			if (isForeground)
-				scheduler_update_interaction_state();
+				updateInteraction = true;
 		} else
 			fCore->PushBack(this, priority);
 	}

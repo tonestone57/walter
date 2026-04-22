@@ -313,9 +313,15 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 		preCount = 0;  // just wrapped; treat as epoch 0, harmless miss
 
 	uint32 boostEpoch = preCount / 10;
+	// Issue 13 fix: cpu->ID() % coreCPUCount is not unique when CPU IDs are
+	// non-sequential within a core (e.g. SMT with global IDs 0,2,4,6 gives
+	// 0%4=0, 2%4=2, 4%4=0, 6%4=2 — only 2 distinct values for 4 CPUs, so
+	// two CPUs claim ownership each epoch and contend on CoreRunQueueLocker).
+	// fCoreLocalIndex is assigned sequentially (0,1,2,...) as CPUs are added
+	// to the core via AddCPU, guaranteeing distinct values in [0,CPUCount).
 	bool ownsCoreQueueScan =
 		((int32)(boostEpoch % (uint32)coreCPUCount)
-			== (cpu->ID() % coreCPUCount));
+			== (int32)(cpu->fCoreLocalIndex % (uint32)coreCPUCount));
 
 	CoreRunQueueLocker coreLocker(core, false);
 	// Issue 37: The thread-count check was done without the lock; a thread
@@ -389,6 +395,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	bool wasRunQueueEmpty = false;
 	bool requestPreemption = false;
 	bool rescheduleNeeded = false;
+	bool updateInteraction = false;
 
 	// bound the retry loop so that a total hot-unplug (all cores
 	// disabled simultaneously during shutdown) cannot spin forever.
@@ -400,7 +407,8 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32 " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
 			thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
 
-		if (!threadData->Enqueue(wasRunQueueEmpty, requestPreemption)) {
+		if (!threadData->Enqueue(wasRunQueueEmpty, requestPreemption,
+				updateInteraction)) {
 			targetCore = NULL;
 			targetCPU = NULL;
 			if (++enqueueAttempts >= kMaxRetries) {
@@ -411,6 +419,12 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		} else
 			break;
 	} while (true);
+
+	// Issue 20 fix: call scheduler_update_interaction_state() while NOT
+	// holding any run-queue locks.  The Enqueue call above now returns
+	// updateInteraction=true if it identified a foreground thread.
+	if (updateInteraction)
+		scheduler_update_interaction_state();
 
 	// notify listeners
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
@@ -440,6 +454,8 @@ enqueue_safe(Thread* thread)
 {
 	// Use the same safety logic as ChooseNextThread retry loop
 	enqueue(thread, false, NULL);
+	// Issue 23 fix: verify enqueued status; enqueue() handles the retry
+	// loop and should eventually succeed unless the system is shutting down.
 	return thread->scheduler_data->IsEnqueued();
 }
 
@@ -562,11 +578,17 @@ static void
 thread_resumes(Thread* thread)
 {
 	cpu_ent* cpu = thread->cpu;
-
-	release_spinlock(&cpu->previous_thread->scheduler_lock);
+	Thread* previousThread = cpu->previous_thread;
 
 	// continue CPU time based user timers
+	// Issue 3 fix: continue timers while still holding the previous thread's
+	// scheduler lock.  The undertaker thread (on another CPU) waits for
+	// this lock before freeing the thread; if we release it before calling
+	// continue_cpu_timers (which dereferences cpu->previous_thread) we
+	// risk a use-after-free.
 	continue_cpu_timers(thread, cpu);
+
+	release_spinlock(&previousThread->scheduler_lock);
 
 	// notify the user debugger code
 	if ((thread->flags & THREAD_FLAGS_DEBUGGER_INSTALLED) != 0)
@@ -1244,14 +1266,13 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 				coresInCurrentNode++;
 			}
 
-			// Use >= cpuCount — logically equivalent to the old
-			// "packageCount + 1 > cpuCount" but states the invariant directly:
-			// stop before packageCount reaches cpuCount so that the final
-			// packageCount++ keeps the index within the sPackageToNode allocation
-			// (cpuCount + 1 elements, valid indices 0 .. cpuCount inclusive).
+			// Issue 8 fix: increment packageCount to include the last package
+			// of the current L3 domain BEFORE breaking due to the CPU limit.
+			// The previous logic broke before the increment, causing the
+			// final package to be omitted from the global gPackageCount.
+			packageCount++;
 			if (packageCount >= cpuCount)
 				break;
-			packageCount++; // Finish last package in L3
 		}
 		l3Start = l3End;
 	}

@@ -349,10 +349,18 @@ ThreadData::ComputeQuantum() const
 	threadCount = core->ThreadCount();
 	cpuCount = core->CPUCount();
 
-	// Use an atomic counter instead of repeated trylocks on the hot path
-	// to check for ready display-priority threads.
-	if (core->DisplayThreadCount() > 0)
-		displayReady = true;
+	// Issue 12 fix: replace TryLockRunQueue with a lockless bitmap check.
+	// Under heavy load TryLock frequently fails, leaving displayReady=false
+	// even when a display thread is waiting.  The result was that the running
+	// thread received up to kMaxQuantum (3200us) instead of kDisplayQuantum,
+	// adding up to one full extra quantum of latency to display threads.
+	//
+	// HasHighPriorityThread() reads the run-queue bitmap with atomic_get
+	// (same pattern as PeekMaximum) without acquiring the lock.  A stale
+	// read means at most one quantum is computed without the optimisation;
+	// the next reschedule corrects it.  This strictly improves worst-case
+	// display-thread latency over the TryLock approach.
+	displayReady = core->HasHighPriorityThread();
 
 	contention = threadCount > cpuCount;
 	overload = threadCount > (cpuCount << 1);

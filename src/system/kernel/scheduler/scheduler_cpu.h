@@ -103,6 +103,11 @@ public:
 	inline				bool			TryLockRunQueue();
 	inline				void			UnlockRunQueue();
 
+	// Index of this CPU within its core, assigned sequentially in AddCPU.
+	// Used by UpdatePriorityBoostScalable for round-robin epoch ownership.
+	// Public because UpdatePriorityBoostScalable is a file-scope function.
+						int32			fCoreLocalIndex;
+
 						void			PushFront(ThreadData* thread,
 											int32 priority);
 						void			PushBack(ThreadData* thread,
@@ -243,6 +248,10 @@ public:
 	inline				void			LockRunQueue();
 	inline				bool			TryLockRunQueue();
 	inline				void			UnlockRunQueue();
+	// Issue 12 fix: lockless check for display-priority threads in the
+	// run queue.  Used by ComputeQuantum to avoid TryLockRunQueue on the
+	// scheduling hot path.  Atomic bitmap reads match PeekMaximum's pattern.
+	inline				bool			HasHighPriorityThread() const;
 
 						ThreadData*		StealThread(int32& stolenPriority,
 											int32 thiefCPU);
@@ -933,6 +942,36 @@ inline void
 PackageEntry::ReadLockCore()
 {
 	acquire_read_spinlock(&fCoreLock);
+}
+
+
+inline bool
+CoreEntry::HasHighPriorityThread() const
+{
+	// Issue 12 fix: lockless approximation replacing TryLockRunQueue in
+	// ComputeQuantum.  TryLock failure under contention (common on loaded
+	// systems) left displayReady=false even when a display thread was ready,
+	// handing the running thread up to kMaxQuantum instead of kDisplayQuantum.
+	//
+	// We use the same atomic_get pattern as PeekMaximum: bitmap writes are
+	// done under the run-queue lock but we read without it.  On x86 aligned
+	// 32-bit loads are indivisible; on other supported architectures the
+	// worst case is a stale read that causes one extra-long quantum before
+	// the next reschedule corrects it — acceptable for this hint.
+	const uint32* bitmap = fRunQueue.GetBitmap();
+	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
+		uint32 val = (uint32)atomic_get(
+			const_cast<int32*>(reinterpret_cast<const int32*>(bitmap + i)));
+		if (i == ThreadRunQueue::kBitmapSize - 1)
+			val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
+		if (val != 0) {
+			// Found the highest occupied priority level; check threshold.
+			int highestBit = fls(val) - 1;
+			int highestPriority = i * 32 + highestBit;
+			return highestPriority >= B_DISPLAY_PRIORITY;
+		}
+	}
+	return false;
 }
 
 

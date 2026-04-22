@@ -367,12 +367,23 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 			atomic_pointer_set((void**)&fBest, element);
 		else if (priority == bestPriority && sCompare(element, best))
 			atomic_pointer_set((void**)&fBest, element);
-		// priority < bestPriority OR (same priority, element not
-		// better) — the cached fBest is still the correct best candidate.
-		// Clearing it here forced an unnecessary O(N) rescan on every
-		// lower-priority enqueue; preserve the cache instead.
 	} else {
-		atomic_pointer_set((void**)&fBest, element);
+		// Issue 21 fix: if the cache was NULL, it could be because it was
+		// cleared due to a removal, but other higher-priority threads might
+		// still be in the queue.  Only set fBest to the new element if
+		// the queue was previously empty at all priority levels (i.e.
+		// this was the first insertion). Otherwise leave it NULL to
+		// force PeekBest to perform a proper rescan.
+		bool isEmpty = true;
+		for (int i = 0; i < kBitmapSize; i++) {
+			if (fBitmap[i] != 0) {
+				isEmpty = false;
+				break;
+			}
+		}
+
+		if (isEmpty || PeekMaximum() == element)
+			atomic_pointer_set((void**)&fBest, element);
 	}
 }
 
@@ -411,10 +422,18 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 			atomic_pointer_set((void**)&fBest, element);
 		else if (priority == bestPriority && sCompare(element, best))
 			atomic_pointer_set((void**)&fBest, element);
-		// Same reasoning as PushFront — preserve valid fBest cache
-		// when the new element cannot displace the current best candidate.
 	} else {
-		atomic_pointer_set((void**)&fBest, element);
+		// Issue 21 fix: same logic as PushFront.
+		bool isEmpty = true;
+		for (int i = 0; i < kBitmapSize; i++) {
+			if (fBitmap[i] != 0) {
+				isEmpty = false;
+				break;
+			}
+		}
+
+		if (isEmpty || PeekMaximum() == element)
+			atomic_pointer_set((void**)&fBest, element);
 	}
 }
 

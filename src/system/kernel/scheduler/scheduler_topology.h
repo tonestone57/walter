@@ -68,16 +68,15 @@ search_local_node(SchedulerNode* node, Action action)
 			int32 index = nodeBaseIndex + offset;
 			if (index >= gPackageCount)
 				continue;
-			// update fLastLocalPackageIndex only when action()
-			// returns true (successful match). The previous code updated on
-			// every iteration, so after a full scan fLastLocalPackageIndex
-			// held the last-checked (not last-matched) index. Next call then
-			// started from last-checked+1, creating systematic gaps that
-			// leave some packages chronically under-probed.
-			if (action(&gPackageEntries[index])) {
-				cpu->fLastLocalPackageIndex = offset;
+			// update fLastLocalPackageIndex on every iteration.
+			// Issue 28 fix: The previous code only updated on success,
+			// which meant that if every call missed (all packages busy),
+			// fLastLocalPackageIndex never advanced and the same starting
+			// package was retried every time, breaking the round-robin
+			// guarantee under sustained load.
+			cpu->fLastLocalPackageIndex = offset;
+			if (action(&gPackageEntries[index]))
 				break;
-			}
 		}
 		return;
 	}
