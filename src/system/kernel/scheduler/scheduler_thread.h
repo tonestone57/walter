@@ -268,19 +268,23 @@ ThreadData::_UpdatePriorityBoost()
 
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// Take the snapshot before Remove.
-			CoreEntry* core = fCore;
+			// Issue 18 fix: core->Remove(this) clears fCore via the
+			// SetDequeued() path. We must preserve the 'core' pointer to
+			// either re-enqueue on it or handle a concurrent migration.
+			CoreEntry* const core = fCore;
 			if (core != NULL) {
 				core->Remove(this);
-				CoreEntry* current = fCore;
-				if (current != NULL && current != core) {
-					// acquiring the new core's lock here is safe because
-					// lock ordering requires Core-before-CPU and we hold no CPU
-					// lock; the old core's lock is held by the caller.
-					CoreRunQueueLocker newLock(current);
-					current->PushBack(this, newPriority);
-				} else
+
+				// If fCore was updated during Remove() (e.g. migration),
+				// enqueue on the new core; otherwise, restore the original
+				// core and enqueue there.
+				if (fCore != NULL && fCore != core) {
+					CoreRunQueueLocker newLock(fCore);
+					fCore->PushBack(this, newPriority);
+				} else {
+					fCore = core;
 					core->PushBack(this, newPriority);
+				}
 
 				// set fEnqueued immediately after PushBack while still
 				// inside the critical section; the thread is in the queue now.
