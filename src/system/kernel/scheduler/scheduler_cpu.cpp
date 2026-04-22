@@ -183,8 +183,11 @@ CPUEntry::PushFront(ThreadData* thread, int32 priority)
 	fRunQueue.PushFront(thread, priority);
 	atomic_add(&fThreadCount, 1);
 
-	if (!thread->IsIdle())
+	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
+		if (priority >= B_DISPLAY_PRIORITY)
+			Core()->IncrementDisplayThreadCount();
+	}
 }
 
 
@@ -195,8 +198,11 @@ CPUEntry::PushBack(ThreadData* thread, int32 priority)
 	fRunQueue.PushBack(thread, priority);
 	atomic_add(&fThreadCount, 1);
 
-	if (!thread->IsIdle())
+	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
+		if (priority >= B_DISPLAY_PRIORITY)
+			Core()->IncrementDisplayThreadCount();
+	}
 }
 
 
@@ -205,12 +211,16 @@ CPUEntry::Remove(ThreadData* thread)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	ASSERT(thread->IsEnqueued());
+	int32 priority = thread->GetEffectivePriority();
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
 	atomic_add(&fThreadCount, -1);
 
-	if (!thread->IsIdle())
+	if (!thread->IsIdle()) {
 		Core()->DecrementTotalThreadCount();
+		if (priority >= B_DISPLAY_PRIORITY)
+			Core()->DecrementDisplayThreadCount();
+	}
 }
 
 
@@ -718,6 +728,7 @@ CoreEntry::CoreEntry()
 	fIdleCPUCount(0),
 	fThreadCount(0),
 	fTotalThreadCount(0),
+	fDisplayThreadCount(0),
 	fActiveTime(0),
 	fLoad(0),
 	fCombinedLoad(0),
@@ -752,6 +763,8 @@ CoreEntry::PushFront(ThreadData* thread, int32 priority)
 	fRunQueue.PushFront(thread, priority);
 	atomic_add(&fThreadCount, 1);
 	IncrementTotalThreadCount();
+	if (priority >= B_DISPLAY_PRIORITY)
+		IncrementDisplayThreadCount();
 }
 
 
@@ -763,6 +776,8 @@ CoreEntry::PushBack(ThreadData* thread, int32 priority)
 	fRunQueue.PushBack(thread, priority);
 	atomic_add(&fThreadCount, 1);
 	IncrementTotalThreadCount();
+	if (priority >= B_DISPLAY_PRIORITY)
+		IncrementDisplayThreadCount();
 }
 
 
@@ -774,10 +789,13 @@ CoreEntry::Remove(ThreadData* thread)
 	ASSERT(!thread->IsIdle());
 
 	ASSERT(thread->IsEnqueued());
+	int32 priority = thread->GetEffectivePriority();
 	thread->SetDequeued();
 
 	atomic_add(&fThreadCount, -1);
 	DecrementTotalThreadCount();
+	if (priority >= B_DISPLAY_PRIORITY)
+		DecrementDisplayThreadCount();
 	fRunQueue.Remove(thread);
 }
 

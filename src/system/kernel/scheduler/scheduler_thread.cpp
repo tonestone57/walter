@@ -345,18 +345,14 @@ ThreadData::ComputeQuantum() const
 	bool contention;
 	bool overload;
 	bool displayReady = false;
-	// only PeekHead() needs the run-queue lock; using TryLock
-	// avoids blocking the caller when the queue is contended.  A missed
-	// displayReady read causes at most one over-long quantum.
 	load = core->GetLoad();
 	threadCount = core->ThreadCount();
 	cpuCount = core->CPUCount();
-	if (core->TryLockRunQueue()) {
-		ThreadData* next = core->PeekHead();
-		if (next != NULL && next->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
-			displayReady = true;
-		core->UnlockRunQueue();
-	}
+
+	// Use an atomic counter instead of repeated trylocks on the hot path
+	// to check for ready display-priority threads.
+	if (core->DisplayThreadCount() > 0)
+		displayReady = true;
 
 	contention = threadCount > cpuCount;
 	overload = threadCount > (cpuCount << 1);

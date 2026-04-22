@@ -230,6 +230,13 @@ public:
 											{ atomic_add(&fTotalThreadCount, 1); }
 	inline				void			DecrementTotalThreadCount()
 											{ atomic_add(&fTotalThreadCount, -1); }
+
+	inline				int32			DisplayThreadCount() const
+											{ return atomic_get(const_cast<int32*>(&fDisplayThreadCount)); }
+	inline				void			IncrementDisplayThreadCount()
+											{ atomic_add(&fDisplayThreadCount, 1); }
+	inline				void			DecrementDisplayThreadCount()
+											{ atomic_add(&fDisplayThreadCount, -1); }
 	inline				int32			CoreRunQueueThreadCount() const
 											{ return atomic_get(const_cast<int32*>(&fThreadCount)); }
 
@@ -313,6 +320,7 @@ private:
 						spinlock		fQueueLock;
 						int32			fThreadCount;
 						int32			fTotalThreadCount;
+						int32			fDisplayThreadCount;
 						ThreadRunQueue	fRunQueue;
 
 						int32			fLoad;
