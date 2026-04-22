@@ -211,7 +211,14 @@ CPUEntry::Remove(ThreadData* thread)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	ASSERT(thread->IsEnqueued());
-	int32 priority = thread->GetEffectivePriority();
+
+	// (defensive): capture the priority the thread was enqueued with to
+	// ensure symmetric counter updates. If the thread's priority was
+	// changed while enqueued, GetEffectivePriority() would return the
+	// new value, causing fDisplayThreadCount to desynchronize if the
+	// change crossed the B_DISPLAY_PRIORITY threshold.
+	int32 priority = thread->GetRunQueueLink()->fPriority;
+
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
 	atomic_add(&fThreadCount, -1);
@@ -787,9 +794,12 @@ CoreEntry::Remove(ThreadData* thread)
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(!thread->IsIdle());
-
 	ASSERT(thread->IsEnqueued());
-	int32 priority = thread->GetEffectivePriority();
+
+	// (defensive): capture the enqueued priority to ensure consistent
+	// fDisplayThreadCount accounting.
+	int32 priority = thread->GetRunQueueLink()->fPriority;
+
 	thread->SetDequeued();
 
 	atomic_add(&fThreadCount, -1);
@@ -932,7 +942,11 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// eliminates the latent hazard.
 	}
 
-	// Use INT32_MIN instead of the implicit magic -1.
+	// Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
+	// less than every valid scheduler priority (minimum B_IDLE_PRIORITY == 0),
+	// so the CPU is guaranteed to bubble to the heap root.  The explicit
+	// constant makes the intent clear and prevents silent misbehaviour if the
+	// priority range ever grows to include negative values.
 	fCPUHeap.ModifyKey(cpu, INT32_MIN);
 	// Issue 2 fix: fCPUHeap is accessed exclusively under fCPULock, which the
 	// caller holds via CoreCPUHeapLocker for the duration of RemoveCPU.  No

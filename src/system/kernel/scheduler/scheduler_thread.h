@@ -268,9 +268,9 @@ ThreadData::_UpdatePriorityBoost()
 
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// Issue 18 fix: core->Remove(this) clears fCore via the
-			// SetDequeued() path. We must preserve the 'core' pointer to
-			// either re-enqueue on it or handle a concurrent migration.
+			// (defensive): core->Remove(this) transitions the thread to the
+			// dequeued state. We preserve the 'core' pointer to either
+			// re-enqueue on it or handle a concurrent migration.
 			CoreEntry* const core = fCore;
 			if (core != NULL) {
 				core->Remove(this);
