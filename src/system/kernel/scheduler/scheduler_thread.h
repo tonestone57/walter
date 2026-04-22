@@ -459,12 +459,15 @@ ThreadData::GoesAway()
 	// accounting.
 	bigtime_t now = system_time();
 	fWentSleep = now;
-	// fCore can be transiently NULL during a hot-unplug race
-	// where UnassignCore() races with GoesAway(). Guard before dereferencing.
-	fWentSleepActive = (fCore != NULL) ? fCore->GetActiveTime() : 0;
+	// Issue 5 fix: cache fCore once.  UnassignCore() can set fCore to NULL
+	// concurrently; the original code checked for NULL to guard GetActiveTime()
+	// but then called RemoveLoad() without re-checking, resulting in a NULL
+	// dereference if fCore changed between the two statements.
+	CoreEntry* const coreSnapshot = fCore;
+	fWentSleepActive = (coreSnapshot != NULL) ? coreSnapshot->GetActiveTime() : 0;
 
-	if (gTrackCoreLoad)
-		fLoadMeasurementEpoch = fCore->RemoveLoad(fNeededLoad, false);
+	if (gTrackCoreLoad && coreSnapshot != NULL)
+		fLoadMeasurementEpoch = coreSnapshot->RemoveLoad(fNeededLoad, false);
 	fReady = false;
 }
 
@@ -609,13 +612,12 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption)
 		CoreCPULocker cpuLocker(fCore);
 		CoreRunQueueLocker locker(fCore);
 
-		// Re-check under the lock — fCore may have been set to NULL between
-		// the guard above and lock acquisition.
-		if (fCore == NULL) {
-			cpuLocker.Unlock();
-			locker.Unlock();
+		// Issue 1 fix: re-check under the lock — fCore may have been set to
+		// NULL between the guard above and lock acquisition.  The explicit
+		// Unlock() calls were redundant: AutoLocker's destructor checks
+		// fLocked and will not double-unlock.  RAII handles cleanup correctly.
+		if (fCore == NULL)
 			return false;
-		}
 
 		// move the fStolen decrement AFTER the CPUCount guard so
 		// that a return-false path never leaves TotalThreadCount decremented

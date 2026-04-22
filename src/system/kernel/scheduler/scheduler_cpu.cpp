@@ -318,21 +318,21 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 			bool wasRunQueueEmpty;
 			bool requestPreemption;
 			if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption)) {
-			// Issue 23 fix: Enqueue can fail when the target core has
-			// CPUCount==0 (hot-unplug race). At this point sharedThread has
-			// already been removed from the victim's run queue by StealThread.
-			// If the second enqueue also fails the thread would be lost.
-			// Log and attempt a best-effort re-enqueue via the global path;
-			// if that too fails we have a permanent thread leak which is
-			// preferable to silently hiding it.
-			if (!enqueue_safe(sharedThread->GetThread())) {
+			// Issue 6/23 fix: cache the Thread* once; sharedThread->GetThread()
+			// is called multiple times below and the pointer must be consistent.
+			Thread* const stolenThread = sharedThread->GetThread();
+			if (!enqueue_safe(stolenThread)) {
 				dprintf("scheduler: WARNING: stolen thread %" B_PRId32
 					" lost during hot-unplug — forcing to current CPU\n",
-					sharedThread->GetThread()->id);
-				// Last resort: pin to current CPU's core.
+					stolenThread->id);
 				sharedThread->MigrateTo(fCore);
 				bool dummy1, dummy2;
-				sharedThread->Enqueue(dummy1, dummy2);
+				// Issue 6 fix: check return value; log if the last-resort also fails.
+				if (!sharedThread->Enqueue(dummy1, dummy2)) {
+					dprintf("scheduler: CRITICAL: thread %" B_PRId32
+						" could not be re-enqueued after forced migration;"
+						" scheduler state is inconsistent\n", stolenThread->id);
+				}
 			}
 		}
 		}
@@ -914,22 +914,15 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// eliminates the latent hazard.
 	}
 
-	// Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
-	// less than every valid scheduler priority (minimum B_IDLE_PRIORITY == 0),
-	// so the CPU is guaranteed to bubble to the heap root.  The explicit
-	// constant makes the intent clear and prevents silent misbehaviour if the
-	// priority range ever grows to include negative values.
+	// Use INT32_MIN instead of the implicit magic -1.
 	fCPUHeap.ModifyKey(cpu, INT32_MIN);
-	// two concurrent RemoveCPU calls both set INT32_MIN, making
-	// the heap root ambiguous.  Spin waiting for our entry to reach the root;
-	// in practice this resolves within one iteration since the concurrent
-	// caller will RemoveRoot immediately after the ASSERT.
-	{
-		int32 spins = 0;
-		while (fCPUHeap.PeekRoot() != cpu && ++spins < 1000)
-			;  // spin; lock is held, so other CPUs cannot interleave
-		ASSERT(fCPUHeap.PeekRoot() == cpu);
-	}
+	// Issue 2 fix: fCPUHeap is accessed exclusively under fCPULock, which the
+	// caller holds via CoreCPUHeapLocker for the duration of RemoveCPU.  No
+	// other CPU can concurrently modify the heap, so the root is guaranteed to
+	// be 'cpu' immediately after ModifyKey(cpu, INT32_MIN).  The previous spin
+	// loop was dead code and its 1000-iteration cap masked any real invariant
+	// violations by silently proceeding with a wrong root.
+	ASSERT(fCPUHeap.PeekRoot() == cpu);
 	fCPUHeap.RemoveRoot();
 
 	ASSERT(cpu->GetLoad() >= 0 && cpu->GetLoad() <= kMaxLoad);
@@ -1463,6 +1456,10 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 	for (int pass = 0; pass < 2; pass++) {
 		native_cpu_mask_t currentMask = (pass == 0) ? upperMask : lowerMask;
+		// Issue 29 fix: skip the second pass when lowerMask is empty to avoid
+		// an unnecessary loop iteration with zero work.
+		if (currentMask == 0)
+			break;
 
 		while (currentMask != 0) {
 			int32 i = scheduler_ctz(currentMask);

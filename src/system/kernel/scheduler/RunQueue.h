@@ -450,13 +450,15 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
 
-	// Unconditionally clear the fBest cache on every removal.
-	// While clearing only when (fBest == element) is a valid optimization
-	// in a strictly locked single-queue context, it is vulnerable to ABA
-	// issues if the same pointer is reallocated and re-added before a
-	// concurrent PeekBest reader completes.  Clearing it unconditionally
-	// ensures the cache never points to an element no longer in the queue.
-	atomic_pointer_set((void**)&fBest, (Element*)NULL);
+	// Clear fBest only when it points to the removed element.  Remove is
+	// always called under the run queue spinlock; PeekBest is also always
+	// called under that same lock.  Within a single lock scope, freed memory
+	// cannot be reallocated and re-enqueued (allocation requires additional
+	// locks), so ABA is impossible.  Unconditional clearing forced a full
+	// O(kDeadlineLookaheadLevels * kSearchDepth) rescan on every subsequent
+	// PeekBest call regardless of whether the removed element was fBest.
+	if ((Element*)atomic_pointer_get((void**)&fBest) == element)
+		atomic_pointer_set((void**)&fBest, (Element*)NULL);
 }
 
 

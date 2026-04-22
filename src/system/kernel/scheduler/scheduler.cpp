@@ -180,16 +180,17 @@ scheduler_update_interaction_state()
 	// so that future interactions can still arm the timer.  The previous code
 	// set sTimerArmed=1 unconditionally after potentially failing DPC addition,
 	// permanently blocking future timer arming.
+	// Issue 16 fix: removed the atomic_set(&sDPCPending, 0) that preceded the
+	// atomic_get_and_set below.  Clearing sDPCPending unconditionally before
+	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
+	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
 	atomic_set(&sPendingDPCTarget, 1000);
-	atomic_set(&sDPCPending, 0); // will be set to 1 below if add succeeds
 	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
 		int64 target = (int64)atomic_get(&sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)->Add(
 				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
 			atomic_set(&sPendingDPCTarget, 0);
-			// Issue 18 fix: do NOT set sTimerArmed here; the DPC failed so
-			// the scale-up must remain retriable.
 			return;
 		}
 	}
@@ -705,6 +706,8 @@ reschedule(int32 nextState)
 			putOldThreadAtBack = true;
 			oldThreadData->UnassignCore(true);
 			core->DecrementTotalThreadCount();
+			// Issue 24 fix: track activity for the last quantum before disable.
+			cpu->UpdateActiveTime(oldThreadData);
 
 			CPURunQueueLocker cpuLocker(cpu);
 			nextThreadData = cpu->PeekIdleThread();

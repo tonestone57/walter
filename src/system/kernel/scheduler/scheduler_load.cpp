@@ -42,19 +42,19 @@ _LoadavgUpdate(void *data, int iteration)
 
 	SpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {
-		// Issue 11 fix: use unsigned 128-bit intermediate to prevent overflow.
-		// With kFScale=2048 and threadCount up to INT32_MAX (~2^31):
-		//   (uint64)threadCount * (kFScale - sCExp[i]) * kFScale
-		//   <= 2^31 * 2048 * 2048 = 2^53  (fits in uint64)
-		// But sCExp[i] * ldavg[i] where ldavg can accumulate to ~threadCount*kFScale:
-		//   2^11 * (2^31 * 2^11) = 2^53  (fits in uint64 too, with margin)
-		// The overflow is marginal today but use __uint128_t to be safe and
-		// future-proof against larger kFScale or thread count expansions.
+		// Issue 10 fix: the 128-bit intermediate is correct, but the final
+		// uint64 truncation can overflow for pathological thread counts or
+		// if ldavg accumulated a very large value across prior iterations.
+		// Clamp the result to INT32_MAX (a sane upper bound: no system has
+		// 2^31 runnable threads).  The FreeBSD algorithm assumes the same
+		// practical bound.
 		unsigned __int128 acc =
 			(unsigned __int128)sCExp[i] * sAverageRunnable.ldavg[i]
 			+ (unsigned __int128)(uint64)threadCount
 				* (kFScale - sCExp[i]) * kFScale;
-		sAverageRunnable.ldavg[i] = (uint64)(acc >> kFShift);
+		uint64 result = (uint64)(acc >> kFShift);
+		const uint64 kMaxLdAvg = (uint64)INT32_MAX;
+		sAverageRunnable.ldavg[i] = (result < kMaxLdAvg) ? result : kMaxLdAvg;
 	}
 }
 

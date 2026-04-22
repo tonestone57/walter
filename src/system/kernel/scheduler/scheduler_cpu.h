@@ -810,12 +810,17 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 	if (gSingleCore)
 		return;
 
-	// snapshot fCPUCount once before the atomic_add to close the
-	// TOCTOU window — a concurrent RemoveCPU can decrement fCPUCount between
-	// the two reads, causing the CoreGoesIdle notification to be skipped.
 	DecrementTotalThreadCount();
-	int32 cpuCountSnap = atomic_get(&fCPUCount);
-	if (atomic_add(&fIdleCPUCount, 1) == cpuCountSnap - 1)
+	// Issue 17 fix: read fCPUCount AFTER incrementing fIdleCPUCount.
+	// AddCPU increments fIdleCPUCount then fCPUCount; reading fCPUCount
+	// before our increment (original code) allowed a concurrent AddCPU to
+	// increment fIdleCPUCount between our snapshot and our increment, causing
+	// the "old == cpuCountSnap - 1" check to fire on a non-fully-idle core.
+	// Reading after narrows the window: if AddCPU has completed fCPUCount++
+	// we see the updated count and the >= check correctly reflects real state.
+	int32 newIdleCount = atomic_add(&fIdleCPUCount, 1) + 1;
+	int32 cpuCount = atomic_get(&fCPUCount);
+	if (cpuCount > 0 && newIdleCount >= cpuCount)
 		fPackage->CoreGoesIdle(this);
 }
 
