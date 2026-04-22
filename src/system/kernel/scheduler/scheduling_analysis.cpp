@@ -254,8 +254,8 @@ public:
 		}
 
 		fHashTable = (HashObject**)((uint8*)fBuffer + fSize) - fHashTableSize;
-		fNextAllocation = (uint8*)fBuffer;
-		fRemainingBytes = (addr_t)fHashTable - (addr_t)fBuffer;
+		fNextAllocation = (uintptr_t)fBuffer;
+		fRemainingBytes = (uintptr_t)fHashTable - (uintptr_t)fBuffer;
 	}
 
 	const scheduling_analysis* Analysis() const
@@ -276,39 +276,34 @@ public:
 		// fHashTable.
 #if DEBUG
 		ASSERT(fHashTable == NULL
-			|| (uint8*)fHashTable - fNextAllocation == (ptrdiff_t)fRemainingBytes);
+			|| (uint8*)fHashTable - (uint8*)(uintptr_t)fNextAllocation
+				== (ptrdiff_t)fRemainingBytes);
 #endif
 		while (true) {
 #if B_HAIKU_64_BIT
-			// Issue 28/38 fix: fNextAllocation is a uint8* and fRemainingBytes
-			// is size_t. Casting them to int64* and calling atomic_get64 /
-			// atomic_add64 violates strict aliasing on 64-bit targets (accessing
-			// a pointer-sized object through an int64 lvalue is UB). Use
-			// uintptr_t as the intermediate type to match pointer width without
-			// aliasing violations.
-			uintptr_t remaining = (uintptr_t)atomic_get64(
-				(int64*)&fRemainingBytes);
-			if ((uintptr_t)size > remaining)
+			// Issue 28/38 fix: fNextAllocation and fRemainingBytes are defined
+			// as int64 to match the requirements of the atomic_64 API.
+			// Using correctly typed members instead of casting pointers from
+			// incompatible types (like uint8* or size_t) avoids strict-aliasing
+			// violations that can lead to miscompilation on modern GCC.
+			int64 remaining = atomic_get64(&fRemainingBytes);
+			if ((int64)size > remaining)
 				return NULL;
 
-			if ((uintptr_t)atomic_test_and_set64((int64*)&fRemainingBytes,
-					(int64)(remaining - (uintptr_t)size),
-					(int64)remaining) == remaining) {
-				uintptr_t old = (uintptr_t)atomic_add64(
-					(int64*)&fNextAllocation, (int64)size);
-				return (void*)old;
+			if (atomic_test_and_set64(&fRemainingBytes,
+					remaining - (int64)size, remaining) == remaining) {
+				int64 old = atomic_add64(&fNextAllocation, (int64)size);
+				return (void*)(uintptr_t)old;
 			}
 #else
-			// Issue 28/38 fix (32-bit): same aliasing fix for 32-bit targets.
-			uint32 remaining = (uint32)atomic_get((int32*)&fRemainingBytes);
-			if ((uint32)size > remaining)
+			// Issue 28/38 fix (32-bit): same fix using int32 members.
+			int32 remaining = atomic_get(&fRemainingBytes);
+			if ((int32)size > remaining)
 				return NULL;
 
-			if ((uint32)atomic_test_and_set((int32*)&fRemainingBytes,
-					(int32)(remaining - (uint32)size),
-					(int32)remaining) == remaining) {
-				uint32 old = (uint32)atomic_add(
-					(int32*)&fNextAllocation, (int32)size);
+			if (atomic_test_and_set(&fRemainingBytes,
+					remaining - (int32)size, remaining) == remaining) {
+				int32 old = atomic_add(&fNextAllocation, (int32)size);
 				return (void*)(uintptr_t)old;
 			}
 #endif
@@ -552,8 +547,8 @@ public:
 #if SCHEDULING_ANALYSIS_TRACING
 		// Development diagnostic: report buffer utilisation. Gated so it
 		// does not pollute the kernel log in production builds.
-		dprintf("scheduling analysis: free bytes: %lu/%lu\n",
-			fRemainingBytes, fSize);
+		dprintf("scheduling analysis: free bytes: %" B_PRIu64 "/%" B_PRIu64 "\n",
+			(uint64)fRemainingBytes, (uint64)fSize);
 #endif
 		return B_OK;
 	}
@@ -650,8 +645,14 @@ private:
 	size_t				fSize;
 	HashObject**		fHashTable;
 	uint32				fHashTableSize;
-	alignas(8) uint8*	fNextAllocation;
-	alignas(8) size_t	fRemainingBytes;
+
+#if B_HAIKU_64_BIT
+	alignas(8) int64	fNextAllocation;
+	alignas(8) int64	fRemainingBytes;
+#else
+	alignas(4) int32	fNextAllocation;
+	alignas(4) int32	fRemainingBytes;
+#endif
 };
 
 
