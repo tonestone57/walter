@@ -211,7 +211,7 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	const int32 cpuCount = smp_get_num_cpus();
 	PackageEntry* lastPackage = NULL;
 
-	// Issue fix: lastPackage only deduplicates *consecutive* visits.  Two
+	// lastPackage only deduplicates *consecutive* visits.  Two
 	// CPU IDs in non-contiguous positions can belong to the same package and
 	// cause it to be checked twice.  Use a small visited bitmask keyed on the
 	// package's global index (capped at 64 entries on the hot path).  For

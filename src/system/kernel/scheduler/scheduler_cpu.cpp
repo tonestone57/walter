@@ -355,7 +355,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		cpuLocker.Unlock();
 		bool wasRunQueueEmpty;
 		bool requestPreemption;
-		// Issue fix: Re-enqueue via global path if core was disabled.
+		// Re-enqueue via global path if core was disabled.
 		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption))
 			enqueue_safe(sharedThread->GetThread());
 	}
@@ -787,7 +787,7 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Issue fix: Explicitly exclude idle threads from steal candidates.
+	// Explicitly exclude idle threads from steal candidates.
 	// Idle threads must only live in CPU run queues; stealing one into a
 	// CoreEntry queue would violate the idle-thread invariant and trigger
 	// the ASSERT(!thread->IsIdle()) in CoreEntry::Remove.

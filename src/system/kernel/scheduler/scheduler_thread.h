@@ -268,7 +268,7 @@ ThreadData::_UpdatePriorityBoost()
 
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// Issue fix: Take the snapshot before Remove.
+			// Take the snapshot before Remove.
 			CoreEntry* core = fCore;
 			if (core != NULL) {
 				core->Remove(this);

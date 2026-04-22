@@ -782,7 +782,7 @@ rebalance(const ThreadData* threadData)
 	if (coreScore >= kMediumLoad)
 		return core;
 
-	// Issue fix: Package() and Node() can return NULL during topology
+	// Package() and Node() can return NULL during topology
 	// teardown or if this core was never fully initialised.  Guard all
 	// three pointer dereferences before accessing nodeID.
 	if (core->Package() == NULL || core->Package()->Node() == NULL)

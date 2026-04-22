@@ -286,7 +286,7 @@ choose_core(const ThreadData* threadData)
 	// By checking skipIdleScan we ensure that a valid colored core selection
 	// is not overwritten.
 	int32 homePackageID = threadData->HomePackage();
-	if (!skipIdleScan && core == NULL && homePackageID >= 0 && homePackageID < gPackageCount) {
+	if (!skipIdleScan && homePackageID >= 0 && homePackageID < gPackageCount) {
 		PackageEntry* homePackage = &gPackageEntries[homePackageID];
 
 		CoreType preferredType = preferMax ? gMaxCoreType :
@@ -314,7 +314,7 @@ choose_core(const ThreadData* threadData)
 
 	// wake new package/core — skipped when thread coloring or home-package
 	// search already found a suitable core.
-	while (!skipIdleScan && core == NULL && idleNodeMask != 0) {
+	while (!skipIdleScan && idleNodeMask != 0) {
 		int32 nodeIndex = __builtin_ctzll(idleNodeMask);
 		idleNodeMask &= ~(1ULL << nodeIndex);
 
@@ -636,7 +636,7 @@ rebalance_irqs(bool idle)
 		return;
 
 	cpu_ent* cpu = get_cpu_struct();
-	// Issue fix: Snapshot currentCore BEFORE releasing irqs_lock.  A
+	// Snapshot currentCore BEFORE releasing irqs_lock.  A
 	// concurrent hot-unplug can change the CPU-to-core mapping in the window
 	// between Unlock() and a second GetCore() call, producing a stale Package()
 	// or Node() pointer.  This mirrors the identical fix applied to
