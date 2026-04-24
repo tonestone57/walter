@@ -356,7 +356,7 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		sGetLink(fHeads[priority])->fPrevious = element;
 	else {
 		fTails[priority] = element;
-		fBitmap[priority / 32] |= (1UL << (priority % 32));
+		atomic_or((int32*)&fBitmap[priority / 32], (1UL << (priority % 32)));
 	}
 	fHeads[priority] = element;
 
@@ -376,7 +376,7 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		// force PeekBest to perform a proper rescan.
 		bool isEmpty = true;
 		for (int i = 0; i < kBitmapSize; i++) {
-			if (fBitmap[i] != 0) {
+			if (atomic_get((int32*)&fBitmap[i]) != 0) {
 				isEmpty = false;
 				break;
 			}
@@ -411,7 +411,7 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		sGetLink(fTails[priority])->fNext = element;
 	else {
 		fHeads[priority] = element;
-		fBitmap[priority / 32] |= (1UL << (priority % 32));
+		atomic_or((int32*)&fBitmap[priority / 32], (1UL << (priority % 32)));
 	}
 	fTails[priority] = element;
 
@@ -426,7 +426,7 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		// Issue 21 fix: same logic as PushFront.
 		bool isEmpty = true;
 		for (int i = 0; i < kBitmapSize; i++) {
-			if (fBitmap[i] != 0) {
+			if (atomic_get((int32*)&fBitmap[i]) != 0) {
 				isEmpty = false;
 				break;
 			}
@@ -463,7 +463,7 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
 
 	if (fHeads[priority] == NULL) {
-		fBitmap[priority / 32] &= ~(1UL << (priority % 32));
+		atomic_and((int32*)&fBitmap[priority / 32], ~(1UL << (priority % 32)));
 	}
 
 	elementLink->fPrevious = NULL;
@@ -624,7 +624,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 	const int kNumCPUs = smp_get_num_cpus();
 	const int kMaxSearchPerLevel = 16 + (kNumCPUs >> 3);
 
-	int totalBudget = kMaxSearchPerLevel * 2;
+	int totalBudget = kMaxSearchPerLevel * 8;
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = fBitmap[i];
@@ -645,12 +645,13 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			// at every level, causing the second priority band to receive only
 			// half as many probes as the first.  This under-served lower-
 			// priority stealable threads and made work-stealing incomplete.
-			int searchLimit = min_c(kMaxSearchPerLevel, totalBudget);
-			while (current != NULL && count++ < searchLimit) {
+			int searchLimit = kMaxSearchPerLevel;
+			while (current != NULL && count < searchLimit) {
 				if (predicate(current))
 					return current;
 
 				current = sGetLink(current)->fNext;
+				count++;
 				totalBudget--;
 			}
 

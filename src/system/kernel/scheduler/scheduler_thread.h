@@ -53,7 +53,7 @@ public:
 			int retry = 0;
 			do {
 				w = (uint32)atomic_get(ptr);
-				if (w == (uint32)atomic_get(ptr) || ++retry > 3)
+				if (w == (uint32)atomic_get(ptr) || ++retry >= 3)
 					break;
 				cpu_pause();
 			} while (true);

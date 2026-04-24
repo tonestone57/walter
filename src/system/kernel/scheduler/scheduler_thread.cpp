@@ -314,10 +314,11 @@ ThreadData::ComputeQuantum() const
 
 	// cache all Scheduler:: accessor results in a single dereference
 	// of sCurrentMode; avoids 4 additional pointer loads on this hot path.
-	const bigtime_t baseQ   = Scheduler::BaseQuantum();
-	const bigtime_t minQ    = Scheduler::MinimalQuantum();
-	const bigtime_t maxLat  = Scheduler::MaximumLatency();
-	const bigtime_t mult0   = Scheduler::QuantumMultiplier(0);
+	const scheduler_mode_operations* mode = Scheduler::CurrentMode();
+	const bigtime_t baseQ   = mode->base_quantum;
+	const bigtime_t minQ    = mode->minimal_quantum;
+	const bigtime_t maxLat  = mode->maximum_latency;
+	const bigtime_t mult0   = mode->quantum_multipliers[0];
 
 	const bigtime_t kMinGranularity = 1200;
 	const bigtime_t kHighLoadQuantum = max_c(baseQ, kMinGranularity);

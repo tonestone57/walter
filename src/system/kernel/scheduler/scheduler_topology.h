@@ -120,7 +120,7 @@ search_global_random(Action action)
 	if (gPackageCount <= 64) {
 		uint64 visitedBits = 0;
 		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-			int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
+			int32 i = (int32)(((uint64)cpu->GetRandom() * currentPackageCount) >> 32);
 
 			if ((visitedBits & (1ULL << i)) != 0)
 				continue;
@@ -146,12 +146,12 @@ search_global_random(Action action)
 // Issue 23 fix: zero only the words needed for gPackageCount instead of
 	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
 	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
-	int32 wordsNeeded = min_c((gPackageCount + 63) / 64,
+	int32 currentPackageCount = gPackageCount; int32 wordsNeeded = min_c((currentPackageCount + 63) / 64,
 		(int32)(kStackBitmaskSize / 64));
 	memset(visitedBits, 0, (size_t)wordsNeeded * sizeof(uint64));
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-		int32 i = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
+		int32 i = (int32)(((uint64)cpu->GetRandom() * currentPackageCount) >> 32);
 
 		// With kStackBitmaskSize == 4096 and gPackageCount <= 4096 every
 		// valid index i fits inside the bitmask.  The out-of-range branch

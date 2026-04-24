@@ -338,7 +338,7 @@ choose_core(const ThreadData* threadData)
 				idleMask &= ~((native_cpu_mask_t)1 << bitIdx);
 
 				CoreEntry* candidate = package->GetCore(bitIdx);
-				if (!useMask || candidate->CPUMask().Matches(mask)) {
+				if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
 					core = candidate;
 					break;
 				}
@@ -439,11 +439,9 @@ choose_core(const ThreadData* threadData)
 
 	// If the selected core is not much better than previousCore, prefer
 	// previousCore for cache locality.
-	// Re-evaluate cache expiry here; the value computed at function
-	// entry may be stale after hundreds of microseconds of search work.
-	const bool cacheExpiredTail = (previousCore != NULL)
-		? has_cache_expired(threadData) : true;
-	if (previousCore != NULL && !cacheExpiredTail) {
+	// We use the cached cacheExpired result instead of re-reading
+	// system_time() to ensure consistency and avoid unnecessary syscalls.
+	if (previousCore != NULL && !cacheExpired) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
 			if (core != previousCore) {
 				// enforce type preference in the soft-affinity check
@@ -569,12 +567,14 @@ rebalance(const ThreadData* threadData)
 			// Bonus for returning home: effectively 0 threshold or even negative?
 			// Let's just remove the friction (threshold).
 			threshold = 0;
+			goto type_affinity_guard;
 		} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
 			// Penalty for leaving home: double the threshold.
 			threshold *= 2;
 		}
 	}
 
+type_affinity_guard:
 	// Type-affinity guard: on heterogeneous systems, resist migrating a
 	// thread off its preferred core type. choose_core places high-priority
 	// threads on P-cores; without this guard rebalance undoes that on every

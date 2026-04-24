@@ -191,6 +191,7 @@ scheduler_update_interaction_state()
 				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
 			atomic_set(&sPendingDPCTarget, 0);
+			atomic_set(&sTimerArmed, 0);
 			return;
 		}
 	}
@@ -1236,7 +1237,8 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 				// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
 				// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
-				if (coresInCurrentNode >= kMaxCoresPerNode) {
+				// Pseudo-nodes are limited by the 64-bit gIdleNodeMask.
+				if (coresInCurrentNode >= kMaxCoresPerNode && nodeCount < 64) {
 					currentNodeID = nodeCount++;
 					coresInCurrentNode = 0;
 
@@ -1364,7 +1366,7 @@ init()
 	for (int32 i = 0; i < packageCount; i++) {
 		int32 nodeIndex = sPackageToNode[i];
 		if (nodeIndex >= nodeCount)
-			nodeIndex %= nodeCount; // Fallback for edge cases
+			nodeIndex = nodeCount - 1; // Fallback for edge cases
 
 		if (nodeIndex != currentNode) {
 			if (currentNode != -1) {
@@ -1827,6 +1829,11 @@ scheduler_on_team_foreground_changed(Team* team)
 	// enforced.
 
 	// Note: Caller must hold the team's thread list lock (team->fLock via TeamLocker).
+	// team->thread_list is protected by fLock, signal_lock and gThreadCreationLock.
+	// Since we already hold fLock (caller guarantee), and we are in a scheduler
+	// context where these threads might be enqueued/dequeued, we use gThreadCreationLock
+	// as an additional safety for the list structure itself during iteration.
+	SpinLocker listLocker(team->thread_list_lock);
 	// We iterate through all threads of the team and re-enqueue them if they are ready.
 
 	for (Thread* thread = team->thread_list.First(); thread != NULL;

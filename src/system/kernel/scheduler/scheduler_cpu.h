@@ -336,6 +336,8 @@ private:
 
 						uint32			fScoreFactor;
 
+						int32			fNextCoreLocalIndex;
+
 						friend class DebugDumper;
 } CACHE_LINE_ALIGN;
 
@@ -407,6 +409,8 @@ public:
 						void				RemoveIdleCore(CoreEntry* core);
 						void				RegisterCore(int32 index,
 												CoreEntry* core);
+
+	inline				int32				ID() const { return fPackageID; }
 
 	inline				int32				RegisteredCoreCount() const
 											{ return fRegisteredCoreCount; }
