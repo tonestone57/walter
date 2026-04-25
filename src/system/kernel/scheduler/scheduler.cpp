@@ -1091,7 +1091,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	// increment.  The extra element prevents a potential one-past-the-end
 	// write on systems where the topology detection produces packageCount ==
 	// cpuCount entries.
-	sPackageToNode = new(std::nothrow) int32[cpuCount + 1];
+	sPackageToNode = new(std::nothrow) int32[cpuCount + 2];
 	sCPUToPackage = new(std::nothrow) int32[cpuCount];
 
 	if (sCPUToCore == NULL || sCPUToCluster == NULL || sPackageToNode == NULL || sCPUToPackage == NULL) {
@@ -1118,7 +1118,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	// Packages that are never written (guard short-circuits) carry heap garbage,
 	// which init() then uses as a node index, mapping the package to a
 	// non-existent SchedulerNode.
-	memset(sPackageToNode, 0, sizeof(int32) * (cpuCount + 1));
+	memset(sPackageToNode, 0, sizeof(int32) * (cpuCount + 2));
 
 	// First pass: logical topology from ACPI/Device Tree
 	const cpu_topology_node* root = get_cpu_topology();
@@ -1829,9 +1829,9 @@ scheduler_on_team_foreground_changed(Team* team)
 	// enforced.
 
 	// Note: Caller must hold the team's thread list lock (team->fLock via TeamLocker).
-	// team->thread_list is protected by fLock, signal_lock and gThreadCreationLock.
+	// team->thread_list is protected by fLock, signal_lock and thread_list_lock.
 	// Since we already hold fLock (caller guarantee), and we are in a scheduler
-	// context where these threads might be enqueued/dequeued, we use gThreadCreationLock
+	// context where these threads might be enqueued/dequeued, we use thread_list_lock
 	// as an additional safety for the list structure itself during iteration.
 	SpinLocker listLocker(team->thread_list_lock);
 	// We iterate through all threads of the team and re-enqueue them if they are ready.

@@ -108,7 +108,7 @@ template <typename Action>
 static void
 search_global_random(Action action)
 {
-	int32 samplesToTake = min_c(gRandomSamples, gPackageCount);
+	int32 currentPackageCount = gPackageCount; int32 samplesToTake = min_c(gRandomSamples, currentPackageCount);
 	int32 samplesTaken = 0;
 	int32 attempts = 0;
 	const int32 kMaxAttempts = samplesToTake * 8;
@@ -146,7 +146,7 @@ search_global_random(Action action)
 // Issue 23 fix: zero only the words needed for gPackageCount instead of
 	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
 	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
-	int32 currentPackageCount = gPackageCount; int32 wordsNeeded = min_c((currentPackageCount + 63) / 64,
+	int32 wordsNeeded = min_c((currentPackageCount + 63) / 64,
 		(int32)(kStackBitmaskSize / 64));
 	memset(visitedBits, 0, (size_t)wordsNeeded * sizeof(uint64));
 

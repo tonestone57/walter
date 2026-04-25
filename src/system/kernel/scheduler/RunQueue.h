@@ -645,7 +645,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			// at every level, causing the second priority band to receive only
 			// half as many probes as the first.  This under-served lower-
 			// priority stealable threads and made work-stealing incomplete.
-			int searchLimit = kMaxSearchPerLevel;
+			int searchLimit = min_c(kMaxSearchPerLevel, totalBudget);
 			while (current != NULL && count < searchLimit) {
 				if (predicate(current))
 					return current;
