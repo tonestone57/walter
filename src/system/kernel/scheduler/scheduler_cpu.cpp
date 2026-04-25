@@ -1044,7 +1044,7 @@ CoreEntry::PeekMinimumLoadCPU()
 				// a concurrent RemoveCPU may have cleared fCPUSet
 				// while Core() still shows the old value.  Verify membership.
 				CPUEntry* entry = &gCPUEntries[cpu];
-			if (entry->Core() == this && !gCPU[cpu].disabled)
+				if (entry->Core() == this && !gCPU[cpu].disabled)
 					return entry;
 				break;  // stale; fall through to heap path
 			}
