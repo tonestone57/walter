@@ -1,6 +1,7 @@
 /*
  * Copyright 2008, Ingo Weinhold, ingo_weinhold@gmx.de.
  * Distributed under the terms of the MIT License.
+ * Audit fixes applied 2025.
  */
 
 #include <scheduling_analysis.h>
@@ -266,6 +267,12 @@ public:
 	void* Allocate(size_t size)
 	{
 		size = (size + 7) & ~(size_t)7;
+		// fNextAllocation and fRemainingBytes
+		// are declared as int64 (64-bit) / int32 (32-bit) matching the
+		// atomic API requirements.  Casting them from pointer types would
+		// violate strict aliasing; the current typed members are correct.
+		// The ASSERT checks the buffer layout invariant in DEBUG builds only.
+		// No code change required.
 
 		// (defensive): fHashTable sits at the top of the buffer;
 		// fNextAllocation grows upward from the bottom.  fRemainingBytes
@@ -296,9 +303,17 @@ public:
 				return (void*)(uintptr_t)old;
 			}
 #else
-			// Issue 28/38 fix (32-bit): same fix using int32 members.
+			// if 'size' exceeds INT32_MAX the cast
+			// to int32 wraps to a negative number, making the check
+			//   (int32)size > remaining
+			// pass even when remaining is positive and large, allowing an
+			// allocation that is actually too large.  Guard explicitly
+			// before the cast.  In practice _user_analyze_scheduling sizes
+			// are bounded by user address space, but the kernel API does
+			// not enforce this, so a malicious or buggy caller could pass
+			// SIZE_MAX.
 			int32 remaining = atomic_get(&fRemainingBytes);
-			if ((int32)size > remaining)
+			if (size > (size_t)INT32_MAX || (int32)size > remaining)
 				return NULL;
 
 			if (atomic_test_and_set(&fRemainingBytes,

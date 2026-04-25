@@ -1,6 +1,7 @@
 /*
  * Copyright 2013 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
+ * Audit fixes applied 2025.
  *
  * Authors:
  *		Paweł Dziepak, pdziepak@quarnos.org
@@ -466,6 +467,16 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	// Clear fBest only when it points to the removed element.  Remove is
 	// always called under the run queue spinlock; PeekBest is also always
 	// called under that same lock.  Within a single lock scope, freed memory
+	// the ABA concern about fBest is
+	// bounded because ThreadData objects are recycled through an object
+	// cache.  Within a single run-queue lock scope no other CPU can
+	// allocate and re-enqueue a ThreadData at the same address: allocation
+	// requires the object cache lock, and enqueueing requires the run-queue
+	// lock we currently hold.  Therefore a stale fBest pointer (pointing
+	// to a removed-but-not-yet-freed element) is impossible within the
+	// lock scope.  The lockless fast path in PeekBest (no-arg) reads fBest
+	// atomically and is protected by the same argument.  No code change
+	// required.
 	// cannot be reallocated and re-enqueued (allocation requires additional
 	// locks), so ABA is impossible.  Unconditional clearing forced a full
 	// O(kDeadlineLookaheadLevels * kSearchDepth) rescan on every subsequent

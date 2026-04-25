@@ -1,6 +1,7 @@
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
+ * Audit fixes applied 2025.
  */
 
 #include "scheduler_thread.h"
@@ -315,7 +316,8 @@ ThreadData::ComputeQuantum() const
 	// Issue 25 fix: cache the global mode pointer once.
 	// Independent dereferences of sCurrentMode (via inline accessors)
 	// can return inconsistent parameters if a mode switch occurs.
-	scheduler_mode_operations* mode = Scheduler::sCurrentMode;
+	// access via public accessor; sCurrentMode is private.
+	scheduler_mode_operations* mode = Scheduler::GetCurrentMode();
 
 	const bigtime_t baseQ   = mode->base_quantum;
 	const bigtime_t minQ    = mode->minimal_quantum;
@@ -553,6 +555,19 @@ ThreadData::_UpdateDeadline()
 	if (interactivity < 0) interactivity = 0;
 	if (interactivity > 1000) interactivity = 1000;
 	slice = ((int64)slice * (1500 - interactivity) * 1049) >> 20;
+
+	// prevent the interactivity multiplier from shrinking
+	// the slice to near-zero.  When fInteractivityScore == 1000 the
+	// multiplier is ~0.5, which is correct (bursty thread gets a shorter
+	// deadline), but if slice was already small the result can reach 0.
+	// A zero slice sets fVirtualDeadline == now, giving the thread
+	// maximum urgency permanently and starving lower-priority threads.
+	// Floor at one bucket width so the deadline is always in the future.
+	{
+		const bigtime_t kMinSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
+		if (slice < kMinSlice)
+			slice = kMinSlice;
+	}
 
 	fVirtualDeadline = now + slice;
 

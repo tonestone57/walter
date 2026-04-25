@@ -52,6 +52,11 @@ search_local_node(SchedulerNode* node, Action action)
 	// Use cpu->fLastLocalPackageIndex (per-CPU) rather than the old
 	// core->fLastLocalPackageIndex.  The CoreEntry field was written on every
 	// call by every CPU sharing the core, producing false sharing on the core's
+	// fLastLocalPackageIndex is updated on
+	// EVERY iteration, not only on success.  This is intentional: if all
+	// packages in the node reject (all busy), the index still advances so
+	// the next call starts from a fresh position, maintaining the
+	// round-robin guarantee under sustained load.  No code change required.
 	// hot read-mostly cache line.  The per-CPU field is private to one CPU so
 	// no cross-CPU invalidation occurs.
 	if (packagesInNode <= 8) {
@@ -123,6 +128,10 @@ search_global_random(Action action)
 
 	// Bitmask for tracking visited packages to avoid collisions.
 	// For systems with <= 64 packages, use a single uint64 bitmask (fast path).
+	// the fast-path shift `1ULL << i` where
+	// i is in [0, packageCount-1] with packageCount <= 64 means i is in
+	// [0, 63].  Shifting a 64-bit literal by 63 is defined behaviour.
+	// No overflow is possible.  No code change required.
 	if (packageCount <= 64) {
 		uint64 visitedBits = 0;
 		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {

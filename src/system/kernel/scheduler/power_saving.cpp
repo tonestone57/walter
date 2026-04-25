@@ -1,6 +1,7 @@
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
+ * Audit fixes applied 2025.
  */
 
 
@@ -445,6 +446,12 @@ choose_core(const ThreadData* threadData)
 		if (core == NULL && !useMask) {
 			int32 startIndex = tryRandom
 				? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
+			// the 3-type intermediate fallback
+			// in power_saving::choose_core passes `useMask ? &mask : NULL`
+			// inside a block that is only reached when !useMask (the outer
+			// `if (core == NULL && !useMask)` guard).  Therefore &mask is
+			// never passed; NULL is always passed.  The expression is
+			// redundant but not incorrect.  No code change required.
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 

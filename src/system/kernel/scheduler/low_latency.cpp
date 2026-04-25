@@ -1,6 +1,7 @@
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
+ * Audit fixes applied 2025.
  */
 
 
@@ -58,10 +59,17 @@ choose_core(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// useMask must be computed before Stage 0 so the
+	// hot-idle fast path can honour CPU affinity constraints.
+	CPUSet mask = threadData->GetCPUMask();
+	bool useMask = !mask.IsEmpty();
+	if (useMask && Scheduler::IsAllEnabledMask(mask))
+		useMask = false;
+
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* previousCore = threadData->PreviousCore();
 
-	// has_cache_expired() calls system_time() internally.  It is
+	// has_cache_expired() calls PreviousCore()->GetActiveTime().  It is
 	// called up to three times in this function; cache the result to avoid
 	// redundant syscalls and ensure a consistent view within one scheduling
 	// decision.
@@ -71,20 +79,22 @@ choose_core(const ThreadData* threadData)
 	// Stage 0: Hot-Idle Fast Path
 	// If the core we previously ran on is idle and in the same package,
 	// use it immediately to preserve cache warmth and skip expensive search.
-	// cpu->Core() can return NULL during hot-unplug; guard it.
-	// Issue 32 fix: cpu->Core() can return NULL during hot-unplug; guard it.
+	// also check the CPU affinity mask before returning
+	// previousCore.  Without the mask check a pinned or affinity-constrained
+	// thread could be dispatched to a core that owns no eligible CPUs,
+	// causing the subsequent _ChooseCPU to return NULL and forcing an
+	// unnecessary retry loop.
 	if (previousCore != NULL && previousCore->GetScore() == 0) {
 		CoreEntry* currentCore = cpu->Core();
 		if (currentCore != NULL
-				&& previousCore->Package() == currentCore->Package())
+				&& previousCore->Package() == currentCore->Package()
+				&& (!useMask || previousCore->CPUMask().Matches(mask)))
 			return previousCore;
 	}
 
 	// Try to use the previous core if it is idle and we have cache affinity.
 	// We also try to use a core on the same package (L3 cache) or a sibling
 	// core (L2 cache) to minimize cache misses.
-	CPUSet mask = threadData->GetCPUMask();
-	bool useMask = !mask.IsEmpty();
 
 	// Thread Coloring: only meaningful on heterogeneous systems.
 	// On homogeneous systems (gMinCoreType == gMaxCoreType) the type-filtered
@@ -96,11 +106,6 @@ choose_core(const ThreadData* threadData)
 		&& (gMinCoreType != gMaxCoreType);
 	bool preferMin = (priority < B_NORMAL_PRIORITY && !isForeground)
 		&& (gMinCoreType != gMaxCoreType);
-
-	// Optimization: If the mask is effectively "all enabled CPUs", treat it as no mask
-	// to enable global random sampling instead of slow mask iteration.
-	if (useMask && Scheduler::IsAllEnabledMask(mask))
-		useMask = false;
 
 	if (previousCore != NULL && !cacheExpired) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
@@ -543,11 +548,16 @@ rebalance(const ThreadData* threadData)
 
 	// If the current core is significantly lagging behind the other core,
 	// we lower the threshold for migration to improve latency.
-	// the "coreVRuntime > 0" guard prevents congestion detection
-	// when all threads have just started (vruntime near zero). The meaningful
-	// condition is whether the other core is ahead in virtual time; use an
-	// absolute difference check instead.
-	bool congested = otherVRuntime > coreVRuntime + 20000;
+	// guard against signed 64-bit overflow in the
+	// congestion check.  coreVRuntime grows monotonically via
+	// UpdateActivity; on a system running for a very long time it can
+	// approach INT64_MAX.  Adding 20000 to a value within 20000 of
+	// INT64_MAX would overflow, making the comparison meaningless and
+	// potentially inverting the congestion decision.
+	// Use a saturating check: if the sum would overflow, the other core
+	// cannot be "ahead" in any meaningful sense, so congested = false.
+	bool congested = (coreVRuntime <= INT64_MAX - 20000)
+		&& (otherVRuntime > coreVRuntime + 20000);
 
 	// Heterogeneous Placement Stickiness: scale threshold by core performance
 	int32 threshold = (kLoadDifference * core->PerformanceScale()) >> kDefaultCapacityShift;

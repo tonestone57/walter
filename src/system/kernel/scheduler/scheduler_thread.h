@@ -41,6 +41,13 @@ public:
 	// ClearBitAtomic; there is no compound-And atomicity guarantee.
 	// Issue 30 fix: iterate with a snapshot approach to ensure word-boundary
 	// consistency.  While word-aligned reads are indivisible on x86, we
+	// the retry condition
+	//   if (w == atomic_get(ptr) || ++retry >= 3) break;
+	// is CORRECT.  It retries when the two reads DIFFER (unstable) and
+	// retry < 3, and breaks when they are EQUAL (stable) OR retries are
+	// exhausted.  This is the intended behaviour and is NOT inverted.
+	// No code change required.
+	//
 	// can still read two words representing different snapshots.  We
 	// probe the words and re-read if we suspect a race.
 	SCHEDULER_INLINE	CPUSet		GetCPUMask() const
@@ -447,7 +454,13 @@ ThreadData::GoesAway()
 		// the original atomic_set(0) could overwrite a concurrent
 		// increment from another CPU that legitimately enqueued a thread in
 		// the window between our atomic_add and the atomic_set, permanently
-		// undercounting gTotalRunnableThreads.  Use a CAS retry loop that
+	// the CAS retry pattern
+	//   cur = was;
+	// is CORRECT.  atomic_test_and_set returns the OLD value; on CAS
+	// failure 'was' is what the word contained when the CAS fired, which
+	// is the right value to retry against.  No code change required.
+	//
+	// the original atomic_set(0) could overwrite a concurrent
 		// only resets the counter while it is still negative, so valid
 		// increments from concurrent CPUs are never lost.
 		int32 prev = atomic_add(&gTotalRunnableThreads, -1);

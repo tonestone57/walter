@@ -185,6 +185,16 @@ public:
 		sCurrentModeID = mode;
 	}
 
+	// expose sCurrentMode via a public accessor.
+	// ThreadData::ComputeQuantum lives in scheduler_thread.cpp, outside
+	// the Scheduler class, and needs to cache the pointer once to guard
+	// against mid-quantum mode switches.  Direct access to a private
+	// static member from a non-member function is ill-formed in C++.
+	static inline scheduler_mode_operations* GetCurrentMode()
+	{
+		return sCurrentMode;
+	}
+
 	static inline scheduler_mode Mode()
 	{
 		return sCurrentModeID;

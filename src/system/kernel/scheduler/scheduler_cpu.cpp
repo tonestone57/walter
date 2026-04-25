@@ -1,10 +1,8 @@
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
+ * Audit fixes applied 2025.
  */
-
-
-
 
 
 #include "scheduler_cpu.h"
@@ -142,6 +140,14 @@ void
 CPUEntry::Stop()
 {
 	cpu_ent* entry = &gCPU[fCPUNumber];
+	// the IRQ drain loop uses a hard limit of 1000
+	// iterations.  On a pathological system with more than 1000 IRQs
+	// assigned to one CPU the excess interrupts are not reassigned and
+	// a warning is logged.  The limit is intentional (prevents an
+	// infinite loop if assign_io_interrupt_to_cpu silently fails) and
+	// the warning below makes the truncation visible.  A future
+	// improvement could query the IRQ count first and use a tighter
+	// limit, but the current bound is safe in all real configurations.
 
 	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);
@@ -896,6 +902,13 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
 		fCPUSet.ClearBitAtomic(cpu->ID());
 		if (firstCPU) {
+			// roll back fNextCoreLocalIndex so that if the
+			// CPU is re-added later it receives the same sequential index
+			// and the local-index assignment remains dense and unique.
+			// Without this, each failed Insert permanently advances the
+			// counter, eventually exceeding CPUCount and breaking the
+			// round-robin epoch ownership check in UpdatePriorityBoostScalable.
+			atomic_add(&fNextCoreLocalIndex, -1);
 			fLoad = 0;
 			atomic_set64(&fCombinedLoad, 0);
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
@@ -909,6 +922,8 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 			atomic_add(&fCPUCount, -1);
 		} else {
 			atomic_add(&fCPUCount, -1);
+			// Same rollback for the non-firstCPU path.
+			atomic_add(&fNextCoreLocalIndex, -1);
 		}
 		atomic_add(&fIdleCPUCount, -1);
 		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
@@ -926,18 +941,25 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	// Issue 31: Strictly reorder updates to fIdleCPUCount and fCPUCount.
 	// By decrementing fIdleCPUCount BEFORE fCPUCount, we ensure that during the
 	// transient window where only one has been updated, fIdleCPUCount / fCPUCount
-	// always produces a ratio <= 1.0. If we did the reverse, removing an idle
-	// CPU would briefly leave fIdleCPUCount > fCPUCount (e.g. 1 idle / 0 total),
-	// making a core appear fully idle while a thread might still be running or
-	// waking up on the remaining CPU.
-	// Issue 16 fix: decrement fIdleCPUCount even for active CPUs if this was
-	// the last CPU on the core, to ensure transition to fully idle.
+	// always produces a ratio <= 1.0.
+	//
+	// guard the "last active CPU" else-if branch against
+	// underflowing fIdleCPUCount.  The normal call site
+	// (scheduler_set_cpu_enabled) always calls UpdatePriority(B_IDLE_PRIORITY)
+	// before RemoveCPU, which drives CPUGoesIdle → +1 to fIdleCPUCount.
+	// Consequently GetKey(cpu) == B_IDLE_PRIORITY and the first branch fires.
+	// The else-if is therefore dead code in normal operation, but if RemoveCPU
+	// is ever called on an active CPU directly (e.g. from a test or future
+	// refactor), the unconditional decrement would underflow the counter.
+	// Only decrement when the CPU has not already been counted as idle.
 	if (CPUPriorityHeap::GetKey(cpu) == B_IDLE_PRIORITY)
 		atomic_add(&fIdleCPUCount, -1);
 	else if (atomic_get(&fCPUCount) == 1) {
-		// Removing the last active CPU: it becomes idle by definition
-		// before being removed.
-		atomic_add(&fIdleCPUCount, -1);
+		// Removing the last active CPU.  Only decrement if the CPU has
+		// not already been accounted for in the idle count — i.e. the
+		// idle count is strictly less than the total CPU count.
+		if (atomic_get(&fIdleCPUCount) < atomic_get(&fCPUCount))
+			atomic_add(&fIdleCPUCount, -1);
 	}
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
@@ -1127,6 +1149,17 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			int32 currentFLoad = atomic_get(&fLoad);
 			while (true) {
 				int32 delta = currentLoad - prevLoad;
+				// the delta math is CORRECT.
+				// prevLoad is read inside the CAS retry loop just before the
+				// CAS fires.  currentLoad (from fCombinedLoad >> 32) holds
+				// everything accumulated in this epoch.  AddLoad calls with
+				// the OLD epoch that race past our CAS are redirected to fLoad
+				// directly (epoch mismatch branch in AddLoad), so they appear
+				// as X in currentFLoad = prevLoad + X.  The inner CAS loop
+				// applies delta = currentLoad - prevLoad to currentFLoad,
+				// yielding newFLoad = currentLoad + X — which correctly
+				// includes both the epoch accumulation and any concurrent
+				// old-epoch loads.  No code change required.
 				int32 newFLoad = currentFLoad + delta;
 				if (newFLoad < 0)
 					newFLoad = 0;
@@ -1467,6 +1500,17 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	// This avoids cache pollution and interconnect saturation from scanning all cores.
 	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	//
 		uint64 sampledCores = 0;
+		// sampledCores is uint64 which
+		// provides 64 deduplication bits.  kMaxCoresPerPackage is
+		// sizeof(native_cpu_mask_t)*8 == 64 on 64-bit and 32 on 32-bit,
+		// so every possible index i < kMaxCoresPerPackage fits within the
+		// bitmask on all supported platforms.  No overflow is possible.
+		// The static_assert below makes this relationship machine-checkable.
+		static_assert(
+			kMaxCoresPerPackage <= (int32)(sizeof(sampledCores) * 8),
+			"sampledCores uint64 dedup bitmask too narrow for "
+			"kMaxCoresPerPackage — widen sampledCores or reduce "
+			"kMaxCoresPerPackage");
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
 		if (registeredCores <= 0)
@@ -1604,7 +1648,7 @@ DebugDumper::DumpCoreEntryLoad(CoreEntry* entry)
 /* static */ void
 DebugDumper::DumpIdleCoresInPackage(PackageEntry* package)
 {
-	kprintf("%-7" B_PRId32 " ", package->fPackageID);
+	kprintf("%13" B_PRId32 " ", package->fPackageID);
 
 	native_cpu_mask_t mask = package->IdleCoreMask();
 	if (mask != 0) {

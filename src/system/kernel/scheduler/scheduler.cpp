@@ -1,5 +1,7 @@
 /*
  * Copyright 2013-2014, Paweł Dziepak, pdziepak@quarnos.org.
+ * Distributed under the terms of the MIT License.
+ * Audit fixes applied 2025.
  * Copyright 2009, Rene Gollent, rene@gollent.com.
  * Copyright 2008-2011, Ingo Weinhold, ingo_weinhold@gmx.de.
  * Copyright 2002-2010, Axel Dörfler, axeld@pinc-software.de.
@@ -147,6 +149,13 @@ scheduler_update_interaction_state()
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	if (cpu->fInteractionUpdateCounter++ % 32 != 0)
+		// fInteractionUpdateCounter is a
+		// plain uint32 incremented without atomics.  This is safe because:
+		// (a) it is a per-CPU field — only the current CPU accesses it here
+		//     (cpu == GetCPU(smp_get_current_cpu())), and
+		// (b) it is purely a throttle counter; a torn or missed increment
+		//     merely shifts the phase of the 32-call window, which is
+		//     harmless.  No code change required.
 		return;
 
 	 // Issue 38: Cache gDeadlineBucketSize once — it is read twice below and
@@ -1824,52 +1833,81 @@ scheduler_on_team_foreground_changed(Team* team)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Lock-ordering note: the caller holds team->fLock (via TeamLocker).  We
-	// acquire thread->scheduler_lock (a leaf-level spinlock) inside the loop.
-	// No code path within enqueue() or Dequeue() attempts to acquire a team
-	// lock, so there is no circular dependency.  If that ever changes this
-	// function must be refactored to release team->fLock before calling into
-	// the scheduler, or the lock ordering must be globally documented and
-	// enforced.
+	// enqueue() acquires CoreCPULocker (fCPULock) and
+	// CoreRunQueueLocker (fQueueLock).  If any future code path acquires
+	// thread_list_lock while holding fCPULock the original implementation
+	// (which called enqueue() inside the thread_list_lock critical section)
+	// would deadlock.  To eliminate the risk, collect thread references
+	// while holding thread_list_lock, then release the lock before calling
+	// the scheduler API.
+	//
+	// We acquire a BReference to each thread so it cannot be destroyed
+	// while we process the list with the lock released.
 
-	// Note: Caller must hold the team's thread list lock (team->fLock via TeamLocker).
-	// Issue 21 fix: DoublyLinkedList requires team->thread_list_lock.
-	SpinLocker listLocker(team->thread_list_lock);
-	// We iterate through all threads of the team and re-enqueue them if they are ready.
+	// First pass: collect threads under the list lock.
+	// Use a fixed-size stack buffer; if the team has more threads than
+	// kMaxThreadsPerBatch we process in batches.
+	const int kMaxThreadsPerBatch = 256;
+	Thread* batch[kMaxThreadsPerBatch];
+	bool moreBatches = true;
+	Thread* batchStart = NULL; // NULL = start of list
 
-	for (Thread* thread = team->thread_list.First(); thread != NULL;
-			thread = team->thread_list.GetNext(thread)) {
-		InterruptsSpinLocker locker(thread->scheduler_lock);
-		ThreadData* threadData = thread->scheduler_data;
+	while (moreBatches) {
+		int count = 0;
+		moreBatches = false;
 
-		if (threadData == NULL || threadData->IsIdle() || threadData->IsRealTime())
-			continue;
+		{
+			SpinLocker listLocker(team->thread_list_lock);
+			Thread* thread = (batchStart == NULL)
+				? team->thread_list.First()
+				: team->thread_list.GetNext(batchStart);
 
-		if (thread->state == B_THREAD_READY) {
-			// Remove from current run queue, update priority/deadline, and re-enqueue.
-			// This ensures the virtual runtime tree/heap consistency and immediate
-			// application of the urgency bonus.
-			// Dequeue must happen before updating the flag that determines queue position.
-			if (threadData->Dequeue()) {
-				threadData->SetForeground(team->fIsForeground);
-				threadData->ResetPriorityBoost();
-				enqueue(thread, false, NULL);
+			while (thread != NULL && count < kMaxThreadsPerBatch) {
+				thread->AcquireReference();
+				batch[count++] = thread;
+				thread = team->thread_list.GetNext(thread);
+			}
+
+			if (thread != NULL) {
+				// More threads remain; remember the last one we collected
+				// so the next batch starts from its successor.
+				batchStart = batch[count - 1];
+				moreBatches = true;
+			}
+		} // thread_list_lock released here
+
+		// Second pass: process collected threads without holding list lock.
+		for (int i = 0; i < count; i++) {
+			Thread* thread = batch[i];
+			BReference<Thread> ref(thread, true); // releases on scope exit
+
+			InterruptsSpinLocker locker(thread->scheduler_lock);
+			ThreadData* threadData = thread->scheduler_data;
+
+			if (threadData == NULL || threadData->IsIdle()
+					|| threadData->IsRealTime())
+				continue;
+
+			if (thread->state == B_THREAD_READY) {
+				if (threadData->Dequeue()) {
+					threadData->SetForeground(team->fIsForeground);
+					threadData->ResetPriorityBoost();
+					enqueue(thread, false, NULL);
+				} else {
+					threadData->SetForeground(team->fIsForeground);
+					threadData->ResetPriorityBoost();
+				}
 			} else {
 				threadData->SetForeground(team->fIsForeground);
-				threadData->ResetPriorityBoost();
-			}
-		} else {
-			threadData->SetForeground(team->fIsForeground);
-			if (thread->state == B_THREAD_RUNNING) {
-				// For running threads, update internal state and immediately
-				// adjust CPU heap priority to avoid lag.
-				threadData->ResetPriorityBoost();
-
-				ASSERT(thread->cpu != NULL);
-				CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
-				if (!gCPU[cpu->ID()].disabled) {
-					CoreCPUHeapLocker _(threadData->Core());
-					cpu->UpdatePriority(threadData->GetEffectivePriority());
+				if (thread->state == B_THREAD_RUNNING) {
+					threadData->ResetPriorityBoost();
+					ASSERT(thread->cpu != NULL);
+					CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
+					if (!gCPU[cpu->ID()].disabled) {
+						CoreCPUHeapLocker _(threadData->Core());
+						cpu->UpdatePriority(
+							threadData->GetEffectivePriority());
+					}
 				}
 			}
 		}
