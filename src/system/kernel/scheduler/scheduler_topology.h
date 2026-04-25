@@ -108,7 +108,8 @@ template <typename Action>
 static void
 search_global_random(Action action)
 {
-	int32 currentPackageCount = gPackageCount; int32 samplesToTake = min_c(gRandomSamples, currentPackageCount);
+	int32 currentPackageCount = gPackageCount;
+	int32 samplesToTake = min_c(gRandomSamples, currentPackageCount);
 	int32 samplesTaken = 0;
 	int32 attempts = 0;
 	const int32 kMaxAttempts = samplesToTake * 8;
