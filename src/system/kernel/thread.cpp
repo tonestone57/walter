@@ -706,7 +706,6 @@ ThreadCreationAttributes::InitFromUserAttributes(
 static void
 insert_thread_into_team(Team *team, Thread *thread)
 {
-	SpinLocker listLocker(team->thread_list_lock);
 	team->thread_list.Add(thread, false);
 	team->num_threads++;
 
@@ -725,7 +724,6 @@ insert_thread_into_team(Team *team, Thread *thread)
 static void
 remove_thread_from_team(Team *team, Thread *thread)
 {
-	SpinLocker listLocker(team->thread_list_lock);
 	team->thread_list.Remove(thread);
 	team->num_threads--;
 }

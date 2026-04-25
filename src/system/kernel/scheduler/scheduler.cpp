@@ -110,10 +110,6 @@ update_quantum_lengths_dpc(void* /*arg*/)
 static status_t
 interaction_timer_hook(struct timer* timer)
 {
-	// Clear the armed flag before queuing the DPC so that subsequent
-	// calls to scheduler_update_interaction_state() can re-arm if needed.
-	atomic_set(&sTimerArmed, 0);
-
 	// a scale-up DPC (target=1000) leaves sDPCPending==1 when it
 	// completes because update_quantum_lengths_dpc clears it.  If a scale-up
 	// is in flight when the timer fires, we must not silently drop the
@@ -127,7 +123,18 @@ interaction_timer_hook(struct timer* timer)
 				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
 			atomic_set(&sPendingDPCTarget, 0);
+			// Issue 23 fix: if DPC failed, we MUST clear sTimerArmed
+			// so future interactions can re-arm the timer.
+			atomic_set(&sTimerArmed, 0);
+		} else {
+			// Clear the armed flag ONLY AFTER successfully queuing the DPC.
+			// This ensures sTimerArmed reflects the in-flight operation.
+			atomic_set(&sTimerArmed, 0);
 		}
+	} else {
+		// If DPC was already pending, we still clear sTimerArmed to allow
+		// re-arming for the next cycle.
+		atomic_set(&sTimerArmed, 0);
 	}
 
 	return B_HANDLED_INTERRUPT;
@@ -191,7 +198,6 @@ scheduler_update_interaction_state()
 				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
 			atomic_set(&sPendingDPCTarget, 0);
-			atomic_set(&sTimerArmed, 0);
 			return;
 		}
 	}
@@ -1091,7 +1097,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	// increment.  The extra element prevents a potential one-past-the-end
 	// write on systems where the topology detection produces packageCount ==
 	// cpuCount entries.
-	sPackageToNode = new(std::nothrow) int32[cpuCount + 2];
+	sPackageToNode = new(std::nothrow) int32[cpuCount + 1];
 	sCPUToPackage = new(std::nothrow) int32[cpuCount];
 
 	if (sCPUToCore == NULL || sCPUToCluster == NULL || sPackageToNode == NULL || sCPUToPackage == NULL) {
@@ -1118,7 +1124,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	// Packages that are never written (guard short-circuits) carry heap garbage,
 	// which init() then uses as a node index, mapping the package to a
 	// non-existent SchedulerNode.
-	memset(sPackageToNode, 0, sizeof(int32) * (cpuCount + 2));
+	memset(sPackageToNode, 0, sizeof(int32) * (cpuCount + 1));
 
 	// First pass: logical topology from ACPI/Device Tree
 	const cpu_topology_node* root = get_cpu_topology();
@@ -1229,6 +1235,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 		const int32 kMaxCoresPerNode = 16;
 
 		if (coresInL3 > 0) {
+			// Issue 26 fix: ensure we don't write past cpuCount.
 			if (packageCount < cpuCount)
 				sPackageToNode[packageCount] = currentNodeID;
 
@@ -1237,8 +1244,9 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 				// Sanity check: If a single L3 node gets too large (e.g. bad BIOS reporting
 				// entire socket as one L3), split it into pseudo-nodes to reduce lock contention.
-				// Pseudo-nodes are limited by the 64-bit gIdleNodeMask.
-				if (coresInCurrentNode >= kMaxCoresPerNode && nodeCount < 64) {
+				if (coresInCurrentNode >= kMaxCoresPerNode) {
+					// Issue 8 fix: pseudo-node IDs can exceed 64.  Remapping
+					// occurs in init().
 					currentNodeID = nodeCount++;
 					coresInCurrentNode = 0;
 
@@ -1248,16 +1256,12 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 				if (currentPackageSize >= clusterSize) {
+					// Issue 26 fix: ensure packageCount + 1 < cpuCount.
 					if (packageCount + 1 < cpuCount) {
-						// Issue 22 fix: increment packageCount BEFORE writing to
-						// sPackageToNode[packageCount].
 						currentPackageSize = 0;
 						clusterIndex++;
 						packageCount++;
 						sPackageToNode[packageCount] = currentNodeID;
-					} else {
-						// Issue 22: When the package limit is reached, assign
-						// remaining CPUs to the last valid package.
 					}
 				}
 
@@ -1270,11 +1274,11 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 			// Issue 8 fix: increment packageCount to include the last package
 			// of the current L3 domain BEFORE breaking due to the CPU limit.
-			// The previous logic broke before the increment, causing the
-			// final package to be omitted from the global gPackageCount.
 			packageCount++;
-			if (packageCount >= cpuCount)
+			if (packageCount >= cpuCount) {
+				packageCount = cpuCount;
 				break;
+			}
 		}
 		l3Start = l3End;
 	}
@@ -1331,10 +1335,9 @@ init()
 	gPackageCount = packageCount;
 
 	// Use topology-aware nodes detected by build_topology_mappings
-	if (nodeCount > 64) {
-		dprintf("scheduler: limiting nodes to 64 (was %" B_PRId32 ")\n", nodeCount);
-		nodeCount = 64;
-	}
+	// Issue 8 fix: do not clamp nodeCount to 64.  Nodes beyond 63 will
+	// just not be tracked in the global gIdleNodeMask, but merging them
+	// via modulo distortion is worse.
 	gNodeCount = nodeCount;
 
 	gSchedulerNodes = new(std::nothrow) SchedulerNode[nodeCount];
@@ -1365,8 +1368,7 @@ init()
 
 	for (int32 i = 0; i < packageCount; i++) {
 		int32 nodeIndex = sPackageToNode[i];
-		if (nodeIndex >= nodeCount)
-			nodeIndex = nodeCount - 1; // Fallback for edge cases
+		// Issue 8 fix: removed %= nodeCount remapping.
 
 		if (nodeIndex != currentNode) {
 			if (currentNode != -1) {
@@ -1381,15 +1383,17 @@ init()
 		}
 
 		// Ensure we don't overflow the package mask in SchedulerNode.
-		// Packages beyond index 63 in a node will have NodeIndex() == -1,
-		// disabling their idle tracking in SchedulerNode to prevent mask
-		// corruption.
+		// Packages beyond the capacity of native_cpu_mask_t in a node will
+		// have NodeIndex() == -1, disabling their idle tracking in
+		// SchedulerNode to prevent mask corruption.
+		// Issue 8 fix: use correct bit limit for native_cpu_mask_t.
 		int32 packageIndexInNode = currentPackageIndexInNode;
-		if (packageIndexInNode >= 64 || packageIndexInNode < 0) {
-			if (packageIndexInNode == 64) {
-				dprintf("scheduler: warning: node %" B_PRId32 " has more than 64 "
+		const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
+		if (packageIndexInNode >= kMaxPackagesPerNode || packageIndexInNode < 0) {
+			if (packageIndexInNode == kMaxPackagesPerNode) {
+				dprintf("scheduler: warning: node %" B_PRId32 " has more than %d "
 					"packages. Excess packages will not have idle tracking.\n",
-					nodeIndex);
+					nodeIndex, kMaxPackagesPerNode);
 			}
 			packageIndexInNode = -1;
 		}
@@ -1829,10 +1833,7 @@ scheduler_on_team_foreground_changed(Team* team)
 	// enforced.
 
 	// Note: Caller must hold the team's thread list lock (team->fLock via TeamLocker).
-	// team->thread_list is protected by fLock, signal_lock and thread_list_lock.
-	// Since we already hold fLock (caller guarantee), and we are in a scheduler
-	// context where these threads might be enqueued/dequeued, we use thread_list_lock
-	// as an additional safety for the list structure itself during iteration.
+	// Issue 21 fix: DoublyLinkedList requires team->thread_list_lock.
 	SpinLocker listLocker(team->thread_list_lock);
 	// We iterate through all threads of the team and re-enqueue them if they are ready.
 

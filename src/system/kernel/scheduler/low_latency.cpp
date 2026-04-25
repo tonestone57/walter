@@ -554,27 +554,7 @@ rebalance(const ThreadData* threadData)
 	if (congested)
 		threshold = 0;
 
-	// Advanced NUMA Support:
-	// If the candidate core 'other' is in the thread's Home Package,
-	// we reduce the migration threshold to encourage returning home.
-	// Conversely, if 'other' is remote and we are currently home, we increase it.
-	int32 homePackageID = threadData->HomePackage();
-	if (homePackageID >= 0 && core->Package() != NULL && other->Package() != NULL) {
-		int32 currentPackageID = core->Package()->ID();
-		int32 otherPackageID = other->Package()->ID();
-
-		if (otherPackageID == homePackageID && currentPackageID != homePackageID) {
-			// Bonus for returning home: effectively 0 threshold or even negative?
-			// Let's just remove the friction (threshold).
-			threshold = 0;
-			goto type_affinity_guard;
-		} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
-			// Penalty for leaving home: double the threshold.
-			threshold *= 2;
-		}
-	}
-
-type_affinity_guard:
+	// Issue 20 fix: apply type-affinity guard BEFORE NUMA threshold reset.
 	// Type-affinity guard: on heterogeneous systems, resist migrating a
 	// thread off its preferred core type. choose_core places high-priority
 	// threads on P-cores; without this guard rebalance undoes that on every
@@ -600,6 +580,25 @@ type_affinity_guard:
 			// Require a load difference twice the normal threshold before
 			// accepting a cross-type migration.
 			threshold = max_c(threshold, kLoadDifference * 2);
+		}
+	}
+
+	// Advanced NUMA Support:
+	// If the candidate core 'other' is in the thread's Home Package,
+	// we reduce the migration threshold to encourage returning home.
+	// Conversely, if 'other' is remote and we are currently home, we increase it.
+	int32 homePackageID = threadData->HomePackage();
+	if (homePackageID >= 0 && core->Package() != NULL && other->Package() != NULL) {
+		int32 currentPackageID = core->Package()->ID();
+		int32 otherPackageID = other->Package()->ID();
+
+		if (otherPackageID == homePackageID && currentPackageID != homePackageID) {
+			// Bonus for returning home: effectively 0 threshold or even negative?
+			// Let's just remove the friction (threshold).
+			threshold = 0;
+		} else if (currentPackageID == homePackageID && otherPackageID != homePackageID) {
+			// Penalty for leaving home: double the threshold.
+			threshold *= 2;
 		}
 	}
 

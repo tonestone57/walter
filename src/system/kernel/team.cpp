@@ -488,7 +488,6 @@ Team::Team(team_id id, bool kernel)
 	exit.initialized = false;
 
 	B_INITIALIZE_SPINLOCK(&signal_lock);
-	B_INITIALIZE_SPINLOCK(&thread_list_lock);
 
 	// init mutex
 	if (kernel) {

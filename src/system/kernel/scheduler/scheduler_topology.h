@@ -108,8 +108,13 @@ template <typename Action>
 static void
 search_global_random(Action action)
 {
-	int32 currentPackageCount = gPackageCount;
-	int32 samplesToTake = min_c(gRandomSamples, currentPackageCount);
+	// Issue 17 fix: snapshot gPackageCount once at the start of the function.
+	// This ensures consistency if a hot-plug event changes the global count
+	// while we are executing, preventing mismatches between the search
+	// range and the bitmask zeroing range.
+	const int32 packageCount = gPackageCount;
+
+	int32 samplesToTake = min_c(gRandomSamples, packageCount);
 	int32 samplesTaken = 0;
 	int32 attempts = 0;
 	const int32 kMaxAttempts = samplesToTake * 8;
@@ -118,10 +123,10 @@ search_global_random(Action action)
 
 	// Bitmask for tracking visited packages to avoid collisions.
 	// For systems with <= 64 packages, use a single uint64 bitmask (fast path).
-	if (gPackageCount <= 64) {
+	if (packageCount <= 64) {
 		uint64 visitedBits = 0;
 		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-			int32 i = (int32)(((uint64)cpu->GetRandom() * currentPackageCount) >> 32);
+			int32 i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
 
 			if ((visitedBits & (1ULL << i)) != 0)
 				continue;
@@ -144,15 +149,16 @@ search_global_random(Action action)
 	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
-// Issue 17 fix: zero only the words needed for gPackageCount instead of
+	// Issue 17 fix: use snapshotted packageCount.
+	// zero only the words needed for packageCount instead of
 	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
 	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
-	int32 wordsNeeded = min_c((currentPackageCount + 63) / 64,
+	int32 wordsNeeded = min_c((packageCount + 63) / 64,
 		(int32)(kStackBitmaskSize / 64));
 	memset(visitedBits, 0, (size_t)wordsNeeded * sizeof(uint64));
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-		int32 i = (int32)(((uint64)cpu->GetRandom() * currentPackageCount) >> 32);
+		int32 i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
 
 		// With kStackBitmaskSize == 4096 and gPackageCount <= 4096 every
 		// valid index i fits inside the bitmask.  The out-of-range branch

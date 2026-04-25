@@ -312,9 +312,11 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	// cache all Scheduler:: accessor results in a single dereference
-	// of sCurrentMode; avoids 4 additional pointer loads on this hot path.
-	const scheduler_mode_operations* mode = Scheduler::CurrentMode();
+	// Issue 25 fix: cache the global mode pointer once.
+	// Independent dereferences of sCurrentMode (via inline accessors)
+	// can return inconsistent parameters if a mode switch occurs.
+	scheduler_mode_operations* mode = Scheduler::sCurrentMode;
+
 	const bigtime_t baseQ   = mode->base_quantum;
 	const bigtime_t minQ    = mode->minimal_quantum;
 	const bigtime_t maxLat  = mode->maximum_latency;

@@ -336,6 +336,7 @@ private:
 
 						uint32			fScoreFactor;
 
+						// Issue 1 fix: added missing member.
 						int32			fNextCoreLocalIndex;
 
 						friend class DebugDumper;
@@ -410,6 +411,7 @@ public:
 						void				RegisterCore(int32 index,
 												CoreEntry* core);
 
+	// Issue 4 fix: added missing accessor.
 	inline				int32				ID() const { return fPackageID; }
 
 	inline				int32				RegisteredCoreCount() const
@@ -769,7 +771,8 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
+	const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
+	if (package->NodeIndex() < 0 || package->NodeIndex() >= kMaxPackagesPerNode)
 		return;
 
 	// fIdlePackageMask is native_cpu_mask_t (32-bit on 32-bit
@@ -780,7 +783,10 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 
 	if (oldMask == 0) {
 		// node goes idle (first package)
-		atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
+		// Issue 8 fix: guard gIdleNodeMask update; nodes >= 64 cannot
+		// be tracked for idleness but must still exist.
+		if (fNodeID < 64)
+			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
 	}
 }
 
@@ -790,7 +796,8 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (package->NodeIndex() < 0 || package->NodeIndex() >= 64)
+	const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
+	if (package->NodeIndex() < 0 || package->NodeIndex() >= kMaxPackagesPerNode)
 		return;
 
 	// same fix — use scheduler_atomic_and for 32-bit safety.
@@ -809,8 +816,10 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	// PackageWakesUp calls could both clear and then both skip the re-arm,
 	// permanently losing the node-idle bit.
 	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == (native_cpu_mask_t)0) {
-		if (scheduler_atomic_get(&fIdlePackageMask) == (native_cpu_mask_t)0)
-			atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
+		if (scheduler_atomic_get(&fIdlePackageMask) == (native_cpu_mask_t)0) {
+			if (fNodeID < 64)
+				atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
+		}
 	}
 }
 

@@ -190,11 +190,6 @@ public:
 		return sCurrentModeID;
 	}
 
-	static inline scheduler_mode_operations* CurrentMode()
-	{
-		return sCurrentMode;
-	}
-
 	static inline void SwitchToMode()
 	{
 		sCurrentMode->switch_to_mode();

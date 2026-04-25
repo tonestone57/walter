@@ -61,6 +61,8 @@ class RunQueue {
 public:
 	static const int kBitmapSize = (MaxPriority + 32) / 32;
 
+	inline	bool		IsEmpty() const { return fTotalCount == 0; }
+
 	class ConstIterator {
 	public:
 								ConstIterator();
@@ -121,6 +123,8 @@ private:
 			Element*	fTails[MaxPriority + 1];
 
 	mutable	Element*	fBest;
+
+			int32		fTotalCount;
 
 	static	GetLink		sGetLink;
 	static	Compare		sCompare;
@@ -284,7 +288,8 @@ RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
 	:
 	fInitStatus(B_OK),
-	fBest(NULL)
+	fBest(NULL),
+	fTotalCount(0)
 {
 	memset(fBitmap, 0, sizeof(fBitmap));
 	memset(fHeads, 0, sizeof(fHeads));
@@ -350,13 +355,20 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	ASSERT((fHeads[priority] == NULL && fTails[priority] == NULL)
 		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
 
+	// Issue 10/24 fix: capture isEmpty before the bitmap update.
+	// Since we hold the run-queue spinlock, this check is atomic
+	// with the subsequent insertion.
+	bool isEmpty = (fTotalCount == 0);
+
+	fTotalCount++;
+
 	elementLink->fPriority = priority;
 	elementLink->fNext = fHeads[priority];
 	if (fHeads[priority] != NULL)
 		sGetLink(fHeads[priority])->fPrevious = element;
 	else {
 		fTails[priority] = element;
-		atomic_or((int32*)&fBitmap[priority / 32], (1UL << (priority % 32)));
+		fBitmap[priority / 32] |= (1UL << (priority % 32));
 	}
 	fHeads[priority] = element;
 
@@ -367,23 +379,8 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 			atomic_pointer_set((void**)&fBest, element);
 		else if (priority == bestPriority && sCompare(element, best))
 			atomic_pointer_set((void**)&fBest, element);
-	} else {
-		// Issue 21 fix: if the cache was NULL, it could be because it was
-		// cleared due to a removal, but other higher-priority threads might
-		// still be in the queue.  Only set fBest to the new element if
-		// the queue was previously empty at all priority levels (i.e.
-		// this was the first insertion). Otherwise leave it NULL to
-		// force PeekBest to perform a proper rescan.
-		bool isEmpty = true;
-		for (int i = 0; i < kBitmapSize; i++) {
-			if (atomic_get((int32*)&fBitmap[i]) != 0) {
-				isEmpty = false;
-				break;
-			}
-		}
-
-		if (isEmpty || PeekMaximum() == element)
-			atomic_pointer_set((void**)&fBest, element);
+	} else if (isEmpty || PeekMaximum() == element) {
+		atomic_pointer_set((void**)&fBest, element);
 	}
 }
 
@@ -405,13 +402,18 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	ASSERT((fHeads[priority] == NULL && fTails[priority] == NULL)
 		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
 
+	// Issue 10/24 fix: capture isEmpty before the bitmap update.
+	bool isEmpty = (fTotalCount == 0);
+
+	fTotalCount++;
+
 	elementLink->fPriority = priority;
 	elementLink->fPrevious = fTails[priority];
 	if (fTails[priority] != NULL)
 		sGetLink(fTails[priority])->fNext = element;
 	else {
 		fHeads[priority] = element;
-		atomic_or((int32*)&fBitmap[priority / 32], (1UL << (priority % 32)));
+		fBitmap[priority / 32] |= (1UL << (priority % 32));
 	}
 	fTails[priority] = element;
 
@@ -422,18 +424,8 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 			atomic_pointer_set((void**)&fBest, element);
 		else if (priority == bestPriority && sCompare(element, best))
 			atomic_pointer_set((void**)&fBest, element);
-	} else {
-		// Issue 21 fix: same logic as PushFront.
-		bool isEmpty = true;
-		for (int i = 0; i < kBitmapSize; i++) {
-			if (atomic_get((int32*)&fBitmap[i]) != 0) {
-				isEmpty = false;
-				break;
-			}
-		}
-
-		if (isEmpty || PeekMaximum() == element)
-			atomic_pointer_set((void**)&fBest, element);
+	} else if (isEmpty || PeekMaximum() == element) {
+		atomic_pointer_set((void**)&fBest, element);
 	}
 }
 
@@ -463,8 +455,10 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
 
 	if (fHeads[priority] == NULL) {
-		atomic_and((int32*)&fBitmap[priority / 32], ~(1UL << (priority % 32)));
+		fBitmap[priority / 32] &= ~(1UL << (priority % 32));
 	}
+
+	fTotalCount--;
 
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
@@ -520,6 +514,8 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	// levels (highest first) so a lower-priority thread with an earlier virtual
 	// deadline can preempt when the top level has no advantage.  The bound
 	// keeps worst-case complexity O(kDeadlineLookaheadLevels * kSearchDepth).
+	// Issue 11 fix: PeekBest uses its own lookahead logic; PeekOption's
+	// shared budget fix does not apply here.
 	const int kDeadlineLookaheadLevels = 3;
 	int levelsSearched = 0;
 	Element* globalBest = NULL;
@@ -624,6 +620,9 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 	const int kNumCPUs = smp_get_num_cpus();
 	const int kMaxSearchPerLevel = 16 + (kNumCPUs >> 3);
 
+	// Issue 11 fix: Increase totalBudget to allow searching more priority
+	// levels before giving up.  kMaxSearchPerLevel * 8 allows up to 8
+	// full levels or many partially-occupied levels.
 	int totalBudget = kMaxSearchPerLevel * 8;
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
@@ -646,12 +645,11 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			// half as many probes as the first.  This under-served lower-
 			// priority stealable threads and made work-stealing incomplete.
 			int searchLimit = min_c(kMaxSearchPerLevel, totalBudget);
-			while (current != NULL && count < searchLimit) {
+			while (current != NULL && count++ < searchLimit) {
 				if (predicate(current))
 					return current;
 
 				current = sGetLink(current)->fNext;
-				count++;
 				totalBudget--;
 			}
 

@@ -519,7 +519,6 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 	} exit;
 
 	spinlock		signal_lock;
-	spinlock		thread_list_lock;
 
 public:
 								~Team();

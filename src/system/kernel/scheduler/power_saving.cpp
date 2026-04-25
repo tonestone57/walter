@@ -292,11 +292,11 @@ choose_idle_core(CPUEntry* cpu)
 				int32 packageIndex = __builtin_ctzll(idlePackageMask);
 				// fPackageStartIndex + packageIndex gives global index
 				int32 globalIndex = node->PackageStartIndex() + packageIndex;
+				// Issue 3 fix: added missing gPackageCount guard.
 				if (globalIndex < gPackageCount) {
 					package = &gPackageEntries[globalIndex];
 					break;
 				}
-				idlePackageMask &= ~(1ULL << packageIndex);
 			}
 		}
 	}

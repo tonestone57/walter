@@ -53,6 +53,8 @@ public:
 			int retry = 0;
 			do {
 				w = (uint32)atomic_get(ptr);
+				// Issue 12 fix: retry threshold was 4 (retry reaches 4),
+				// should be 3.
 				if (w == (uint32)atomic_get(ptr) || ++retry >= 3)
 					break;
 				cpu_pause();

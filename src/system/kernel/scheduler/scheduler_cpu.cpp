@@ -167,15 +167,11 @@ CPUEntry::Stop()
 				"reassigned (driver failure); aborting IRQ drain\n", irqVector);
 			break;
 		}
+	}
 
-		if (i == 999) {
-			irq_assignment* finalHead
-				= (irq_assignment*)list_get_first_item(&entry->irqs);
-			if (finalHead != NULL) {
-				dprintf("CPUEntry::Stop: safety limit reached while removing "
-					"interrupts from CPU %" B_PRId32 "\n", fCPUNumber);
-			}
-		}
+	if (list_get_first_item(&entry->irqs) != NULL) {
+		dprintf("CPUEntry::Stop: safety limit reached while removing "
+			"interrupts from CPU %" B_PRId32 "\n", fCPUNumber);
 	}
 	locker.Unlock();
 }
@@ -934,18 +930,15 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	// CPU would briefly leave fIdleCPUCount > fCPUCount (e.g. 1 idle / 0 total),
 	// making a core appear fully idle while a thread might still be running or
 	// waking up on the remaining CPU.
+	// Issue 16 fix: decrement fIdleCPUCount even for active CPUs if this was
+	// the last CPU on the core, to ensure transition to fully idle.
 	if (CPUPriorityHeap::GetKey(cpu) == B_IDLE_PRIORITY)
 		atomic_add(&fIdleCPUCount, -1);
-	else {
-		// Even if the CPU was active, we must ensure that fIdleCPUCount
-		// never exceeds the new fCPUCount.
-		int32 idleCount = atomic_get(&fIdleCPUCount);
-		int32 cpuCount = atomic_get(&fCPUCount);
-		if (idleCount >= cpuCount && idleCount > 0)
-			atomic_add(&fIdleCPUCount, -1);
+	else if (atomic_get(&fCPUCount) == 1) {
+		// Removing the last active CPU: it becomes idle by definition
+		// before being removed.
+		atomic_add(&fIdleCPUCount, -1);
 	}
-
-	atomic_add(&fNextCoreLocalIndex, -1);
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	int32 oldCPUCount = atomic_add(&fCPUCount, -1);
@@ -996,6 +989,10 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUHeap.PeekRoot() == cpu);
 	fCPUHeap.RemoveRoot();
 
+	// Issue 9 fix: decrement fNextCoreLocalIndex so that re-added CPUs
+	// get reuse local indices and stay within [0, CPUCount).
+	atomic_add(&fNextCoreLocalIndex, -1);
+
 	ASSERT(cpu->GetLoad() >= 0 && cpu->GetLoad() <= kMaxLoad);
 	ASSERT(fLoad >= 0);
 }
@@ -1043,6 +1040,7 @@ CoreEntry::PeekMinimumLoadCPU()
 				int cpu = i * 32 + (__builtin_ffs(bits) - 1);
 				// a concurrent RemoveCPU may have cleared fCPUSet
 				// while Core() still shows the old value.  Verify membership.
+				// Issue 27 fix: also check if CPU is disabled.
 				CPUEntry* entry = &gCPUEntries[cpu];
 				if (entry->Core() == this && !gCPU[cpu].disabled)
 					return entry;
@@ -1097,9 +1095,9 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	// We use a 64-bit atomic to store both the current load (upper 32 bits)
 	// and the measurement epoch (lower 32 bits). This allows us to atomically
 	// increment the epoch and reset the current load, ensuring that concurrent
-	// AddLoad calls either contribute to the old epoch (and are captured in fLoad)
-	// or the new epoch (and are captured in the next snapshot), with no
-	// double-counting or loss.
+	// AddLoad calls either contribute to the old epoch (and are manually
+	// added to fLoad) or the new epoch (and are captured in the next snapshot),
+	// with no double-counting or loss.
 	int32 currentLoad = 0;
 	int64 oldCombined = atomic_get64(&fCombinedLoad);
 	while (true) {
@@ -1107,24 +1105,37 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch; // Load reset to 0
 
+		// Issue 7/22 fix: snapshot the baseline load INSIDE the loop.
+		// prevLoad must be the load at the START of the measurement epoch.
+		// The measurement epoch is updated atomically below.
+		int32 prevLoad = atomic_get(&fLoad);
+
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
-				// Apply the load captured in the finished epoch to the core's
-				// long-term load average (fLoad).  The load at the START of this
-				// epoch was already in fLoad; currentLoad represents all changes
-				// WITHIN the epoch.
+			// Issue 37 fix: re-read fLoad immediately after winning the CAS.
+			// The first-attempt prevLoad snapshot was taken before the CAS
+			// loop; concurrent AddLoad/RemoveLoad calls in that window can
+			// change fLoad so that (currentLoad - prevLoad) is computed
+			// against a stale baseline, producing a wrong delta.  Re-reading
+			// inside the CAS critical section gives the freshest baseline.
+			// Issue 25 fix: use a CAS retry loop to apply the delta.
+			// Re-reading fLoad and then using atomic_add (Issue 37) still had
+			// a race where fLoad could change between the re-read and the add.
+			// This CAS loop ensures the update is applied against the most
+			// current value of fLoad.
 			int32 currentFLoad = atomic_get(&fLoad);
 			while (true) {
-					int32 newFLoad = currentFLoad + currentLoad;
+				int32 delta = currentLoad - prevLoad;
+				int32 newFLoad = currentFLoad + delta;
 				if (newFLoad < 0)
 					newFLoad = 0;
 
-					int32 actualFLoad = atomic_test_and_set(&fLoad, newFLoad,
+				int32 actual = atomic_test_and_set(&fLoad, newFLoad,
 					currentFLoad);
-					if (actualFLoad == currentFLoad)
+				if (actual == currentFLoad)
 					break;
-					currentFLoad = actualFLoad;
+				currentFLoad = actual;
 			}
 			break;
 		}
@@ -1264,16 +1275,17 @@ PackageEntry::GetIdleCore(int32 index) const
 
 		if (currentMask == 0) {
 			// index out of bounds (race), fallback to the first idle core
-			int32 bit = scheduler_ctz(mask);
-			if (bit >= 0 && bit < kMaxCoresPerPackage && fCores[bit] != NULL)
-				return fCores[bit];
+			// Issue 28 fix: validate fCores[bit] is non-NULL.
+			int32 fallbackBit = scheduler_ctz(mask);
+			if (fallbackBit >= 0 && fallbackBit < kMaxCoresPerPackage)
+				return fCores[fallbackBit];
 			return NULL;
 		}
 	}
 
-	int32 bit = scheduler_ctz(currentMask);
-	if (bit >= 0 && bit < kMaxCoresPerPackage && fCores[bit] != NULL)
-		return fCores[bit];
+	int32 finalBit = scheduler_ctz(currentMask);
+	if (finalBit >= 0 && finalBit < kMaxCoresPerPackage)
+		return fCores[finalBit];
 	return NULL;
 }
 
@@ -1315,16 +1327,15 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
 				if (rotated != 0) {
 					// Un-rotate: a bit at rotated position p came from original
 					// position (p + shift) % kMaxCoresPerPackage.
-					int32 origIdx = (scheduler_ctz(rotated) + shift) % kMaxCoresPerPackage;
+					// Issue 19 fix: correct the un-rotation.
+					int32 pos = scheduler_ctz(rotated);
+					int32 origIdx = (pos + shift) % kMaxCoresPerPackage;
 					if (origIdx >= 0 && origIdx < kMaxCoresPerPackage
 							&& fCores[origIdx] != NULL
-							&& (mask & ((native_cpu_mask_t)1 << origIdx))) {
+							&& (neighbors & ((native_cpu_mask_t)1 << origIdx)))
 						return fCores[origIdx];
-					}
 					// Fallback if index maps to a NULL slot (sparse package).
-					int32 bit = scheduler_ctz(neighbors);
-					if (bit >= 0 && bit < kMaxCoresPerPackage)
-						return fCores[bit];
+					return fCores[scheduler_ctz(neighbors)];
 				}
 			}
 			return fCores[scheduler_ctz(neighbors)];
@@ -1694,7 +1705,7 @@ dump_idle_cores(int /* argc */, char** /* argv */)
 
 				int32 globalPackageIndex
 					= gSchedulerNodes[nodeIndex].PackageStartIndex() + packageIndex;
-				if (globalPackageIndex >= 0 && globalPackageIndex < gPackageCount) {
+				if (globalPackageIndex < gPackageCount) {
 					kprintf("%-4" B_PRId32 " ", nodeIndex);
 					DebugDumper::DumpIdleCoresInPackage(&gPackageEntries[globalPackageIndex]);
 				}

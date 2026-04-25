@@ -928,11 +928,12 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 		// (diff <= 7).  No code change required; comment added for clarity.
 		// Use explicit size check to prevent underflow or wrap-around on
 		// zero/small size when computing the 8-byte alignment fixup.
-		size_t fixup = (size_t)(8 - diff);
-		if (size <= fixup)
+		// Issue 18 fix: compute diff8 as int to prevent underflow on 32-bit.
+		int diff8 = 8 - (int)diff;
+		if (size <= (size_t)diff8)
 			return B_BAD_VALUE;
-		buffer = (void*)((addr_t)buffer + fixup);
-		size -= fixup;
+		buffer = (void*)((addr_t)buffer + diff8);
+		size -= diff8;
 	}
 	size &= ~(size_t)0x7;
 
