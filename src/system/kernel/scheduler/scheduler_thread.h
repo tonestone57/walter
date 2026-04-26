@@ -287,26 +287,26 @@ ThreadData::_UpdatePriorityBoost()
 
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// (defensive): core->Remove(this) transitions the thread to the
-			// dequeued state. We preserve the 'core' pointer to either
-			// re-enqueue on it or handle a concurrent migration.
-			CoreEntry* const core = fCore;
+			// Issue 18 fix: capture fCore under the CoreRunQueueLocker to
+			// prevent a MigrateTo() race between the NULL check and the lock
+			// acquisition. The previous code read fCore twice without holding
+			// the lock: once for the NULL guard, and again implicitly inside
+			// the RAII locker constructor. A concurrent MigrateTo() between
+			// these two reads could lock the NEW core while Remove() operated
+			// on the OLD core, corrupting both run queues.
+			//
+			// Strategy: take a snapshot, acquire the lock on that snapshot,
+			// then re-validate under the lock before proceeding.
+			CoreEntry* core = fCore;
 			if (core != NULL) {
-				core->Remove(this);
-
-				// If fCore was updated during Remove() (e.g. migration),
-				// enqueue on the new core; otherwise, restore the original
-				// core and enqueue there.
-				if (fCore != NULL && fCore != core) {
-					CoreRunQueueLocker newLock(fCore);
-					fCore->PushBack(this, newPriority);
-				} else {
-					fCore = core;
-					core->PushBack(this, newPriority);
+				CoreRunQueueLocker coreLocker(core);
+				// Re-validate: fCore may have changed while we waited.
+				if (fCore != core) {
+					// Migration occurred; abandon and let the new core handle it.
+					return;
 				}
-
-				// set fEnqueued immediately after PushBack while still
-				// inside the critical section; the thread is in the queue now.
+				core->Remove(this);
+				core->PushBack(this, newPriority);
 				fEnqueued = true;
 			}
 
@@ -656,7 +656,15 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		// without a corresponding enqueue to balance it.
 		if (fStolen) {
 			if (fCore->CPUCount() == 0) {
-				fStolen = false;  // will be re-set by caller if re-stolen
+				// Issue 4 fix: when a stolen thread cannot be enqueued because
+				// its target core has been disabled (CPUCount == 0), we must
+				// balance the IncrementTotalThreadCount() that was called in
+				// _TryStealWork before returning false. Without this decrement
+				// the count leaks upward by 1 for every steal that targets a
+				// concurrently dying core, eventually causing the scheduler to
+				// believe more threads are runnable than actually exist.
+				fCore->DecrementTotalThreadCount();
+				fStolen = false;
 				return false;
 			}
 			fCore->DecrementTotalThreadCount();

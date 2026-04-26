@@ -112,12 +112,18 @@ update_quantum_lengths_dpc(void* /*arg*/)
 static status_t
 interaction_timer_hook(struct timer* timer)
 {
-	// a scale-up DPC (target=1000) leaves sDPCPending==1 when it
-	// completes because update_quantum_lengths_dpc clears it.  If a scale-up
-	// is in flight when the timer fires, we must not silently drop the
-	// scale-down request.  Use a dedicated target variable so the DPC can
-	// service the latest requested target even if the DPC was queued for the
-	// wrong one.
+	// Issue 16 fix: the timer callback must clear sTimerArmed BEFORE
+	// attempting to queue the DPC, not after. The previous code cleared
+	// sTimerArmed after the DPCQueue::Add call. In the window between Add
+	// returning and sTimerArmed being cleared, another CPU executing
+	// scheduler_update_interaction_state could see sTimerArmed==1, skip
+	// arming, and then the callback clears it — leaving no armed timer and
+	// no pending DPC for the next interaction cycle.
+	//
+	// By clearing sTimerArmed first we allow re-arming immediately if needed,
+	// and the DPC guard (sDPCPending) prevents duplicate DPC enqueueing.
+	atomic_set(&sTimerArmed, 0);
+
 	atomic_set(&sPendingDPCTarget, 5000);
 	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
 		int64 target = (int64)atomic_get(&sPendingDPCTarget);
@@ -125,19 +131,13 @@ interaction_timer_hook(struct timer* timer)
 				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
 			atomic_set(&sPendingDPCTarget, 0);
-			// Issue 23 fix: if DPC failed, we MUST clear sTimerArmed
-			// so future interactions can re-arm the timer.
-			atomic_set(&sTimerArmed, 0);
-		} else {
-			// Clear the armed flag ONLY AFTER successfully queuing the DPC.
-			// This ensures sTimerArmed reflects the in-flight operation.
-			atomic_set(&sTimerArmed, 0);
+			// DPC queue full; sTimerArmed already cleared above so the
+			// next interaction event can re-arm the timer.
 		}
-	} else {
-		// If DPC was already pending, we still clear sTimerArmed to allow
-		// re-arming for the next cycle.
-		atomic_set(&sTimerArmed, 0);
+		// On success: DPC is in flight; sDPCPending cleared by DPC handler.
 	}
+	// If sDPCPending was already 1: a DPC is already queued, which will
+	// service sPendingDPCTarget. sTimerArmed already cleared above.
 
 	return B_HANDLED_INTERRUPT;
 }
@@ -1852,6 +1852,10 @@ scheduler_on_team_foreground_changed(Team* team)
 	bool moreBatches = true;
 	Thread* batchStart = NULL; // NULL = start of list
 
+	// Issue 8 fix: hold an explicit BReference to the cursor thread across batch
+	// boundaries, preventing its destruction until we have advanced past it.
+	BReference<Thread> batchStartRef;
+
 	while (moreBatches) {
 		int count = 0;
 		moreBatches = false;
@@ -1872,6 +1876,11 @@ scheduler_on_team_foreground_changed(Team* team)
 				// More threads remain; remember the last one we collected
 				// so the next batch starts from its successor.
 				batchStart = batch[count - 1];
+				// Issue 8 fix: acquire a BReference to the cursor BEFORE
+				// releasing the list lock so the thread cannot be destroyed
+				// between the unlock and the next GetNext() call.
+				batchStart->AcquireReference();
+				batchStartRef.SetTo(batchStart, true);
 				moreBatches = true;
 			}
 		} // thread_list_lock released here

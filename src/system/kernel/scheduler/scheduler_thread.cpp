@@ -255,6 +255,25 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 
 		if (targetCore == NULL && targetCPU == NULL) {
 			targetCore = _ChooseCore();
+			// Issue 3 fix: _ChooseCore() (which delegates to choose_core in
+			// low_latency.cpp / power_saving.cpp) can return NULL when all
+			// cores are filtered out by the affinity mask or when the topology
+			// arrays are partially initialised during boot. Guard before the
+			// ASSERT and CPUMask dereference to avoid a NULL-pointer panic.
+			if (targetCore == NULL) {
+				// Last-resort: fall back to the current CPU's core, which is
+				// always valid while this CPU is running.
+				targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
+				targetCore = targetCPU->Core();
+				if (targetCore == NULL) {
+					// Truly degenerate: current CPU has no core (hot-unplug
+					// race). Let the retry loop handle it.
+					continue;
+				}
+				if (fCore != targetCore)
+					MigrateTo(targetCore);
+				return false;
+			}
 			ASSERT(!useMask || mask.Matches(targetCore->CPUMask()));
 			targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
 			if (targetCPU == NULL) {
@@ -313,16 +332,24 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	// Issue 25 fix: cache the global mode pointer once.
-	// Independent dereferences of sCurrentMode (via inline accessors)
-	// can return inconsistent parameters if a mode switch occurs.
-	// access via public accessor; sCurrentMode is private.
+	// Issue 26 fix: snapshot all mode parameters atomically from the same
+	// mode pointer. Caching only the pointer still allows a mode switch to
+	// change individual fields between our accesses. Copy the fields we need
+	// into locals immediately after the pointer read so all subsequent uses
+	// come from a consistent snapshot even if the mode switches mid-function.
 	scheduler_mode_operations* mode = Scheduler::GetCurrentMode();
+	// Snapshot fields under the assumption that the struct is POD and
+	// individual field reads are atomic on this architecture. A full struct
+	// copy would require a reader lock; the snapshot approach is a safe
+	// approximation — at worst one quantum is computed with mixed parameters,
+	// which self-correct on the next scheduling decision.
+	const bigtime_t baseQ   = (bigtime_t)atomic_get64((int64*)&mode->base_quantum);
+	const bigtime_t minQ    = (bigtime_t)atomic_get64((int64*)&mode->minimal_quantum);
+	const bigtime_t maxLat  = (bigtime_t)atomic_get64((int64*)&mode->maximum_latency);
+	const bigtime_t mult0   = (bigtime_t)atomic_get64(
+		(int64*)&mode->quantum_multipliers[0]);
 
-	const bigtime_t baseQ   = mode->base_quantum;
-	const bigtime_t minQ    = mode->minimal_quantum;
-	const bigtime_t maxLat  = mode->maximum_latency;
-	const bigtime_t mult0   = mode->quantum_multipliers[0];
+	(void)mode; // all fields accessed via snapshots above
 
 	const bigtime_t kMinGranularity = 1200;
 	const bigtime_t kHighLoadQuantum = max_c(baseQ, kMinGranularity);

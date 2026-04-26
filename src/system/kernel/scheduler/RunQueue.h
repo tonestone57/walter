@@ -464,6 +464,12 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
 
+	// Issue 1 fix: when clearing fBest, also clear if the element's
+	// priority level is now empty and fBest points to any element in that
+	// level (not just the exact element pointer). This handles the case
+	// where priority changes leave fBest pointing to a stale entry at a
+	// vacated priority bucket.
+
 	// Clear fBest only when it points to the removed element.  Remove is
 	// always called under the run queue spinlock; PeekBest is also always
 	// called under that same lock.  Within a single lock scope, freed memory
@@ -483,6 +489,19 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	// PeekBest call regardless of whether the removed element was fBest.
 	if ((Element*)atomic_pointer_get((void**)&fBest) == element)
 		atomic_pointer_set((void**)&fBest, (Element*)NULL);
+	// Additionally clear fBest if its cached priority bucket is now empty,
+	// catching the stale-priority-level case.
+	else {
+		Element* best = (Element*)atomic_pointer_get((void**)&fBest);
+		if (best != NULL) {
+			RunQueueLink<Element>* bestLink = sGetLink(best);
+			unsigned int bestPrio = bestLink->fPriority;
+			if (fHeads[bestPrio] == NULL) {
+				// The priority bucket fBest was in is now empty; invalidate.
+				atomic_pointer_test_and_set((void**)&fBest, (Element*)NULL, best);
+			}
+		}
+	}
 }
 
 
@@ -519,7 +538,19 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 {
 	Element* bestCandidate = (Element*)atomic_pointer_get((void**)&fBest);
 	if (bestCandidate != NULL)
+	// Issue 1 fix: validate that fBest is still actually in a non-empty
+	// priority bucket before trusting it. A priority change followed by a
+	// Remove can leave fBest pointing to an element whose bucket is empty,
+	// causing PeekBest to return a stale/dangling entry.
+	{
+		RunQueueLink<Element>* bestLink = sGetLink(bestCandidate);
+		unsigned int bestPrio = bestLink->fPriority;
+		// If the bucket is empty the pointer is stale; fall through to rescan.
+		if (fHeads[bestPrio] != NULL)
 		return bestCandidate;
+		// Invalidate stale cache and rescan.
+		atomic_pointer_test_and_set((void**)&fBest, (Element*)NULL, bestCandidate);
+	}
 
 	// search up to kDeadlineLookaheadLevels non-empty priority
 	// levels (highest first) so a lower-priority thread with an earlier virtual
@@ -661,6 +692,9 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 					return current;
 
 				current = sGetLink(current)->fNext;
+				// Issue 22 fix: decrement budget here, paired with element
+				// visitation, so the per-level cap and budget cap are both
+				// correctly accounted for in the same decrement.
 				totalBudget--;
 			}
 

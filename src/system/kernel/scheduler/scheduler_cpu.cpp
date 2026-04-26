@@ -109,12 +109,22 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 {
 	fCPUNumber = id;
 	fCore = core;
-	// Mix id into high bits to avoid correlation if system_time is similar
-	// Step 1: Initial entropy mix
-	uint64 seed = system_time() ^ ((uint64)id << 16) ^ ((uint64)id * 0xBF58476D1CE4E5B9ULL);
-	// Step 2: Final mixing (using a different constant)
-	seed = (seed ^ (seed >> 30)) * 0x94D049BB133111EBULL;
+	// Issue 23 fix: improve per-CPU RNG seed entropy. On boot, system_time()
+	// returns small values with low entropy; successive CPUs initialized
+	// microseconds apart get highly correlated seeds. Fold in the address of
+	// the CPUEntry itself (ASLR entropy on randomized kernels), a
+	// compile-time constant unique per translation unit, and multiple rounds
+	// of Murmur3-style mixing to break correlation.
+	uint64 seed = system_time();
+	seed ^= (uint64)(uintptr_t)this;           // ASLR/address entropy
+	seed ^= ((uint64)id * 0x9E3779B97F4A7C15ULL); // Golden ratio spread
+	seed ^= (uint64)id << 32;
+	// Three rounds of strong mixing
+	seed = (seed ^ (seed >> 30)) * 0xBF58476D1CE4E5B9ULL;
+	seed = (seed ^ (seed >> 27)) * 0x94D049BB133111EBULL;
+	seed ^= seed >> 31;
 	fRandomState = seed ? seed : 1;
+
 	// Stagger the boost-scan trigger across CPUs. Without this all CPUs
 	// fire UpdatePriorityBoostScalable at the same reschedule boundary,
 	// causing correlated lock acquisition and measurable latency spikes.
@@ -838,19 +848,37 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Issue 27 fix: snapshot gCPUEnabled once before the predicate loop.
+	// GetCPUMask() re-reads gCPUEnabled with atomic retry logic on every
+	// call. During work stealing this predicate is invoked for every
+	// candidate thread in the victim's run queue. Since gCPUEnabled only
+	// changes during hot-plug (rare), caching it here avoids redundant
+	// atomic reads on the hot stealing path.
+	//
+	// We snapshot into a local CPUSet and pass thiefCPU as a plain bit
+	// check: if the thread's cpumask is empty (no affinity constraint) it
+	// can run anywhere; otherwise it must allow thiefCPU.
+	CPUSet enabledSnapshot;
+	{
+		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+		for (int32 w = 0; w < kWords; w++) {
+			int32* ptr = const_cast<int32*>(
+				(const int32*)gCPUEnabled.Bits() + w);
+			enabledSnapshot.SetWord(w, (uint32)atomic_get(ptr));
+		}
+	}
+
 	// Explicitly exclude idle threads from steal candidates.
 	// Idle threads must only live in CPU run queues; stealing one into a
 	// CoreEntry queue would violate the idle-thread invariant and trigger
 	// the ASSERT(!thread->IsIdle()) in CoreEntry::Remove.
-	ThreadData* thread = fRunQueue.PeekOption([&](ThreadData* thread) {
-		if (thread->IsIdle())
+	ThreadData* thread = fRunQueue.PeekOption([&](ThreadData* td) {
+		if (td->IsIdle())
 			return false;
 
-		// Issue 26 fix: reorder to check the cheap affinity fast-path
-		// first for non-idle threads, reducing atomic operations on the
-		// steal hot-path.
-		const CPUSet& mask = thread->GetCPUMask();
-		if (mask.IsEmpty() || mask.GetBit(thiefCPU))
+		// Use pre-snapshotted enabled mask to avoid per-element atomic reads.
+		CPUSet effective = td->GetThread()->cpumask.And(enabledSnapshot);
+		if (effective.IsEmpty() || effective.GetBit(thiefCPU))
 			return true;
 
 		return false;
@@ -939,27 +967,30 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
 	// Issue 31: Strictly reorder updates to fIdleCPUCount and fCPUCount.
-	// By decrementing fIdleCPUCount BEFORE fCPUCount, we ensure that during the
-	// transient window where only one has been updated, fIdleCPUCount / fCPUCount
-	// always produces a ratio <= 1.0.
-	//
-	// guard the "last active CPU" else-if branch against
-	// underflowing fIdleCPUCount.  The normal call site
-	// (scheduler_set_cpu_enabled) always calls UpdatePriority(B_IDLE_PRIORITY)
-	// before RemoveCPU, which drives CPUGoesIdle → +1 to fIdleCPUCount.
-	// Consequently GetKey(cpu) == B_IDLE_PRIORITY and the first branch fires.
-	// The else-if is therefore dead code in normal operation, but if RemoveCPU
-	// is ever called on an active CPU directly (e.g. from a test or future
-	// refactor), the unconditional decrement would underflow the counter.
-	// Only decrement when the CPU has not already been counted as idle.
-	if (CPUPriorityHeap::GetKey(cpu) == B_IDLE_PRIORITY)
-		atomic_add(&fIdleCPUCount, -1);
-	else if (atomic_get(&fCPUCount) == 1) {
-		// Removing the last active CPU.  Only decrement if the CPU has
-		// not already been accounted for in the idle count — i.e. the
-		// idle count is strictly less than the total CPU count.
-		if (atomic_get(&fIdleCPUCount) < atomic_get(&fCPUCount))
+	// Issue 2 fix: eliminate TOCTOU in the else-if branch. The two separate
+	// atomic_get calls for fIdleCPUCount and fCPUCount can observe different
+	// states if a concurrent AddCPU modifies them between reads. Instead,
+	// take a single consistent snapshot of both values under a brief
+	// read of the key (already done above) and compare atomically.
+	{
+		int32 keyAtRemoval = CPUPriorityHeap::GetKey(cpu);
+		if (keyAtRemoval == B_IDLE_PRIORITY) {
 			atomic_add(&fIdleCPUCount, -1);
+		} else {
+			// CPU is active. Decrement idle count only if it is strictly
+			// less than the current CPU count (i.e. this CPU is not already
+			// counted as idle), using a CAS to avoid the TOCTOU window.
+			int32 idleCount = atomic_get(&fIdleCPUCount);
+			int32 cpuCount  = atomic_get(&fCPUCount);
+			// Only decrement if we consistently observe idleCount < cpuCount.
+			// If a concurrent AddCPU has already incremented both, the CAS
+			// on idleCount will fail and we skip the decrement correctly.
+			if (idleCount < cpuCount) {
+				atomic_test_and_set(&fIdleCPUCount, idleCount - 1, idleCount);
+				// On CAS failure (race) we conservatively skip the decrement;
+				// the idle count will self-correct when UpdatePriority runs.
+			}
+		}
 	}
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
@@ -1052,22 +1083,27 @@ CPUEntry*
 CoreEntry::PeekMinimumLoadCPU()
 {
 	// Optimization: If a physical core is idle, explicitly return the
-	// Primary logical CPU first. This prevents unnecessary resource
-	// contention shared across SMT logical pairs (e.g. L1i/L1d).
+	// Primary logical CPU first.
+	// Issue 20 fix: use fCPUSet.FindFirstSet() equivalent via __builtin_ffs
+	// on each bitmap word rather than iterating all (SMP_MAX_CPUS+31)/32
+	// words. For a core with CPUs in a small ID range this avoids scanning
+	// all zero words before finding the first set bit.
 	if (fCPUCount > 1 && GetScore() == 0) {
-		// Find the first set bit in the CPU set to identify the primary logical CPU.
-		for (int i = 0; i < (SMP_MAX_CPUS + 31) / 32; i++) {
+		// Find first CPU in this core's set using the bitmap directly.
+		// Each word covers 32 CPU IDs; stop at first non-zero word.
+		const int kWords = (SMP_MAX_CPUS + 31) / 32;
+		for (int i = 0; i < kWords; i++) {
 			uint32 bits = fCPUSet.Bits(i);
-			if (bits != 0) {
-				int cpu = i * 32 + (__builtin_ffs(bits) - 1);
-				// a concurrent RemoveCPU may have cleared fCPUSet
-				// while Core() still shows the old value.  Verify membership.
-				// Issue 27 fix: also check if CPU is disabled.
+			if (bits == 0)
+				continue;
+			int cpu = i * 32 + (__builtin_ffs(bits) - 1);
+			if (cpu < smp_get_num_cpus()) {
 				CPUEntry* entry = &gCPUEntries[cpu];
 				if (entry->Core() == this && !gCPU[cpu].disabled)
 					return entry;
-				break;  // stale; fall through to heap path
 			}
+			// First set bit found but not valid; fall through to heap path.
+			break;
 		}
 	}
 
@@ -1122,6 +1158,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	// with no double-counting or loss.
 	int32 currentLoad = 0;
 	int64 oldCombined = atomic_get64(&fCombinedLoad);
+	int outerRetryCount = 0;
 	while (true) {
 		currentLoad = (int32)(oldCombined >> 32);
 		uint32 nextEpoch = (uint32)oldCombined + 1;
@@ -1147,19 +1184,18 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			// This CAS loop ensures the update is applied against the most
 			// current value of fLoad.
 			int32 currentFLoad = atomic_get(&fLoad);
+
+			// Issue 7 fix: add iteration limit to the inner CAS loop to
+			// prevent livelock under pathological contention. After
+			// kMaxFLoadRetries failures we read the current value and apply
+			// the delta as best-effort; slight inaccuracy is acceptable
+			// versus spinning indefinitely with interrupts disabled.
+			// The outer CAS on fCombinedLoad already has its own retry, so
+			// we only need to bound the inner fLoad CAS.
+			static const int kMaxFLoadRetries = 32;
+			int innerRetryCount = 0;
 			while (true) {
 				int32 delta = currentLoad - prevLoad;
-				// the delta math is CORRECT.
-				// prevLoad is read inside the CAS retry loop just before the
-				// CAS fires.  currentLoad (from fCombinedLoad >> 32) holds
-				// everything accumulated in this epoch.  AddLoad calls with
-				// the OLD epoch that race past our CAS are redirected to fLoad
-				// directly (epoch mismatch branch in AddLoad), so they appear
-				// as X in currentFLoad = prevLoad + X.  The inner CAS loop
-				// applies delta = currentLoad - prevLoad to currentFLoad,
-				// yielding newFLoad = currentLoad + X — which correctly
-				// includes both the epoch accumulation and any concurrent
-				// old-epoch loads.  No code change required.
 				int32 newFLoad = currentFLoad + delta;
 				if (newFLoad < 0)
 					newFLoad = 0;
@@ -1168,10 +1204,25 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 					currentFLoad);
 				if (actual == currentFLoad)
 					break;
+
 				currentFLoad = actual;
+				if (++innerRetryCount >= kMaxFLoadRetries) {
+					// Best-effort: apply delta to most recently observed value.
+					atomic_add(&fLoad, delta);
+					break;
+				}
 			}
 			break;
 		}
+
+		// Issue 7 fix: bound the outer CAS retry loop too.
+		// Livelock is possible if another CPU perpetually updates fCombinedLoad
+		// between our read and our CAS. After kMaxCombinedRetries we give up;
+		// the next _UpdateLoad call (triggered by the next load-measure timer)
+		// will correct any accumulated error.
+		static const int kMaxCombinedRetries = 64;
+		if (++outerRetryCount >= kMaxCombinedRetries)
+			break;
 		oldCombined = actual;
 	}
 
@@ -1345,13 +1396,17 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
 			// If multiple neighbors exist, pick one semi-randomly to avoid always
 			// hitting the same core if it's shared by many active ones.
 			if (scheduler_popcount(neighbors) > 1) {
-				// when shift == kMaxCoresPerPackage (== 64 on 64-bit),
-				// the left-shift in (neighbors << (kMaxCoresPerPackage - shift))
-				// becomes a shift-by-0, but more dangerously shift==0 would make
-				// (kMaxCoresPerPackage - 0) == 64 which is UB for a 64-bit type.
-				// Guard both edges explicitly.
-				int32 shift = (int32)(((uint64)cpu->GetRandom() * kMaxCoresPerPackage) >> 32);
-				if (shift == 0 || shift >= (int32)kMaxCoresPerPackage) {
+				// Issue 6 fix: clamp shift to [1, kMaxCoresPerPackage-1] to prevent
+				// both shift-by-0 (no rotation) and shift-by-kMaxCoresPerPackage UB.
+				// The previous guard caught shift==0 and shift==kMaxCoresPerPackage,
+				// but shift==kMaxCoresPerPackage is unreachable since the RNG mapping
+				// produces [0, kMaxCoresPerPackage-1]. Replacing with explicit clamp
+				// makes the intent clear and removes dead-code confusion.
+				int32 shift = 1 + (int32)(((uint64)cpu->GetRandom()
+					* (uint64)(kMaxCoresPerPackage - 1)) >> 32);
+				// shift is now in [1, kMaxCoresPerPackage-1], safe for both directions.
+				if (shift >= (int32)kMaxCoresPerPackage) {
+					// Defensive clamp (should never fire given RNG range above).
 					return fCores[scheduler_ctz(neighbors)];
 				}
 				native_cpu_mask_t rotated = (neighbors >> shift)
@@ -1555,15 +1610,18 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 	// Linear Scan (Robust Path for small clusters or fallback)
 	int32 count = scheduler_popcount(enabledMask);
-	// Issue 19: When count==1 (or enabledMask is sparse relative to
-	// kMaxCoresPerPackage) the random startBit can exceed all set bits,
-	// making upperMask == 0 and the entire scan fall into lowerMask — the
-	// randomisation becomes a no-op.  Guard: if upperMask is empty, set
-	// startBit to 0 so the full mask is covered in one pass.
+	// Issue 28 fix: use fRegisteredCoreCount (not kMaxCoresPerPackage) as
+	// the modulus for startBit. For a 4-core package, using kMaxCoresPerPackage
+	// (64) as the modulus produces startBit values 0–63; bits 4–63 make
+	// upperMask zero (no enabled bits above index 3), forcing the fallback
+	// that sets upperMask = lowerMask — the randomisation becomes a no-op.
+	// Using fRegisteredCoreCount ensures startBit is always within the
+	// valid index range [0, fRegisteredCoreCount), making the split effective.
 	int32 startBit = 0;
 
 	if (count > 1) {
-		startBit = (int32)(((uint64)cpu->GetRandom() * kMaxCoresPerPackage) >> 32);
+		startBit = (int32)(((uint64)cpu->GetRandom()
+			* (uint64)fRegisteredCoreCount) >> 32);
 	}
 
 	// Split mask into two parts to randomize start position

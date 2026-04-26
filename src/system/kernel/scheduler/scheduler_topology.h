@@ -226,14 +226,18 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	const int32 cpuCount = smp_get_num_cpus();
 	PackageEntry* lastPackage = NULL;
 
-	// lastPackage only deduplicates *consecutive* visits.  Two
-	// CPU IDs in non-contiguous positions can belong to the same package and
-	// cause it to be checked twice.  Use a small visited bitmask keyed on the
-	// package's global index (capped at 64 entries on the hot path).  For
-	// systems with more packages the extra checks are harmless — just a
-	// minor redundancy on large affinity masks.
-	uint64 visitedPackages = 0;
-	const bool useVisitedMask = (gPackageCount <= 64);
+	// Issue 19 fix: the previous deduplication only caught *consecutive*
+	// duplicate packages. Two CPU IDs in non-adjacent affinity mask bits
+	// can belong to the same package and be scanned twice, wasting time and
+	// skewing the minimum-load result toward that package. Use a proper
+	// visited bitmask for small systems and a hash-based set for larger ones.
+	//
+	// For systems with <= 128 packages (covers all practical single/dual-socket
+	// servers), use a two-word uint64 bitmask keyed on package ID.
+	// For larger systems the consecutive-duplicate check is retained as a
+	// lightweight approximation (full dedup would require heap allocation).
+	const bool useVisitedBitmask = (gPackageCount <= 128);
+	uint64 visitedPackages[2] = {0, 0};  // covers package IDs 0..127
 
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
 		uint32 bits = mask.Bits(i);
@@ -253,16 +257,18 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 				PackageEntry* package = cpuCore->Package();
 				if (package != NULL) {
 					bool alreadyVisited = false;
-					if (useVisitedMask) {
-						int32 idx = package->fPackageID;
-						if (idx >= 0 && idx < 64) {
-							uint64 bit = 1ULL << idx;
-							if (visitedPackages & bit)
+					if (useVisitedBitmask) {
+						int32 idx = package->ID();
+						if (idx >= 0 && idx < 128) {
+							int32 word = idx / 64;
+							uint64 bitMask = 1ULL << (idx % 64);
+							if (visitedPackages[word] & bitMask)
 								alreadyVisited = true;
 							else
-								visitedPackages |= bit;
+								visitedPackages[word] |= bitMask;
 						}
 					} else {
+						// Fallback: consecutive-duplicate suppression only.
 						alreadyVisited = (package == lastPackage);
 					}
 					if (!alreadyVisited) {

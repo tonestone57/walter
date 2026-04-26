@@ -657,15 +657,27 @@ rebalance(const ThreadData* threadData)
 	CoreEntry* core = threadData->Core();
 	if (core == NULL)
 		return NULL;
-	// ASSERT replaced: core can transiently be NULL during hot-unplug races.
+
+	// Issue 15 fix: add belt-and-suspenders NULL guards for Package() and
+	// Node() throughout rebalance. The top-level core != NULL check is
+	// necessary but insufficient: Package() can return NULL for a core whose
+	// Init() was skipped (exceeded kMaxCoresPerPackage), and Node() can
+	// return NULL during topology teardown. Guard all dereference sites.
+	if (core->Package() == NULL) {
+		// Core exists but has no package (partially initialised or being
+		// disabled). Return the current core — no rebalancing possible.
+		return core;
+	}
 
 	int32 coreScore = core->GetScore();
 	int32 cpuCount = core->CPUCount();
 	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
 	if (coreScore > kHighLoad) {
 		int32 nodeID = -1;
-		if (core->Package() != NULL && core->Package()->Node() != NULL)
+		if (core->Package()->Node() != NULL)
 			nodeID = core->Package()->Node()->ID();
+		// If Node() is NULL (topology teardown), nodeID stays -1 and the
+		// sSmallTaskCore branch below is skipped safely.
 
 		if (nodeID >= 0 && nodeID < gNodeCount && sSmallTaskCore != NULL
 				&& atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {

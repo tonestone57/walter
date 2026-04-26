@@ -615,11 +615,20 @@ CoreEntry::GetLoad() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Read fLoad before fCPUCount: exact consistency is not required
-	// (approximation is intentional on this hot path), and acquiring
-	// the more-volatile counter first gives a marginally safer ordering.
-	int32 load = atomic_get(const_cast<int32*>(&fLoad));
+	// Issue 13 fix: the original comment claimed "read fLoad before fCPUCount"
+	// for a "marginally safer ordering", but the actual hazard is the opposite:
+	// a concurrent RemoveCPU that decrements fCPUCount then fLoad can cause us
+	// to divide by (cpuCount-1) using the pre-decrement fLoad, overestimating.
+	// Read fCPUCount FIRST so that if RemoveCPU is racing we either see both
+	// old values (no problem) or the new fCPUCount with old fLoad (safe
+	// overestimate) — we never divide by a count lower than the load implies.
+	// A memory_read_barrier between the two reads would provide the strongest
+	// guarantee; for now reading cpuCount first is the correct order.
 	int32 cpuCount = atomic_get(const_cast<int32*>(&fCPUCount));
+	// Barrier: ensure cpuCount is read before fLoad so we never see a
+	// decremented cpuCount with a pre-decrement fLoad.
+	memory_read_barrier();
+	int32 load = atomic_get(const_cast<int32*>(&fLoad));
 
 	if (cpuCount <= 0)
 		return kMaxLoad;

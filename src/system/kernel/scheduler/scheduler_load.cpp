@@ -62,8 +62,13 @@ _LoadavgUpdate(void *data, int iteration)
 status_t
 scheduler_loadavg_init()
 {
-	register_kernel_daemon(_LoadavgUpdate, NULL, 5000);
-		// run the daemon every five seconds
+	// Issue 24 fix: the loadavg EMA decay constants (sCExp) are calibrated
+	// for a 5-second update interval (matching FreeBSD kern_sync.c).
+	// register_kernel_daemon period is in microseconds; 5000 µs = 5 ms is
+	// far too frequent and would produce meaningless EMA values.
+	// Correct value: 5,000,000 µs = 5 seconds.
+	register_kernel_daemon(_LoadavgUpdate, NULL, 5000000);
+		// run the daemon every five seconds (5,000,000 µs)
 
 	return B_OK;
 }
