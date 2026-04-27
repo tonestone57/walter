@@ -168,6 +168,9 @@ ThreadData::Init()
 		// thread updates fVirtualRuntime concurrently.  Use atomic_get64.
 		fVirtualRuntime = atomic_get64(
 			(int64*)&currentThreadData->fVirtualRuntime);
+		// Issue 13 fix: ensure ordering between fVirtualRuntime and
+		// fHomePackage reads.
+		memory_read_barrier();
 		fHomePackage = currentThreadData->fHomePackage;
 	} else {
 		fNeededLoad = 0;
@@ -522,10 +525,7 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 		// Callers MUST NOT hold any run-queue spinlock when invoking this
 		// function; doing so inverts the lock ordering (Core/CPU queue lock
 		// → thread scheduler_lock) and risks deadlock.
-		// the original assertion was a tautology
-		// (!x || true == true always).  Assert what was actually intended:
-		// interrupts must be disabled on entry so the spinlock acquire below
-		// cannot be preempted.
+		// Issue 12 fix: correctly document and assert interrupts are disabled.
 		ASSERT(!are_interrupts_enabled());
 		InterruptsSpinLocker locker(beneficiary->scheduler_lock);
 		beneficiaryData->fStolenTime += timeLeft;

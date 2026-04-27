@@ -405,8 +405,22 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		// Re-enqueue via global path if core was disabled.
 		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
 				updateInteraction)) {
-			enqueue_safe(sharedThread->GetThread());
-		} else if (updateInteraction)
+			Thread* const thread = sharedThread->GetThread();
+			if (!enqueue_safe(thread)) {
+				dprintf("scheduler: WARNING: shared thread %" B_PRId32
+					" lost during hot-unplug — forcing to current CPU\n",
+					thread->id);
+				sharedThread->MigrateTo(fCore);
+				bool dummy1, dummy2;
+				if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction)) {
+					dprintf("scheduler: CRITICAL: thread %" B_PRId32
+						" could not be re-enqueued after forced migration;"
+						" scheduler state is inconsistent\n", thread->id);
+				}
+			}
+		}
+
+		if (updateInteraction)
 			scheduler_update_interaction_state();
 	}
 
@@ -481,6 +495,14 @@ CPUEntry::GetRandom()
 }
 
 
+static inline uint32
+get_random_index(uint32 random, uint32 range)
+{
+	// Robust mapping to reduce modulo bias.
+	return (uint32)(((uint64)random * range) >> 32);
+}
+
+
 ThreadData*
 CPUEntry::_TryStealWork()
 {
@@ -501,7 +523,7 @@ CPUEntry::_TryStealWork()
 	// in PackageEntry::GetIdleCorePacking; no undefined behaviour occurs.
 	// Pick a random starting point to avoid convoys
 	// We use multiplicative mapping to avoid modulo.
-	int32 startIndex = (int32)(((uint64)GetRandom() * registeredCores) >> 32);
+	int32 startIndex = (int32)get_random_index(GetRandom(), registeredCores);
 
 	for (int32 i = 0; i < registeredCores; i++) {
 		// Optimization: Use subtraction for wrapping instead of modulo
@@ -573,7 +595,7 @@ CPUEntry::_TryStealWork()
 		if (victimCoreCount == 0)
 			return false;
 
-		int32 coreIndex = (int32)(((uint64)GetRandom() * victimCoreCount) >> 32);
+		int32 coreIndex = (int32)get_random_index(GetRandom(), victimCoreCount);
 		CoreEntry* victim = entry->GetCore(coreIndex);
 
 		if (victim == NULL)
@@ -630,7 +652,7 @@ phase3:
 		if (victimCoreCount == 0)
 			return false;
 
-		int32 coreIndex = (int32)(((uint64)GetRandom() * victimCoreCount) >> 32);
+		int32 coreIndex = (int32)get_random_index(GetRandom(), victimCoreCount);
 		CoreEntry* victim = entry->GetCore(coreIndex);
 
 		if (victim == NULL)
@@ -1004,8 +1026,11 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 			int32 idleCount = atomic_get(&fIdleCPUCount);
 			int32 cpuCount  = atomic_get(&fCPUCount);
 			if (idleCount < cpuCount) {
-				while (atomic_test_and_set(&fIdleCPUCount,
-						idleCount - 1, idleCount) != idleCount) {
+				for (int32 i = 0; i < 100; i++) {
+					if (atomic_test_and_set(&fIdleCPUCount,
+							idleCount - 1, idleCount) == idleCount) {
+						break;
+					}
 					idleCount = atomic_get(&fIdleCPUCount);
 					cpuCount  = atomic_get(&fCPUCount);
 					if (idleCount >= cpuCount)
@@ -1236,8 +1261,16 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		// the next _UpdateLoad call (triggered by the next load-measure timer)
 		// will correct any accumulated error.
 		static const int kMaxCombinedRetries = 64;
-		if (++outerRetryCount >= kMaxCombinedRetries)
-			break;
+		if (++outerRetryCount >= kMaxCombinedRetries) {
+			// Best-effort update if we reach the retry limit.
+			if (cpuCount > 0) {
+				int32 load = (int32)(oldCombined >> 32) / cpuCount;
+				load = ((int64)load * fScoreFactor) >> 16;
+				atomic_set(&fPackage->fCoreLoads[fPackageIndex],
+					min_c(load, (int32)kMaxLoad));
+			}
+			return;
+		}
 		oldCombined = actual;
 	}
 
@@ -1390,7 +1423,7 @@ PackageEntry::GetIdleCore(int32 index) const
 
 
 CoreEntry*
-PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
+PackageEntry::GetIdleCorePacking(CPUEntry* cpu, const CPUSet* affinity) const
 {
 	native_cpu_mask_t mask = scheduler_atomic_get(&fIdleCoreMask);
 	if (mask == 0)
@@ -1435,23 +1468,48 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu) const
 					int32 origIdx = (pos + shift) % kMaxCoresPerPackage;
 					if (origIdx >= 0 && origIdx < kMaxCoresPerPackage
 							&& fCores[origIdx] != NULL
-							&& (neighbors & ((native_cpu_mask_t)1 << origIdx)))
-						return fCores[origIdx];
+							&& (neighbors & ((native_cpu_mask_t)1 << origIdx))) {
+						if (affinity == NULL
+								|| fCores[origIdx]->CPUMask().Matches(*affinity)) {
+							return fCores[origIdx];
+						}
+					}
 					// Fallback if index maps to a NULL slot (sparse package).
-					return fCores[scheduler_ctz(neighbors)];
 				}
 			}
-			return fCores[scheduler_ctz(neighbors)];
+
+			native_cpu_mask_t candidateMask = neighbors;
+			while (candidateMask != 0) {
+				int32 bit = scheduler_ctz(candidateMask);
+				if (fCores[bit] != NULL && (affinity == NULL
+						|| fCores[bit]->CPUMask().Matches(*affinity))) {
+					return fCores[bit];
+				}
+				candidateMask &= ~((native_cpu_mask_t)1 << bit);
+			}
 		}
 	}
 
 	// If no core is partially active, just pick an idle one semi-randomly.
 	int32 count = scheduler_popcount(mask);
 	if (count > 1) {
-		int32 index = (int32)(((uint64)cpu->GetRandom() * count) >> 32);
-		return GetIdleCore(index);
+		int32 startIndex = (int32)get_random_index(cpu->GetRandom(), count);
+		for (int32 i = 0; i < count; i++) {
+			int32 index = (startIndex + i) % count;
+			CoreEntry* candidate = GetIdleCore(index);
+			if (candidate != NULL && (affinity == NULL
+					|| candidate->CPUMask().Matches(*affinity))) {
+				return candidate;
+			}
+		}
 	}
-	return fCores[scheduler_ctz(mask)];
+
+	int32 bit = scheduler_ctz(mask);
+	if (bit >= 0 && bit < kMaxCoresPerPackage && fCores[bit] != NULL
+			&& (affinity == NULL || fCores[bit]->CPUMask().Matches(*affinity))) {
+		return fCores[bit];
+	}
+	return NULL;
 }
 
 
@@ -1495,7 +1553,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 		while (attempts++ < fMaxAttempts) {
 			// Select a random bit index based on registered cores to avoid sparse array slots
-			int32 i = (int32)(((uint64)cpu->GetRandom() * registeredCores) >> 32);
+			int32 i = (int32)get_random_index(cpu->GetRandom(), registeredCores);
 
 			if (sampledCores & (1ULL << i))
 				continue;
@@ -1588,7 +1646,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 		while (attempts++ < fMaxAttempts) {
 			// Select a random bit index based on registered cores
-			int32 i = (int32)(((uint64)cpu->GetRandom() * registeredCores) >> 32);
+			int32 i = (int32)get_random_index(cpu->GetRandom(), registeredCores);
 
 			if (sampledCores & (1ULL << i))
 				continue;
@@ -1635,8 +1693,8 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	int32 startBit = 0;
 
 	if (count > 1) {
-		startBit = (int32)(((uint64)cpu->GetRandom()
-			* (uint64)fRegisteredCoreCount) >> 32);
+		startBit = (int32)get_random_index(cpu->GetRandom(),
+			fRegisteredCoreCount);
 	}
 
 	// Split mask into two parts to randomize start position

@@ -286,6 +286,7 @@ ThreadData::_UpdatePriorityBoost()
 			cpu->Remove(this);
 			cpu->PushBack(this, newPriority);
 
+			fEnqueued = true;
 			fEnqueuedInCPURunQueue = true;
 		} else {
 			// Issue 18 fix: capture fCore under the CoreRunQueueLocker to
@@ -419,8 +420,10 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 		fStolenTime += timeLeft;
 		timeLeft = 0;
 
-		if (!wasPreempted)
-			fInteractivityScore = max_c(fInteractivityScore - 20, 0);
+		if (!wasPreempted) {
+			fInteractivityScore = fInteractivityScore >= 20
+				? fInteractivityScore - 20 : 0;
+		}
 	}
 
 	if (timeLeft == 0) {
@@ -467,7 +470,7 @@ ThreadData::GoesAway()
 		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
 		if (prev <= 0) {
 			int32 cur = atomic_get(&gTotalRunnableThreads);
-			while (cur < 0) {
+			for (int32 i = 0; i < 100 && cur < 0; i++) {
 				int32 was = atomic_test_and_set(&gTotalRunnableThreads, 0,
 					cur);
 				if (was == cur)
@@ -515,7 +518,7 @@ ThreadData::Dies()
 		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
 		if (prev <= 0) {
 			int32 cur = atomic_get(&gTotalRunnableThreads);
-			while (cur < 0) {
+			for (int32 i = 0; i < 100 && cur < 0; i++) {
 				int32 was = atomic_test_and_set(&gTotalRunnableThreads, 0,
 					cur);
 				if (was == cur)

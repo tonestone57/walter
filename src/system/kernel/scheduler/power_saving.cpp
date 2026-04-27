@@ -274,7 +274,7 @@ choose_small_task_core(CPUEntry* cpu)
 
 
 static CoreEntry*
-choose_idle_core(CPUEntry* cpu)
+choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -296,15 +296,19 @@ choose_idle_core(CPUEntry* cpu)
 				int32 globalIndex = node->PackageStartIndex() + packageIndex;
 				// Issue 3 fix: added missing gPackageCount guard.
 				if (globalIndex < gPackageCount) {
-					package = &gPackageEntries[globalIndex];
-					break;
+					PackageEntry* candidate = &gPackageEntries[globalIndex];
+					// Issue 9 fix: check if package has any idle cores.
+					if (candidate->IdleCoreCount() > 0) {
+						package = candidate;
+						break;
+					}
 				}
 			}
 		}
 	}
 
 	if (package != NULL)
-		return package->GetIdleCorePacking(cpu);
+		return package->GetIdleCorePacking(cpu, mask);
 	return NULL;
 }
 
@@ -581,7 +585,7 @@ choose_core(const ThreadData* threadData)
 		core = bestCore;
 
 		if (core == NULL) {
-			core = choose_idle_core(cpu);
+			core = choose_idle_core(cpu, useMask ? &mask : NULL);
 			// also enforce thread-coloring type preference on
 			// the idle-core result. choose_idle_core() ignores both affinity
 			// masks and core-type constraints; without this guard a background
@@ -889,10 +893,12 @@ rebalance_irqs(bool idle)
 	int32 chosenIRQ = -1;
 	if (chosen != NULL)
 		chosenIRQ = chosen->irq;
+	int32 snapTotalLoad = totalLoad;
 
 	locker.Unlock();
 
-	if (chosen == NULL || (!pack && totalLoad < kLowLoad))
+	// Issue 16 fix: use snapshotted totalLoad and check chosenIRQ.
+	if (chosenIRQ == -1 || (!pack && snapTotalLoad < kLowLoad))
 		return;
 
 	CoreEntry* other = NULL;

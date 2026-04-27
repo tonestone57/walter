@@ -608,11 +608,19 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	// Issue 13 fix: the full rescan is authoritative (we hold the run-queue
 	// lock).  Use an unconditional set so a concurrent PushFront that raced
 	// and set fBest to a valid-but-inferior element is overwritten with the
-	// true best.  atomic_pointer_test_and_set only succeeded when fBest was
-	// NULL, silently discarding the rescan result whenever PushFront had
-	// already written a value in the interim.
-	if (globalBest != NULL)
-		atomic_pointer_set((void**)&fBest, globalBest);
+	// true best.
+	// Issue 1 fix: use atomic_pointer_test_and_set to avoid regressing quality
+	// if a concurrent PushFront has already set a better fBest.
+	if (globalBest != NULL) {
+		Element* best = (Element*)atomic_pointer_get((void**)&fBest);
+		while (best == NULL || sCompare(globalBest, best)) {
+			Element* was = (Element*)atomic_pointer_test_and_set((void**)&fBest,
+				globalBest, best);
+			if (was == best)
+				break;
+			best = was;
+		}
+	}
 
 	return globalBest;
 }

@@ -298,6 +298,8 @@ choose_core(const ThreadData* threadData)
 		CoreType preferredType = preferMax ? gMaxCoreType :
 			(preferMin ? gMinCoreType : CORE_TYPE_UNKNOWN);
 
+		// Issue 19 fix: pass preferredType to correctly handle core-type
+		// preference in the home-package path.
 		CoreEntry* candidate = homePackage->PeekMinimumLoadCore(cpu,
 			useMask ? &mask : NULL, preferredType);
 
@@ -668,10 +670,12 @@ rebalance_irqs(bool idle)
 	int32 chosenIRQ = -1;
 	if (chosen != NULL)
 		chosenIRQ = chosen->irq;
+	int32 snapTotalLoad = totalLoad;
 
 	locker.Unlock();
 
-	if (chosen == NULL || totalLoad < kLowLoad)
+	// Issue 16 fix: use snapshotted totalLoad and check chosenIRQ.
+	if (chosenIRQ == -1 || snapTotalLoad < kLowLoad)
 		return;
 
 	CoreEntry* other = NULL;

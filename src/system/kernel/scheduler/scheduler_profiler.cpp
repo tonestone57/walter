@@ -308,7 +308,10 @@ Profiler::_FindFunction(const char* function)
 			break;
 
 		memory_read_barrier();
-		if (strcmp(entry->fFunction, function) == 0)
+		// Issue 20 fix: ensure pointed-to string data is visible.
+		const char* entryFunction = entry->fFunction;
+		memory_read_barrier();
+		if (strcmp(entryFunction, function) == 0)
 			return entry;
 
 		index = (index + 1) % kHashTableSize;
@@ -325,7 +328,10 @@ Profiler::_FindFunction(const char* function)
 			break;
 
 		memory_read_barrier();
-		if (strcmp(entry->fFunction, function) == 0)
+		// Issue 20 fix: ensure pointed-to string data is visible.
+		const char* entryFunction = entry->fFunction;
+		memory_read_barrier();
+		if (strcmp(entryFunction, function) == 0)
 			return entry;
 
 		index = (index + 1) % kHashTableSize;

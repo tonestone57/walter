@@ -286,7 +286,7 @@ public:
 			|| (uint8*)fHashTable - (uint8*)(uintptr_t)fNextAllocation
 				== (ptrdiff_t)fRemainingBytes);
 #endif
-		while (true) {
+		for (int32 i = 0; i < 1000; i++) {
 #if B_HAIKU_64_BIT
 			// Issue 28/38 fix: fNextAllocation and fRemainingBytes are defined
 			// as int64 to match the requirements of the atomic_64 API.
@@ -312,6 +312,7 @@ public:
 			// are bounded by user address space, but the kernel API does
 			// not enforce this, so a malicious or buggy caller could pass
 			// SIZE_MAX.
+			// Issue 14 fix: handle size overflow properly.
 			int32 remaining = atomic_get(&fRemainingBytes);
 			if (size > (size_t)INT32_MAX || (int32)size > remaining)
 				return NULL;
@@ -323,6 +324,7 @@ public:
 			}
 #endif
 		}
+		return NULL;
 	}
 
 	void Insert(HashObject* object)
@@ -943,8 +945,8 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 		// (diff <= 7).  No code change required; comment added for clarity.
 		// Use explicit size check to prevent underflow or wrap-around on
 		// zero/small size when computing the 8-byte alignment fixup.
-		// Issue 18 fix: compute diff8 as int to prevent underflow on 32-bit.
-		int diff8 = 8 - (int)diff;
+		// Issue 17 fix: Use addr_t to avoid integer narrowing on 64-bit.
+		addr_t diff8 = 8 - diff;
 		if (size <= (size_t)diff8)
 			return B_BAD_VALUE;
 		buffer = (void*)((addr_t)buffer + diff8);

@@ -61,13 +61,13 @@ search_local_node(SchedulerNode* node, Action action)
 	// hot read-mostly cache line.  The per-CPU field is private to one CPU so
 	// no cross-CPU invalidation occurs.
 	if (packagesInNode <= 8) {
-		int32 start = (cpu->fLastLocalPackageIndex + 1) % packagesInNode;
+		int32 lastIndex = atomic_get(&cpu->fLastLocalPackageIndex);
+		int32 start = (lastIndex + 1) % packagesInNode;
 		for (int32 i = 0; i < packagesInNode; i++) {
-			// (clarification): fLastLocalPackageIndex is per-CPU
-			// .  Updating it on
-			// every iteration gives correct round-robin coverage: next call
-			// starts from the element after the last one checked.  No change
-			// needed; the existing behaviour is intentional.
+			// (clarification): fLastLocalPackageIndex is per-CPU.
+			// Updating it on every iteration gives correct round-robin
+			// coverage: next call starts from the element after the last
+			// one checked.
 			int32 offset = start + i;
 			if (offset >= packagesInNode)
 				offset -= packagesInNode;
@@ -75,12 +75,9 @@ search_local_node(SchedulerNode* node, Action action)
 			if (index >= gPackageCount)
 				continue;
 			// update fLastLocalPackageIndex on every iteration.
-			// Issue 28 fix: The previous code only updated on success,
-			// which meant that if every call missed (all packages busy),
-			// fLastLocalPackageIndex never advanced and the same starting
-			// package was retried every time, breaking the round-robin
-			// guarantee under sustained load.
-			cpu->fLastLocalPackageIndex = offset;
+			// Issue 6 fix: use atomic_set for consistency and to avoid
+			// confusion, even though it's a per-CPU field.
+			atomic_set(&cpu->fLastLocalPackageIndex, offset);
 			if (action(&gPackageEntries[index]))
 				break;
 		}

@@ -326,8 +326,9 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	// ownership check simultaneously, producing a correlated scan burst.
 	// Treat the wrap as a normal epoch boundary by clamping preCount.
 	uint32 preCount = cpu->fRescheduleCount - 1;
+	// Issue 11 fix: Use a non-zero epoch at wrap boundary to avoid bias.
 	if (cpu->fRescheduleCount == 0)
-		preCount = 0;  // just wrapped; treat as epoch 0, harmless miss
+		preCount = THREAD_MAX_SET_PRIORITY; // Arbitrary but stable non-zero value
 
 	uint32 boostEpoch = preCount / 10;
 	// Issue 13 fix: cpu->ID() % coreCPUCount is not unique when CPU IDs are
@@ -358,7 +359,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 }
 
 
-static void enqueue(Thread* thread, bool newOne, Thread* waker);
+static bool enqueue(Thread* thread, bool newOne, Thread* waker);
 
 
 void
@@ -378,7 +379,7 @@ scheduler_dump_thread_data(Thread* thread)
 
 
 
-static void
+static bool
 enqueue(Thread* thread, bool newOne, Thread* waker)
 {
 	SCHEDULER_ENTER_FUNCTION();
@@ -431,10 +432,10 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 			if (++enqueueAttempts >= kMaxRetries) {
 				dprintf("scheduler: enqueue giving up after %d attempts "
 					"for thread %" B_PRId32 "\n", enqueueAttempts, thread->id);
-				break;
+				return false;
 			}
 		} else
-			break;
+			return true;
 	} while (true);
 
 	// Issue 20 fix: call scheduler_update_interaction_state() while NOT
@@ -470,10 +471,9 @@ bool
 enqueue_safe(Thread* thread)
 {
 	// Use the same safety logic as ChooseNextThread retry loop
-	enqueue(thread, false, NULL);
-	// Issue 23 fix: verify enqueued status; enqueue() handles the retry
-	// loop and should eventually succeed unless the system is shutting down.
-	return thread->scheduler_data->IsEnqueued();
+	// Issue 5 fix: return the result of enqueue() which is more reliable
+	// than checking IsEnqueued() if enqueue() gave up.
+	return enqueue(thread, false, NULL);
 }
 
 
@@ -1893,11 +1893,9 @@ scheduler_on_team_foreground_changed(Team* team)
 				// Issue 8 fix: acquire a BReference to the cursor BEFORE
 				// releasing the list lock so the thread cannot be destroyed
 				// between the unlock and the next GetNext() call.
-		// Issue 10: batchStartRef.SetTo(batchStart, true) releases the
-		// previous reference via ~BReference in SetTo, so there is no leak
-		// across batch boundaries.  This relies on SetTo semantics; if those
-		// ever change (2nd arg meaning), audit this site first.
-				batchStart->AcquireReference();
+			// Issue 7 fix: Remove redundant AcquireReference() to prevent leak.
+			// SetTo(..., true) already assumes it is taking ownership of a
+			// reference.
 				batchStartRef.SetTo(batchStart, true);
 				moreBatches = true;
 			}
