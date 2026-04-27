@@ -1,3 +1,4 @@
+// AUDIT FIXES: issues 6 and 12
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -817,17 +818,33 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	// Only clear the bit in gIdleNodeMask if this package was actually idle
 	// (bit was set in oldMask) AND it was the last idle package in this node
 	// (mask is now zero).
-	// Issue 3 fix: guard the node-bit clear with a re-read of fIdlePackageMask.
-	// Only clear gIdleNodeMask when the mask is still zero, preventing a lost
-	// PackageGoesIdle notification from a concurrent package going idle between
-	// our atomic_and and the gIdleNodeMask update. The previous unconditional
-	// clear followed by a conditional re-arm was itself racy: two concurrent
-	// PackageWakesUp calls could both clear and then both skip the re-arm,
-	// permanently losing the node-idle bit.
 	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == (native_cpu_mask_t)0) {
-		if (scheduler_atomic_get(&fIdlePackageMask) == (native_cpu_mask_t)0) {
-			if (fNodeID < 64)
-				atomic_and64((int64*)&gIdleNodeMask, ~(1ULL << fNodeID));
+		if (fNodeID < 64) {
+			// Issue 12 fix: a plain re-read + atomic_and64 is still racy.
+			// Between the re-read returning 0 and the atomic_and64, a
+			// concurrent PackageGoesIdle can set a bit in fIdlePackageMask
+			// AND set our node bit in gIdleNodeMask.  The atomic_and64 then
+			// clears the node bit, permanently losing the idle notification.
+			//
+			// Fix: use a CAS loop that re-checks fIdlePackageMask atomically
+			// with the gIdleNodeMask update.  If fIdlePackageMask is no longer
+			// zero when we re-read it, a concurrent PackageGoesIdle has fired
+			// and will (or has already) re-set the node bit — we must not
+			// clear it.
+			const int64 nodeBit = (int64)(1ULL << fNodeID);
+			int64 nodeMask;
+			do {
+				if (scheduler_atomic_get(&fIdlePackageMask)
+						!= (native_cpu_mask_t)0) {
+					// A package in this node went idle concurrently; the node
+					// bit must remain set.
+					break;
+				}
+				nodeMask = atomic_get64((int64*)&gIdleNodeMask);
+				if (!(nodeMask & nodeBit))
+					break; // already cleared by a concurrent PackageWakesUp
+			} while (atomic_test_and_set64((int64*)&gIdleNodeMask,
+					nodeMask & ~nodeBit, nodeMask) != nodeMask);
 		}
 	}
 }
@@ -894,6 +911,14 @@ CoreEntry::GetCore(int32 cpu)
 inline native_cpu_mask_t
 PackageEntry::IdleCoreMask() const
 {
+	// Issue 6: GetIdleCorePacking uses rotation arithmetic on this mask.
+	// The un-rotation formula origIdx = (pos + shift) % kMaxCoresPerPackage
+	// is correct only when kMaxCoresPerPackage is a power of 2, which it is
+	// on all supported platforms (32 on 32-bit, 64 on 64-bit).  This
+	// comment documents the assumption so it is verified if kMaxCoresPerPackage
+	// is ever changed to a non-power-of-2 value.
+	static_assert((kMaxCoresPerPackage & (kMaxCoresPerPackage - 1)) == 0,
+		"kMaxCoresPerPackage must be a power of 2 for rotation arithmetic");
 	SCHEDULER_ENTER_FUNCTION();
 	return scheduler_atomic_get(&fIdleCoreMask);
 }

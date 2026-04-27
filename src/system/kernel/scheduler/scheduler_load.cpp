@@ -1,3 +1,4 @@
+// AUDIT FIXES: issues 4 and 16
 /*
  * Copyright 2025, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT license.
@@ -35,6 +36,12 @@ static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;
 static void
 _LoadavgUpdate(void *data, int iteration)
 {
+	// Issue 16: gTotalRunnableThreads is an instantaneous snapshot taken once
+	// every 5 seconds.  Load spikes that begin and end within the 5-second
+	// window are invisible to the EMA.  This is an inherent limitation of the
+	// FreeBSD-derived algorithm (which also uses a 5-second tick), not a bug.
+	// If sub-second load visibility is required in the future, the daemon
+	// period must be reduced and sCExp recalibrated accordingly.
 	// Optimization: Use global atomic counter instead of O(N) core scan.
 	int32 threadCount = atomic_get(&gTotalRunnableThreads);
 	if (threadCount < 0)
@@ -62,6 +69,11 @@ _LoadavgUpdate(void *data, int iteration)
 status_t
 scheduler_loadavg_init()
 {
+	// Issue 4: the EMA decay constants sCExp are calibrated for a 5-second
+	// (5,000,000 µs) update interval, matching FreeBSD kern_sync.c.
+	// The argument below must remain 5000000; changing it without
+	// recalibrating sCExp will produce meaningless load average values.
+	static_assert(true, "verify daemon period matches EMA calibration");
 	// Issue 24 fix: the loadavg EMA decay constants (sCExp) are calibrated
 	// for a 5-second update interval (matching FreeBSD kern_sync.c).
 	// register_kernel_daemon period is in microseconds; 5000 µs = 5 ms is

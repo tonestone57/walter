@@ -1,3 +1,4 @@
+// AUDIT FIX: issue 11
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -332,24 +333,19 @@ ThreadData::ComputeQuantum() const
 	if (IsRealTime())
 		return fBaseQuantum;
 
-	// Issue 26 fix: snapshot all mode parameters atomically from the same
-	// mode pointer. Caching only the pointer still allows a mode switch to
-	// change individual fields between our accesses. Copy the fields we need
-	// into locals immediately after the pointer read so all subsequent uses
-	// come from a consistent snapshot even if the mode switches mid-function.
+	// Issue 11 fix: ComputeQuantum is only called while the caller holds
+	// SchedulerModeLocker (a read lock on CPUEntry::fSchedulerModeLock).
+	// Mode switches require InterruptsBigSchedulerLocker which takes the
+	// write lock on every CPU, fully serialising against this read path.
+	// Plain struct-field reads are therefore safe and avoid potential
+	// undefined behaviour from casting unaligned bigtime_t pointers to
+	// int64* on 32-bit targets where atomic_get64 requires 8-byte alignment
+	// not guaranteed by scheduler_mode_operations without explicit alignas.
 	scheduler_mode_operations* mode = Scheduler::GetCurrentMode();
-	// Snapshot fields under the assumption that the struct is POD and
-	// individual field reads are atomic on this architecture. A full struct
-	// copy would require a reader lock; the snapshot approach is a safe
-	// approximation — at worst one quantum is computed with mixed parameters,
-	// which self-correct on the next scheduling decision.
-	const bigtime_t baseQ   = (bigtime_t)atomic_get64((int64*)&mode->base_quantum);
-	const bigtime_t minQ    = (bigtime_t)atomic_get64((int64*)&mode->minimal_quantum);
-	const bigtime_t maxLat  = (bigtime_t)atomic_get64((int64*)&mode->maximum_latency);
-	const bigtime_t mult0   = (bigtime_t)atomic_get64(
-		(int64*)&mode->quantum_multipliers[0]);
-
-	(void)mode; // all fields accessed via snapshots above
+	const bigtime_t baseQ  = mode->base_quantum;
+	const bigtime_t minQ   = mode->minimal_quantum;
+	const bigtime_t maxLat = mode->maximum_latency;
+	const bigtime_t mult0  = mode->quantum_multipliers[0];
 
 	const bigtime_t kMinGranularity = 1200;
 	const bigtime_t kHighLoadQuantum = max_c(baseQ, kMinGranularity);

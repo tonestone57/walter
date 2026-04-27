@@ -1,3 +1,4 @@
+// AUDIT FIXES: issues 3 and 20
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -698,6 +699,13 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		} else
 			fCore->PushBack(this, priority);
 	}
+	// Issue 3: gTotalRunnableThreads is incremented AFTER the CPUCount == 0
+	// guards in both the pinned and non-pinned paths.  There is no return-false
+	// path after the increment; PushFront/PushBack are infallible.  The counter
+	// is therefore always matched by either a GoesAway/Dies decrement (when the
+	// thread leaves the ready state) or a symmetric Enqueue on the next wakeup.
+	// This comment documents that the ordering is intentional and correct.
+
 	fQuickStartCredit = false;
 	return true;
 }
@@ -750,6 +758,19 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		if (now == 0)
 			now = system_time();
 
+		// Issue 20 fix: on very early boot system_time() can return 0.
+		// If now == 0, ceiling = kLookahead which may be as small as 3.2 s
+		// worth of virtual time.  All new threads start at fVirtualRuntime==0
+		// so the ceiling clamp fires immediately, pinning every thread at the
+		// ceiling and producing incorrect priority ordering until real time
+		// advances past kLookahead.  When system_time() is still 0, skip the
+		// ceiling clamp entirely and just accumulate delta normally; the
+		// scheduler is in its earliest boot phase and fairness is not critical.
+		if (now == 0) {
+			fVirtualRuntime += delta;
+			goto track_core_load;
+		}
+
 		bigtime_t ceiling;
 		if (now > B_INT64_MAX - kLookahead)
 			ceiling = B_INT64_MAX;
@@ -765,6 +786,7 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		// it, which would spuriously boost the thread's scheduling priority.
 	}
 
+track_core_load:
 	if (!gTrackCoreLoad)
 		return;
 

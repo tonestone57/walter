@@ -1,3 +1,4 @@
+// AUDIT FIX: issue 8
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -548,15 +549,14 @@ rebalance(const ThreadData* threadData)
 
 	// If the current core is significantly lagging behind the other core,
 	// we lower the threshold for migration to improve latency.
-	// guard against signed 64-bit overflow in the
-	// congestion check.  coreVRuntime grows monotonically via
-	// UpdateActivity; on a system running for a very long time it can
-	// approach INT64_MAX.  Adding 20000 to a value within 20000 of
-	// INT64_MAX would overflow, making the comparison meaningless and
-	// potentially inverting the congestion decision.
-	// Use a saturating check: if the sum would overflow, the other core
-	// cannot be "ahead" in any meaningful sense, so congested = false.
-	bool congested = (coreVRuntime <= INT64_MAX - 20000)
+	// Issue 8 fix: guard both signed overflow AND underflow.
+	// coreVRuntime near INT64_MAX risks addition overflow (existing guard).
+	// coreVRuntime near INT64_MIN risks subtraction underflow: if another
+	// expression later computes (coreVRuntime - X) where X > 0 the result
+	// wraps to a large positive, inverting comparisons.  The additional
+	// lower-bound guard eliminates this path entirely.
+	bool congested = (coreVRuntime >= INT64_MIN + 20000)
+		&& (coreVRuntime <= INT64_MAX - 20000)
 		&& (otherVRuntime > coreVRuntime + 20000);
 
 	// Heterogeneous Placement Stickiness: scale threshold by core performance

@@ -1,3 +1,4 @@
+// AUDIT FIX: issue 5
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -118,6 +119,12 @@ search_global_random(Action action)
 	// while we are executing, preventing mismatches between the search
 	// range and the bitmask zeroing range.
 	const int32 packageCount = gPackageCount;
+
+	// Issue 5 fix: kStackBitmaskSize covers 4096 packages (512 bytes on the
+	// stack).  init() enforces gPackageCount <= 4096.  Assert that the runtime
+	// value never exceeds our compile-time allocation so an accidental removal
+	// of the init() cap does not silently cause out-of-bounds writes.
+	ASSERT(packageCount <= 4096);
 
 	int32 samplesToTake = min_c(gRandomSamples, packageCount);
 	int32 samplesTaken = 0;

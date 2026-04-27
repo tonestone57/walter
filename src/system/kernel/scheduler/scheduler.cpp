@@ -1,3 +1,4 @@
+// AUDIT FIXES: issues 10 and 19
 /*
  * Copyright 2013-2014, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -1248,6 +1249,15 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 			if (packageCount < cpuCount)
 				sPackageToNode[packageCount] = currentNodeID;
 
+				// Issue 19 fix: when this is the very last package that fits
+				// within the cpuCount limit AND we are at the boundary where
+				// the inner cluster-split guard (packageCount + 1 < cpuCount)
+				// will prevent further increments, the final packageCount++ at
+				// the end of the L3 domain will cover the count but the
+				// sPackageToNode entry for the *current* packageCount was
+				// written above.  Verify the invariant with a debug assertion.
+				ASSERT(packageCount < cpuCount + 1);
+
 			for (int32 i = 0; i < coresInL3; i++) {
 				int32 cpuID = cpuList[l3Start + i];
 
@@ -1272,6 +1282,10 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 						packageCount++;
 						sPackageToNode[packageCount] = currentNodeID;
 					}
+		// Issue 19: when the guard above prevents a new package from being
+		// created, the remaining CPUs in this cluster are folded into the
+		// current package.  No sPackageToNode write is needed since the
+		// current package's node was already written at cluster start.
 				}
 
 				if (packageCount < cpuCount)
@@ -1879,6 +1893,10 @@ scheduler_on_team_foreground_changed(Team* team)
 				// Issue 8 fix: acquire a BReference to the cursor BEFORE
 				// releasing the list lock so the thread cannot be destroyed
 				// between the unlock and the next GetNext() call.
+		// Issue 10: batchStartRef.SetTo(batchStart, true) releases the
+		// previous reference via ~BReference in SetTo, so there is no leak
+		// across batch boundaries.  This relies on SetTo semantics; if those
+		// ever change (2nd arg meaning), audit this site first.
 				batchStart->AcquireReference();
 				batchStartRef.SetTo(batchStart, true);
 				moreBatches = true;

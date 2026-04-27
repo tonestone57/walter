@@ -1,3 +1,4 @@
+// AUDIT FIX: issue 18
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -624,6 +625,15 @@ choose_core(const ThreadData* threadData)
 				if (core != NULL && core->CPUMask().Matches(mask))
 					break;
 			}
+			// Issue 18 fix: the inner loop may exit with a non-NULL core
+			// that still fails CPUMask().Matches() when the final for-loop
+			// iteration found a core but the Matches() guard was false, causing
+			// the outer for-loop to continue and eventually expire with a core
+			// that does not satisfy the affinity constraint.  Null it out so
+			// the NULL-return path below handles it cleanly rather than
+			// returning a mismatched core to ChooseCoreAndCPU.
+			if (core != NULL && !core->CPUMask().Matches(mask))
+				core = NULL;
 		}
 	}
 

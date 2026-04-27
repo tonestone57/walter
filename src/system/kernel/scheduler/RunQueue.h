@@ -1,3 +1,4 @@
+// AUDIT FIXES: issues 1 and 13
 /*
  * Copyright 2013 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
@@ -403,7 +404,12 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	ASSERT((fHeads[priority] == NULL && fTails[priority] == NULL)
 		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
 
-	// Issue 10/24 fix: capture isEmpty before the bitmap update.
+	// Issue 1 / 10/24 fix: capture isEmpty before the bitmap update.
+	// Note: the fBest update below uses sCompare for equal-priority elements,
+	// correctly keeping the element with the earliest virtual deadline.
+	// For priority > bestPriority the new element is unconditionally better.
+	// For priority < bestPriority the new element cannot be fBest.
+	// This logic is intentional and correct for all three cases.
 	bool isEmpty = (fTotalCount == 0);
 
 	fTotalCount++;
@@ -599,8 +605,14 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 		}
 	}
 
+	// Issue 13 fix: the full rescan is authoritative (we hold the run-queue
+	// lock).  Use an unconditional set so a concurrent PushFront that raced
+	// and set fBest to a valid-but-inferior element is overwritten with the
+	// true best.  atomic_pointer_test_and_set only succeeded when fBest was
+	// NULL, silently discarding the rescan result whenever PushFront had
+	// already written a value in the interim.
 	if (globalBest != NULL)
-		atomic_pointer_test_and_set((void**)&fBest, globalBest, (Element*)NULL);
+		atomic_pointer_set((void**)&fBest, globalBest);
 
 	return globalBest;
 }

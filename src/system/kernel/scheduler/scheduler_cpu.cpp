@@ -1,3 +1,4 @@
+// AUDIT FIXES: issues 2, 7, 9, 15, 17
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -170,6 +171,11 @@ CPUEntry::Stop()
 		int32 irqVector = irq->irq;
 		locker.Unlock();
 
+		// Issue 15: assign_io_interrupt_to_cpu may acquire internal locks.
+		// We release irqs_lock BEFORE calling it (locker.Unlock() above) to
+		// prevent priority inversion or deadlock against any path that acquires
+		// irqs_lock while holding an internal interrupt-assignment lock.
+		// The locker is re-acquired on the next iteration before list access.
 		assign_io_interrupt_to_cpu(irqVector, -1);
 
 		locker.Lock();
@@ -522,6 +528,12 @@ CPUEntry::_TryStealWork()
 			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
 			if (stolen != NULL) {
+				// Issue 9: MigrateTo and IncrementTotalThreadCount use only
+				// atomic operations (atomic_add, atomic_add64) with no
+				// spinlocks.  Calling them while holding victim->TryLockRunQueue
+				// does NOT violate lock ordering: they cannot block or acquire
+				// any spinlock that another CPU could hold while waiting for
+				// the victim run-queue lock.
 				stolen->MigrateTo(fCore);
 				stolen->fStolen = true;
 				fCore->IncrementTotalThreadCount();
@@ -906,6 +918,11 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	// will call _ChooseCPU(), which iterates fCPUSet.  If fCPUSet is still
 	// empty at that point it returns NULL and forces an unnecessary retry.
 	fCPUSet.SetBitAtomic(cpu->ID());
+	// Issue 17: fCPUSet.ClearBitAtomic(cpu->ID()) is called unconditionally
+	// at the TOP of the CPUHeap.Insert failure block (before the if/else on
+	// firstCPU), so BOTH the firstCPU and non-firstCPU rollback paths clear
+	// the bit correctly.  This comment documents that invariant explicitly so
+	// future refactors do not accidentally move the clear inside the if-branch.
 
 	// Issue 13 fix: assign a sequential local index to this CPU within the
 	// core.  Unlike cpu->ID() % CPUCount(), this is guaranteed unique even
@@ -977,18 +994,23 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		if (keyAtRemoval == B_IDLE_PRIORITY) {
 			atomic_add(&fIdleCPUCount, -1);
 		} else {
-			// CPU is active. Decrement idle count only if it is strictly
-			// less than the current CPU count (i.e. this CPU is not already
-			// counted as idle), using a CAS to avoid the TOCTOU window.
+			// Issue 2 fix: the original code used a single CAS and silently
+			// skipped the decrement on failure, allowing fIdleCPUCount to
+			// drift upward over repeated concurrent AddCPU races.  A retry
+			// loop ensures the decrement is always applied when the condition
+			// is satisfied, without busy-spinning indefinitely because
+			// concurrent AddCPU can only increase cpuCount (making the
+			// condition eventually false), bounding the retry count.
 			int32 idleCount = atomic_get(&fIdleCPUCount);
 			int32 cpuCount  = atomic_get(&fCPUCount);
-			// Only decrement if we consistently observe idleCount < cpuCount.
-			// If a concurrent AddCPU has already incremented both, the CAS
-			// on idleCount will fail and we skip the decrement correctly.
 			if (idleCount < cpuCount) {
-				atomic_test_and_set(&fIdleCPUCount, idleCount - 1, idleCount);
-				// On CAS failure (race) we conservatively skip the decrement;
-				// the idle count will self-correct when UpdatePriority runs.
+				while (atomic_test_and_set(&fIdleCPUCount,
+						idleCount - 1, idleCount) != idleCount) {
+					idleCount = atomic_get(&fIdleCPUCount);
+					cpuCount  = atomic_get(&fCPUCount);
+					if (idleCount >= cpuCount)
+						break;
+				}
 			}
 		}
 	}
@@ -1164,26 +1186,19 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch; // Load reset to 0
 
-		// Issue 7/22 fix: snapshot the baseline load INSIDE the loop.
-		// prevLoad must be the load at the START of the measurement epoch.
-		// The measurement epoch is updated atomically below.
-		int32 prevLoad = atomic_get(&fLoad);
-
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
-			// Issue 37 fix: re-read fLoad immediately after winning the CAS.
-			// The first-attempt prevLoad snapshot was taken before the CAS
-			// loop; concurrent AddLoad/RemoveLoad calls in that window can
-			// change fLoad so that (currentLoad - prevLoad) is computed
-			// against a stale baseline, producing a wrong delta.  Re-reading
-			// inside the CAS critical section gives the freshest baseline.
-			// Issue 25 fix: use a CAS retry loop to apply the delta.
-			// Re-reading fLoad and then using atomic_add (Issue 37) still had
-			// a race where fLoad could change between the re-read and the add.
-			// This CAS loop ensures the update is applied against the most
-			// current value of fLoad.
-			int32 currentFLoad = atomic_get(&fLoad);
+			// Issue 7 fix: snapshot prevLoad immediately after winning the
+			// outer CAS on fCombinedLoad, not before the loop.  The original
+			// code snapshotted prevLoad before the loop, so concurrent
+			// RemoveLoad(force=true) calls that ran between the snapshot and
+			// the CAS win produced a stale baseline, making delta wrong.
+			// Reading here minimises the race window to the CAS itself.
+			// currentFLoad starts equal to prevLoad; the inner retry loop
+			// updates it on CAS failure and correctly adds delta each time.
+			int32 prevLoad = atomic_get(&fLoad);
+			int32 currentFLoad = prevLoad;
 
 			// Issue 7 fix: add iteration limit to the inner CAS loop to
 			// prevent livelock under pathological contention. After
