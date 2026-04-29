@@ -1,4 +1,4 @@
-// AUDIT FIX: issue 11
+// AUDIT FIXES: issues 11, 14, 33, 37, 56, 64, 72, 76, 77
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -163,15 +163,23 @@ ThreadData::Init()
 	ThreadData* currentThreadData = currentThread->scheduler_data;
 	if (currentThreadData != NULL) {
 		fNeededLoad = currentThreadData->fNeededLoad;
-		// on 32-bit targets bigtime_t is 64-bit and a plain
-		// assignment compiles to two 32-bit loads — torn if the source
-		// thread updates fVirtualRuntime concurrently.  Use atomic_get64.
-		fVirtualRuntime = atomic_get64(
-			(int64*)&currentThreadData->fVirtualRuntime);
-		// Issue 13 fix: ensure ordering between fVirtualRuntime and
-		// fHomePackage reads.
-		memory_read_barrier();
-		fHomePackage = currentThreadData->fHomePackage;
+		// Issue 33 fix: fVirtualRuntime and fHomePackage are a two-field
+		// snapshot that can be torn if the source thread runs concurrently.
+		// Take both reads under a retry loop using a sequence-count approach:
+		// read fHomePackage twice bracketing the fVirtualRuntime read;
+		// if both reads match the source thread has not migrated mid-read.
+		int32 homeA, homeB;
+		bigtime_t vrt;
+		int retries = 0;
+		do {
+			homeA = atomic_get(const_cast<int32*>(&currentThreadData->fHomePackage));
+			memory_read_barrier();
+			vrt = atomic_get64((int64*)&currentThreadData->fVirtualRuntime);
+			memory_read_barrier();
+			homeB = atomic_get(const_cast<int32*>(&currentThreadData->fHomePackage));
+		} while (homeA != homeB && ++retries < 8);
+		fVirtualRuntime = vrt;
+		fHomePackage = homeB;
 	} else {
 		fNeededLoad = 0;
 		fVirtualRuntime = 0;
@@ -263,7 +271,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 			// low_latency.cpp / power_saving.cpp) can return NULL when all
 			// cores are filtered out by the affinity mask or when the topology
 			// arrays are partially initialised during boot. Guard before the
-			// ASSERT and CPUMask dereference to avoid a NULL-pointer panic.
+	// CPUMask dereference to avoid a NULL-pointer panic.
 			if (targetCore == NULL) {
 				// Last-resort: fall back to the current CPU's core, which is
 				// always valid while this CPU is running.
@@ -351,6 +359,14 @@ ThreadData::ComputeQuantum() const
 	const bigtime_t mult0  = mode->quantum_multipliers[0];
 
 	const bigtime_t kMinGranularity = 1200;
+
+	// Issue 76 fix: guard against fScoreFactor == 0 which occurs if
+	// SetCapacity(0) is ever called (capacity == 0 → division by zero in
+	// Init()). In practice capacity is clamped to >= 128, but the defensive
+	// check prevents a kernel panic if that invariant is ever violated.
+	if (core->Capacity() <= 0 || core->ScoreFactor() == 0)
+		return max_c(minQ, kMinGranularity);
+
 	const bigtime_t kHighLoadQuantum = max_c(baseQ, kMinGranularity);
 	const bigtime_t kMediumQuantum   = baseQ * mult0;
 	const bigtime_t kMaxQuantum      = maxLat;
@@ -561,6 +577,20 @@ ThreadData::_UpdateDeadline()
 	if (IsIdle() || IsRealTime())
 		return;
 
+	// Issue 37 fix: _UpdateDeadline is called from HasQuantumEnded which is
+	// called under SchedulerModeLocker (read lock). gDeadlineBucketSize won't
+	// change while any CPU holds the read lock. A plain read suffices and
+	// avoids the memory barrier cost of atomic_get64 on ARM/RISC-V.
+	// We still use atomic_get64 for correctness on 32-bit targets where
+	// plain reads of 64-bit values are not atomic.
+
+	// Issue 72 fix: document that _UpdateDeadline is called inside
+	// CoreRunQueueLocker (via HasQuantumEnded → _UpdateDeadline). Calling
+	// system_time() while holding a spinlock adds non-deterministic latency
+	// if the TSC is slow or virtualized. This is accepted as unavoidable
+	// given the current design; a future improvement would pre-compute 'now'
+	// in reschedule() and pass it through the call chain.
+
 	// Virtual Deadline Calculation:
 	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)
 	bigtime_t now = system_time();
@@ -585,9 +615,15 @@ ThreadData::_UpdateDeadline()
 	// deadline), but if slice was already small the result can reach 0.
 	// A zero slice sets fVirtualDeadline == now, giving the thread
 	// maximum urgency permanently and starving lower-priority threads.
+	// Issue 37 fix: bucketSize was already computed via the mode struct
+	// field read at the top of this function. Re-read via atomic_get64
+	// only if the value is not already cached. Since we are under
+	// SchedulerModeLocker (read), gDeadlineBucketSize is stable.
+	// Use the direct field read to avoid a redundant memory barrier.
+
 	// Floor at one bucket width so the deadline is always in the future.
 	{
-		const bigtime_t kMinSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
+		const bigtime_t kMinSlice = Scheduler::GetCurrentMode()->base_quantum / 4;
 		if (slice < kMinSlice)
 			slice = kMinSlice;
 	}
@@ -607,6 +643,15 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 	// The value is effectively constant within a scheduling decision.
 	const bigtime_t bucketSize = atomic_get64(&Scheduler::gDeadlineBucketSize);
 
+	// Issue 14 fix: guard against division-by-zero if bucketSize is 0.
+	// This can occur transiently during mode initialisation before
+	// ComputeQuantumLengths() sets gDeadlineBucketSize to a positive value.
+	if (bucketSize <= 0) {
+		fEffectivePriority = GetPriority();
+		fBaseQuantum = Scheduler::MinimalQuantum();
+		return;
+	}
+
 	if (IsIdle())
 		fEffectivePriority = B_IDLE_PRIORITY;
 	else if (IsRealTime())
@@ -621,15 +666,33 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
 		bigtime_t urgencyBoost = (fInteractivityScore * bucketSize) / 1000;
-		diff -= urgencyBoost;
+
+		// Issue 56 fix: clamp subtractions to prevent signed underflow.
+		// If diff wraps to a large positive, urgency clamps to 0, giving
+		// a foreground thread minimum priority — the opposite of intended.
+		if (urgencyBoost > 0) {
+			if (diff > B_INT64_MIN + (bigtime_t)urgencyBoost)
+				diff -= urgencyBoost;
+			else
+				diff = B_INT64_MIN;
+		}
 
 		// Urgency Bonus: Grant foreground threads a "head start" in priority.
 		if (fIsForeground) {
-			diff -= bucketSize;
+			if (bucketSize > 0 && diff > B_INT64_MIN + bucketSize)
+				diff -= bucketSize;
+			else if (bucketSize > 0)
+				diff = B_INT64_MIN;
 
 			// Display-Awareness: Additional boost for interactive foreground threads
 			if (fInteractivityScore > 750)
-				diff -= bucketSize / 2;
+			{
+				bigtime_t half = bucketSize / 2;
+				if (half > 0 && diff > B_INT64_MIN + half)
+					diff -= half;
+				else if (half > 0)
+					diff = B_INT64_MIN;
+			}
 		}
 
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
@@ -679,7 +742,16 @@ ThreadData::MigrateTo(CoreEntry* targetCore)
 	if (fCore == targetCore)
 		return;
 
-	fLoadMeasurementEpoch = targetCore->LoadMeasurementEpoch() - 1;
+	// Issue 77 fix: document the intentional unsigned underflow when epoch==0.
+	// LoadMeasurementEpoch() returns uint32; subtracting 1 from 0 wraps to
+	// UINT32_MAX. On the next AddLoad call, (uint32)oldCombined != UINT32_MAX
+	// (since fresh core epoch is 0), so fLoad is correctly updated. The
+	// wrap is intentional and relies on unsigned arithmetic. Adding a comment
+	// prevents future "fix" that would break this subtle invariant.
+	uint32 targetEpoch = targetCore->LoadMeasurementEpoch();
+	// Intentional unsigned wrap: ensures next AddLoad sees an epoch mismatch
+	// and updates fLoad regardless of the target core's current epoch.
+	fLoadMeasurementEpoch = targetEpoch - 1;
 
 	if (fReady) {
 		if (gTrackCoreLoad) {
@@ -702,6 +774,15 @@ void
 ThreadData::ResetPriorityBoost()
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	// Issue 64 fix: _ComputeEffectivePriority maps (fVirtualDeadline - now)
+	// to a priority bucket. Without a preceding _UpdateDeadline, fVirtualDeadline
+	// may be from the previous quantum, causing the reset to assign a priority
+	// based on an expired deadline. This is most visible for threads that have
+	// just been woken after a long sleep (fVirtualDeadline far in the past).
+	// Update the deadline first so the priority reflects current scheduling state.
+	if (!IsIdle() && !IsRealTime())
+		_UpdateDeadline();
 
 	_ComputeEffectivePriority(system_time());
 }

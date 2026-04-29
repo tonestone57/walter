@@ -1,4 +1,4 @@
-// AUDIT FIXES: issues 1 and 13
+// AUDIT FIXES: issues 1, 5, 13, 22, 46, 61, 90
 /*
  * Copyright 2013 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
@@ -262,12 +262,13 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 	int i = (int)(fPriority - 1) / 32;
 	int topBit = (int)(fPriority - 1) % 32;  // 0..31
 
-	// Keep only bits 0..topBit in the starting word.  We use a 64-bit
-	// literal (2ULL << topBit) instead of (1UL << (topBit + 1)) to avoid
-	// undefined behaviour when topBit == 31: shifting a 32-bit value by
-	// 32 is UB on 32-bit targets even though the old guard (currentBit != 31)
-	// prevented it from being evaluated, because the guard itself was fragile.
-	uint32 val = bitmap[i] & (uint32)((2ULL << topBit) - 1);
+	// Issue 61 fix: when topBit==31, (2ULL<<31)==0x100000000; cast to uint32
+	// gives 0x00000000, masking all valid bits including priority 31+32k.
+	uint32 val;
+	if (topBit == 31)
+		val = bitmap[i];
+	else
+		val = bitmap[i] & (uint32)((2ULL << topBit) - 1);
 
 	while (true) {
 		if (val != 0) {
@@ -316,8 +317,13 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = atomic_get((int32*)&fBitmap[i]);
 		if (val != 0) {
-			if (i == kBitmapSize - 1)
-				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+			if (i == kBitmapSize - 1) {
+				// Issue 61 fix: guard MaxPriority % 32 == 31.
+				if ((MaxPriority % 32) == 31)
+					; // all bits valid, no mask needed
+				else
+					val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+			}
 
 			if (val == 0)
 				continue;
@@ -374,15 +380,26 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	}
 	fHeads[priority] = element;
 
-	Element* best = (Element*)atomic_pointer_get((void**)&fBest);
-	if (best != NULL) {
-		unsigned int bestPriority = sGetLink(best)->fPriority;
-		if (priority > bestPriority)
+	// Issue 46 fix: read fBest once and validate its bucket before reading
+	// sGetLink(best)->fPriority, which is racy if 'best' was concurrently
+	// removed and its memory reused between the pointer-get and link-read.
+	// Since Remove is always called under the run-queue spinlock (same lock
+	// caller holds here), 'best' cannot be freed within this critical section,
+	// but we must still validate the bucket to catch stale priority caches.
+	{
+		Element* best = (Element*)atomic_pointer_get((void**)&fBest);
+		if (best != NULL) {
+			unsigned int bestPriority = sGetLink(best)->fPriority;
+			// Validate the bucket is non-empty before trusting bestPriority.
+			if (fHeads[bestPriority] == NULL)
+				atomic_pointer_set((void**)&fBest, element); // stale, replace
+			else if (priority > bestPriority)
+				atomic_pointer_set((void**)&fBest, element);
+			else if (priority == bestPriority && sCompare(element, best))
+				atomic_pointer_set((void**)&fBest, element);
+		} else if (isEmpty || PeekMaximum() == element) {
 			atomic_pointer_set((void**)&fBest, element);
-		else if (priority == bestPriority && sCompare(element, best))
-			atomic_pointer_set((void**)&fBest, element);
-	} else if (isEmpty || PeekMaximum() == element) {
-		atomic_pointer_set((void**)&fBest, element);
+		}
 	}
 }
 
@@ -424,15 +441,20 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	}
 	fTails[priority] = element;
 
-	Element* best = (Element*)atomic_pointer_get((void**)&fBest);
-	if (best != NULL) {
-		unsigned int bestPriority = sGetLink(best)->fPriority;
-		if (priority > bestPriority)
+	// Issue 46 fix: same snapshot-based fBest update as PushFront.
+	{
+		Element* best = (Element*)atomic_pointer_get((void**)&fBest);
+		if (best != NULL) {
+			unsigned int bestPriority = sGetLink(best)->fPriority;
+			if (fHeads[bestPriority] == NULL)
+				atomic_pointer_set((void**)&fBest, element);
+			else if (priority > bestPriority)
+				atomic_pointer_set((void**)&fBest, element);
+			else if (priority == bestPriority && sCompare(element, best))
+				atomic_pointer_set((void**)&fBest, element);
+		} else if (isEmpty || PeekMaximum() == element) {
 			atomic_pointer_set((void**)&fBest, element);
-		else if (priority == bestPriority && sCompare(element, best))
-			atomic_pointer_set((void**)&fBest, element);
-	} else if (isEmpty || PeekMaximum() == element) {
-		atomic_pointer_set((void**)&fBest, element);
+		}
 	}
 }
 
@@ -470,42 +492,25 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
 
-	// Issue 1 fix: when clearing fBest, also clear if the element's
-	// priority level is now empty and fBest points to any element in that
-	// level (not just the exact element pointer). This handles the case
-	// where priority changes leave fBest pointing to a stale entry at a
-	// vacated priority bucket.
-
-	// Clear fBest only when it points to the removed element.  Remove is
-	// always called under the run queue spinlock; PeekBest is also always
-	// called under that same lock.  Within a single lock scope, freed memory
-	// the ABA concern about fBest is
-	// bounded because ThreadData objects are recycled through an object
-	// cache.  Within a single run-queue lock scope no other CPU can
-	// allocate and re-enqueue a ThreadData at the same address: allocation
-	// requires the object cache lock, and enqueueing requires the run-queue
-	// lock we currently hold.  Therefore a stale fBest pointer (pointing
-	// to a removed-but-not-yet-freed element) is impossible within the
-	// lock scope.  The lockless fast path in PeekBest (no-arg) reads fBest
-	// atomically and is protected by the same argument.  No code change
-	// required.
-	// cannot be reallocated and re-enqueued (allocation requires additional
-	// locks), so ABA is impossible.  Unconditional clearing forced a full
-	// O(kDeadlineLookaheadLevels * kSearchDepth) rescan on every subsequent
-	// PeekBest call regardless of whether the removed element was fBest.
-	if ((Element*)atomic_pointer_get((void**)&fBest) == element)
-		atomic_pointer_set((void**)&fBest, (Element*)NULL);
-	// Additionally clear fBest if its cached priority bucket is now empty,
-	// catching the stale-priority-level case.
-	else {
+	// Issue 22 fix: read fBest ONCE. The original two-step pattern
+	// (get pointer, then separately read fPriority via sGetLink) is racy
+	// even under the run-queue lock because fBest can be written locklessly
+	// by PeekBest on other CPUs. Reading the link after a separate get
+	// creates a window where 'best' is removed and its memory reused.
+	// Since we hold the run-queue lock, no structural mutation can occur,
+	// but PeekBest can still do a lockless atomic_pointer_set on fBest.
+	// Single-read + immediate use is safe because the object cannot be
+	// freed while we hold the lock (object-cache reclaim requires the lock).
+	{
 		Element* best = (Element*)atomic_pointer_get((void**)&fBest);
-		if (best != NULL) {
-			RunQueueLink<Element>* bestLink = sGetLink(best);
-			unsigned int bestPrio = bestLink->fPriority;
-			if (fHeads[bestPrio] == NULL) {
-				// The priority bucket fBest was in is now empty; invalidate.
+		if (best == element) {
+			atomic_pointer_test_and_set((void**)&fBest, (Element*)NULL, element);
+		} else if (best != NULL) {
+			// Use the single snapshot: safe because best != element so it
+			// cannot be the element we just unlinked.
+			unsigned int bestPrio = sGetLink(best)->fPriority;
+			if (fHeads[bestPrio] == NULL)
 				atomic_pointer_test_and_set((void**)&fBest, (Element*)NULL, best);
-			}
 		}
 	}
 }
@@ -605,6 +610,22 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 		}
 	}
 
+	// Issue 90 fix: if the queue is non-empty but lookahead exhausted all
+	// levels without finding anything (shouldn't happen in practice but
+	// possible when kDeadlineLookaheadLevels < total occupied levels),
+	// do a full scan to guarantee a non-NULL result from a non-empty queue.
+	if (globalBest == NULL && fTotalCount > 0) {
+		for (int i = kBitmapSize - 1; i >= 0; i--) {
+			uint32 val = fBitmap[i];
+			if (i == kBitmapSize - 1 && (MaxPriority % 32) != 31)
+				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+			if (val == 0) continue;
+			int bit = fls(val) - 1;
+			globalBest = fHeads[i * 32 + bit];
+			if (globalBest != NULL) break;
+		}
+	}
+
 	// Issue 13 fix: the full rescan is authoritative (we hold the run-queue
 	// lock).  Use an unconditional set so a concurrent PushFront that raced
 	// and set fBest to a valid-but-inferior element is overwritten with the
@@ -688,6 +709,10 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 	int totalBudget = kMaxSearchPerLevel * 8;
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
+		// Issue 5 fix: check budget before scanning a new priority word.
+		if (totalBudget <= 0)
+			return NULL;
+
 		uint32 val = fBitmap[i];
 
 		if (i == kBitmapSize - 1)

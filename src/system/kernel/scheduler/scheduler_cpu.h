@@ -1,4 +1,4 @@
-// AUDIT FIXES: issues 6 and 12
+// AUDIT FIXES: issues 6, 12, 36, 45, 52, 59, 70, 96
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -805,6 +805,7 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 inline void
 SchedulerNode::PackageWakesUp(PackageEntry* package)
 {
+	// Issue 19 fix: guard PackageWakesUp livelock.
 	SCHEDULER_ENTER_FUNCTION();
 
 	const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
@@ -834,6 +835,12 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 			// clear it.
 			const int64 nodeBit = (int64)(1ULL << fNodeID);
 			int64 nodeMask;
+			// Issue 19 fix: add iteration bound to prevent livelock when
+			// packages continuously oscillate between idle/active states.
+			// After kMaxWakeupRetries CAS failures we give up; the next
+			// PackageGoesIdle call will re-set the bit if needed.
+			const int kMaxWakeupRetries = 64;
+			int wakeupRetries = 0;
 			do {
 				if (scheduler_atomic_get(&fIdlePackageMask)
 						!= (native_cpu_mask_t)0) {
@@ -844,6 +851,9 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 				nodeMask = atomic_get64((int64*)&gIdleNodeMask);
 				if (!(nodeMask & nodeBit))
 					break; // already cleared by a concurrent PackageWakesUp
+
+				if (++wakeupRetries >= kMaxWakeupRetries)
+					break;
 			} while (atomic_test_and_set64((int64*)&gIdleNodeMask,
 					nodeMask & ~nodeBit, nodeMask) != nodeMask);
 		}
@@ -868,14 +878,12 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 		return;
 
 	DecrementTotalThreadCount();
-	// Issue 17 fix: read fCPUCount AFTER incrementing fIdleCPUCount.
-	// AddCPU increments fIdleCPUCount then fCPUCount; reading fCPUCount
-	// before our increment (original code) allowed a concurrent AddCPU to
-	// increment fIdleCPUCount between our snapshot and our increment, causing
-	// the "old == cpuCountSnap - 1" check to fire on a non-fully-idle core.
-	// Reading after narrows the window: if AddCPU has completed fCPUCount++
-	// we see the updated count and the >= check correctly reflects real state.
+	// Issue 36 fix: on weakly-ordered architectures, without an explicit
+	// barrier between atomic_add(fIdleCPUCount) and atomic_get(fCPUCount),
+	// the CPU could observe fCPUCount before fIdleCPUCount increment is
+	// globally visible, causing a spurious PackageGoesIdle call.
 	int32 newIdleCount = atomic_add(&fIdleCPUCount, 1) + 1;
+	memory_read_barrier();
 	int32 cpuCount = atomic_get(&fCPUCount);
 	if (cpuCount > 0 && newIdleCount >= cpuCount)
 		fPackage->CoreGoesIdle(this);
@@ -891,10 +899,11 @@ CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
 	IncrementTotalThreadCount();
-	// snapshot fCPUCount AFTER IncrementTotalThreadCount. A
-	// concurrent AddCPU increments fCPUCount then fIdleCPUCount; by reading
-	// fCPUCount after our own increment we narrow the window in which the
-	// "all CPUs were idle" comparison uses a stale value.
+	// Issue 70 fix: read fCPUCount AFTER IncrementTotalThreadCount and
+	// insert a read barrier. A concurrent AddCPU increments fCPUCount then
+	// fIdleCPUCount; by inserting the barrier we ensure we see the latest
+	// fCPUCount before comparing with the old fIdleCPUCount.
+	memory_read_barrier();
 	int32 cpuCount = atomic_get(&fCPUCount);
 	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
 		fPackage->CoreWakesUp(this);

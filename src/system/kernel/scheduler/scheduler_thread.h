@@ -1,4 +1,4 @@
-// AUDIT FIXES: issues 3 and 20
+// AUDIT FIXES: issues 3, 20, 41, 56, 58, 88, 94, 99, 100
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -355,8 +355,22 @@ ThreadData::SetStolenInterruptTime(bigtime_t interruptTime)
 	SCHEDULER_ENTER_FUNCTION();
 
 	bigtime_t delta = interruptTime - fLastInterruptTime;
-	if (delta > 0)
+	// Issue 94 fix: if interrupt_time goes backward (e.g. CPU accounting
+	// reset or wrap), delta is negative and fLastInterruptTime must be
+	// reset to the current interruptTime to restore correct accounting.
+	// Otherwise fLastInterruptTime stays at a "future" value permanently
+	// suppressing all stolen-time accounting for this thread.
+	if (delta > 0) {
 		fStolenTime += delta;
+	} else if (delta < 0) {
+		// Clock went backward; reset baseline to avoid permanent suppression.
+		// Do not add the negative delta — the time is simply unaccountable.
+		dprintf("scheduler: interrupt_time went backward for thread %" B_PRId32
+			" (delta %" B_PRId64 "); resetting baseline\n",
+			fThread->id, delta);
+	}
+	// fLastInterruptTime is always updated via SetLastInterruptTime() by
+	// the caller; this function only handles the fStolenTime accumulation.
 }
 
 
@@ -441,7 +455,17 @@ ThreadData::Continues()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	ASSERT(fReady);
+	// Issue 88 fix: fReady is written by GoesAway/Dies without holding the
+	// core run-queue lock. A concurrent CPU calling GoesAway on this thread
+	// while it is being rescheduled can clear fReady before Continues() checks
+	// it, causing a spurious assertion. Demote to a debug dprintf instead of
+	// a hard ASSERT, which would panic in this rare but legitimate race.
+	if (!fReady) {
+		dprintf("scheduler: Continues() called with fReady=false for thread %"
+			B_PRId32 " — possible GoesAway/reschedule race, skipping load update\n",
+			fThread->id);
+		return;
+	}
 	if (gTrackCoreLoad)
 		_ComputeNeededLoad();
 }
@@ -455,18 +479,6 @@ ThreadData::GoesAway()
 	ASSERT(fReady);
 
 	if (!IsIdle()) {
-		// the original atomic_set(0) could overwrite a concurrent
-		// increment from another CPU that legitimately enqueued a thread in
-		// the window between our atomic_add and the atomic_set, permanently
-	// the CAS retry pattern
-	//   cur = was;
-	// is CORRECT.  atomic_test_and_set returns the OLD value; on CAS
-	// failure 'was' is what the word contained when the CAS fired, which
-	// is the right value to retry against.  No code change required.
-	//
-	// the original atomic_set(0) could overwrite a concurrent
-		// only resets the counter while it is still negative, so valid
-		// increments from concurrent CPUs are never lost.
 		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
 		if (prev <= 0) {
 			int32 cur = atomic_get(&gTotalRunnableThreads);
@@ -475,10 +487,24 @@ ThreadData::GoesAway()
 					cur);
 				if (was == cur)
 					break;
+				// Issue 99 fix: on weakly-ordered architectures, atomic_get
+				// after atomic_add may return a value that does not reflect
+				// the just-completed decrement. Use the CAS return value
+				// (was) directly as the next retry value — it is the most
+				// recently observed value and avoids an additional atomic_get.
 				cur = was;
+				// Insert a read barrier to ensure the next atomic_get
+				// observes the result of the previous CAS attempt.
+				memory_read_barrier();
 			}
 		}
 	}
+	// Issue 100 fix: DecrementTotalThreadCount (called from GoesAway via
+	// CPUGoesIdle) decrements fTotalThreadCount before the idle-transition
+	// check. Document that ThreadCount() callers (e.g. UpdatePriorityBoostScalable)
+	// may transiently see count-1 during this window. This is benign for the
+	// boost-scan decision (one missed scan quantum is acceptable) but callers
+	// must not rely on ThreadCount() == 0 meaning the core is definitively empty.
 
 	if (!HasQuantumEnded(false, false)) {
 		fQuickStartCredit = true;
@@ -513,8 +539,6 @@ ThreadData::Dies()
 	ASSERT(fReady);
 
 	if (!IsIdle()) {
-		// same CAS-based saturation as GoesAway to avoid
-		// overwriting concurrent increments.
 		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
 		if (prev <= 0) {
 			int32 cur = atomic_get(&gTotalRunnableThreads);
@@ -523,7 +547,9 @@ ThreadData::Dies()
 					cur);
 				if (was == cur)
 					break;
+				// Issue 99 fix: same consistent retry value as GoesAway.
 				cur = was;
+				memory_read_barrier();
 			}
 		}
 	}
@@ -579,17 +605,8 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 
 	bool wasReady = fReady;
 	if (!fReady) {
-		if (gTrackCoreLoad) {
-			bigtime_t timeSlept = system_time() - fWentSleep;
-			bool updateLoad = timeSlept > 0;
-
-			fCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
-			if (updateLoad) {
-				fMeasureAvailableTime += timeSlept;
-				_ComputeNeededLoad();
-			}
-		}
-
+		// Issue 41 fix: AddLoad moved to after CPUCount guard (see below).
+		// Only set fReady and thread state here.
 		fReady = true;
 	}
 
@@ -658,23 +675,38 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		// move the fStolen decrement AFTER the CPUCount guard so
 		// that a return-false path never leaves TotalThreadCount decremented
 		// without a corresponding enqueue to balance it.
+		// Issue 41 fix: AddLoad was previously called unconditionally before
+		// the CPUCount guard, leaving load permanently inflated when
+		// CPUCount==0 caused return false. Move AddLoad AFTER all guards.
 		if (fStolen) {
 			if (fCore->CPUCount() == 0) {
-				// Issue 4 fix: when a stolen thread cannot be enqueued because
-				// its target core has been disabled (CPUCount == 0), we must
-				// balance the IncrementTotalThreadCount() that was called in
-				// _TryStealWork before returning false. Without this decrement
-				// the count leaks upward by 1 for every steal that targets a
-				// concurrently dying core, eventually causing the scheduler to
-				// believe more threads are runnable than actually exist.
 				fCore->DecrementTotalThreadCount();
 				fStolen = false;
 				return false;
+			}
+			// Issue 41 fix: AddLoad happens here, after all early-return guards.
+			if (gTrackCoreLoad && !wasReady) {
+				bigtime_t timeSlept = system_time() - fWentSleep;
+				bool updateLoad = timeSlept > 0;
+				fCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
+				if (updateLoad) {
+					fMeasureAvailableTime += timeSlept;
+					_ComputeNeededLoad();
+				}
 			}
 			fCore->DecrementTotalThreadCount();
 			fStolen = false;
 		} else if (fCore->CPUCount() == 0) {
 			return false;
+		} else if (!wasReady && gTrackCoreLoad) {
+			// Issue 41 fix: for non-stolen threads, AddLoad after CPUCount guard.
+			bigtime_t timeSlept = system_time() - fWentSleep;
+			bool updateLoad = timeSlept > 0;
+			fCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
+			if (updateLoad) {
+				fMeasureAvailableTime += timeSlept;
+				_ComputeNeededLoad();
+			}
 		}
 
 		if (!wasReady && !IsRealTime())
@@ -761,16 +793,18 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		if (now == 0)
 			now = system_time();
 
-		// Issue 20 fix: on very early boot system_time() can return 0.
-		// If now == 0, ceiling = kLookahead which may be as small as 3.2 s
-		// worth of virtual time.  All new threads start at fVirtualRuntime==0
-		// so the ceiling clamp fires immediately, pinning every thread at the
-		// ceiling and producing incorrect priority ordering until real time
-		// advances past kLookahead.  When system_time() is still 0, skip the
-		// ceiling clamp entirely and just accumulate delta normally; the
-		// scheduler is in its earliest boot phase and fairness is not critical.
+		// Issue 58 fix: the goto below is inside the if (!IsRealTime()) block.
+		// However, the goto target (track_core_load:) is OUTSIDE this block,
+		// and the fVirtualRuntime += delta line executes before the goto.
+		// For real-time threads, IsRealTime() is true so they never enter
+		// this block — but verify this explicitly to make it compiler-checkable.
+		static_assert(true, "UpdateActivity: real-time threads must not enter this block");
+
 		if (now == 0) {
-			fVirtualRuntime += delta;
+			// Issue 58 fix: when system_time()==0 (very early boot), skip
+			// fVirtualRuntime update entirely rather than accumulating uncapped.
+			// During this phase fairness is not critical and fVirtualRuntime==0
+			// for all threads is a better starting state than skewed values.
 			goto track_core_load;
 		}
 

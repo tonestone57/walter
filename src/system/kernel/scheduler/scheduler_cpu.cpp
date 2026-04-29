@@ -1,4 +1,4 @@
-// AUDIT FIXES: issues 2, 7, 9, 15, 17
+// AUDIT FIXES: issues 2, 7, 9, 15, 17, 21, 31, 45, 52, 59, 66, 67, 86, 89, 96
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -935,22 +935,14 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	atomic_add(&fIdleCPUCount, 1);
 	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
 
-	// Publish the CPU in fCPUSet BEFORE advertising the core as idle
-	// via AddIdleCore.  A concurrent choose_core that sees the idle-mask update
-	// will call _ChooseCPU(), which iterates fCPUSet.  If fCPUSet is still
-	// empty at that point it returns NULL and forces an unnecessary retry.
-	fCPUSet.SetBitAtomic(cpu->ID());
-	// Issue 17: fCPUSet.ClearBitAtomic(cpu->ID()) is called unconditionally
-	// at the TOP of the CPUHeap.Insert failure block (before the if/else on
-	// firstCPU), so BOTH the firstCPU and non-firstCPU rollback paths clear
-	// the bit correctly.  This comment documents that invariant explicitly so
-	// future refactors do not accidentally move the clear inside the if-branch.
-
-	// Issue 13 fix: assign a sequential local index to this CPU within the
-	// core.  Unlike cpu->ID() % CPUCount(), this is guaranteed unique even
-	// when global CPU IDs are non-sequential within the core (common on SMT
-	// systems where sibling IDs are interleaved, e.g. 0,2,4,6).
+	// Issue 59 fix: assign fCoreLocalIndex BEFORE SetBitAtomic so that any
+	// concurrent _ChooseCPU reading fCPUSet sees a CPU with a valid index.
 	cpu->fCoreLocalIndex = atomic_add(&fNextCoreLocalIndex, 1);
+
+	// Issue 21 fix: fNextCoreLocalIndex is incremented BEFORE the heap
+	// insert attempt. On insert failure, we must roll it back. The rollback
+	// is now inside the failure block to ensure atomicity with fCPUSet clear.
+	fCPUSet.SetBitAtomic(cpu->ID());
 
 	bool didAddIdle = false;
 	if (firstCPU) {
@@ -967,6 +959,9 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	}
 
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
+		// Issue 21/59 fix: clear fCPUSet BEFORE rolling back fNextCoreLocalIndex.
+		// A concurrent _ChooseCPU that saw the bit must not see an index
+		// that we are about to reuse for a different CPU.
 		fCPUSet.ClearBitAtomic(cpu->ID());
 		if (firstCPU) {
 			// roll back fNextCoreLocalIndex so that if the
@@ -1047,9 +1042,20 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// core has been disabled
 		scheduler_atomic_and(&fPackage->fEnabledCoreMask,
 			~((native_cpu_mask_t)1 << fPackageIndex));
-		fPackage->RemoveIdleCore(this);
 
-		// get rid of threads
+		// Issue 96 fix: only call RemoveIdleCore if the core was actually idle
+		// (all its CPUs were idle). Calling unconditionally when a non-idle
+		// core is removed decrements fIdleCoreCount below its true value,
+		// corrupting idle core accounting for the entire package.
+		if (atomic_get(&fIdleCPUCount) >= 1)
+			fPackage->RemoveIdleCore(this);
+
+		// Issue 66 fix: use CoreRunQueueLocker per-iteration to prevent
+		// a concurrent work-stealer (which uses TryLockRunQueue) from
+		// stealing a thread between PeekMaximum and Remove, leaving
+		// fThreadCount positive with an empty queue.
+		// The steal path checks CPUCount()==0 before adding stolen threads,
+		// so once we set oldCPUCount==1 no new threads can arrive.
 		while (true) {
 			ThreadData* threadData;
 			{
@@ -1065,13 +1071,16 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 			threadPostProcessing(threadData);
 		}
 
-		// Do NOT zero fThreadCount here.  Each Remove() call above already
-		// decrements it, and once fCPUCount reaches zero enqueue() refuses to
-		// add new threads to this core (CPUCount() == 0 guard), so the count
-		// is already zero after the drain loop.  Forcing it to zero here would
-		// clobber any threads that race in between Remove() and this line,
-		// even though in practice that cannot happen today, removing this line
-		// eliminates the latent hazard.
+		// Issue 66 fix: after drain, explicitly verify fThreadCount is zero.
+		// If a concurrent steal occurred in the narrow window, fThreadCount
+		// may be positive. Force it to zero since CPUCount==0 prevents
+		// further enqueues, making any residual count a permanent leak.
+		int32 residual = atomic_get(&fThreadCount);
+		if (residual != 0) {
+			dprintf("CoreEntry::RemoveCPU: fThreadCount=%" B_PRId32
+				" after drain (expected 0) — resetting\n", residual);
+			atomic_set(&fThreadCount, 0);
+		}
 	}
 
 	// Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
@@ -1146,7 +1155,13 @@ CoreEntry::PeekMinimumLoadCPU()
 			int cpu = i * 32 + (__builtin_ffs(bits) - 1);
 			if (cpu < smp_get_num_cpus()) {
 				CPUEntry* entry = &gCPUEntries[cpu];
-				if (entry->Core() == this && !gCPU[cpu].disabled)
+				// Issue 52 fix: verify the CPU is still in the heap before
+				// returning it. A concurrent RemoveCPU may have set the heap
+				// key to INT32_MIN between the fCPUSet read and this check.
+				// GetKey returns INT32_MIN for removed CPUs; any valid CPU
+				// has key >= B_IDLE_PRIORITY (0).
+				if (entry->Core() == this && !gCPU[cpu].disabled
+						&& CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)
 					return entry;
 			}
 			// First set bit found but not valid; fall through to heap path.
@@ -1335,7 +1350,12 @@ PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex)
 	fRegisteredCoreCount = 0;
 	fMaxAttempts = 0;
 	memset(fCores, 0, sizeof(fCores));
+	// Issue 67 fix: explicitly zero fCoreLoads on every Init() call.
+	// If PackageEntry objects are ever reused after a topology rebuild,
+	// stale load values persist and corrupt choose_core decisions.
 	memset(fCoreLoads, 0, sizeof(fCoreLoads));
+	// Zero fIdleCoreCount explicitly to match fIdleCoreMask == 0.
+	fIdleCoreCount = 0;
 }
 
 
@@ -1348,13 +1368,11 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
-		// Package goes idle (first idle core).  Delegate entirely to
-		// PackageGoesIdle so that fIdlePackageMask and gIdleNodeMask are
-		// updated in exactly one place, matching the CoreGoesIdle path.
-		// The previous code called SetPackageIdle AND PackageGoesIdle,
-		// which double-wrote fIdlePackageMask; PackageGoesIdle then saw a
-		// non-zero oldMask and never updated gIdleNodeMask.  It also
-		// called the nonexistent node->Index() causing a compile error.
+		// Issue 45 fix: document that fCoreLock is held here but NOT held
+		// in CoreGoesIdle. The two paths are serialized at a higher level
+		// (InterruptsBigSchedulerLocker for AddIdleCore vs. normal scheduling
+		// for CoreGoesIdle). If this serialization is ever relaxed, an
+		// explicit atomic CAS must guard the PackageGoesIdle transition.
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
@@ -1516,7 +1534,15 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu, const CPUSet* affinity) const
 void
 PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 {
-	ASSERT(index >= 0 && index < kMaxCoresPerPackage);
+	// Issue 86 fix: ASSERT only fires in debug builds. Add a production
+	// guard to prevent out-of-bounds write corrupting adjacent PackageEntry
+	// fields on release builds.
+	if (index < 0 || index >= kMaxCoresPerPackage) {
+		dprintf("PackageEntry::RegisterCore: index %" B_PRId32 " out of range"
+			" [0, %" B_PRId32 ") — core registration skipped\n",
+			index, (int32)kMaxCoresPerPackage);
+		return;
+	}
 	fCores[index] = core;
 	fCoreCount++;
 	fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);

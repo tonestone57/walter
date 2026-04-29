@@ -1,4 +1,4 @@
-// AUDIT FIXES: issues 10 and 19
+// AUDIT FIXES: issues 3, 10, 16, 19, 39, 47, 69, 84, 91
 /*
  * Copyright 2013-2014, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -434,17 +434,24 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 					"for thread %" B_PRId32 "\n", enqueueAttempts, thread->id);
 				return false;
 			}
-		} else
-			return true;
+		} else {
+			// Issue 16/84 fix: DO NOT return here. The original early return
+			// made all post-loop code (listener notification and IPI dispatch)
+			// permanently unreachable dead code. As a result, no IPI was ever
+			// sent to wake a sleeping target CPU, causing indefinite scheduling
+			// delays until the target CPU's quantum timer fired naturally.
+			// Break out of the loop and fall through to IPI dispatch.
+			break;
+		}
 	} while (true);
 
+	// Reached only on successful enqueue (break above).
 	// Issue 20 fix: call scheduler_update_interaction_state() while NOT
-	// holding any run-queue locks.  The Enqueue call above now returns
-	// updateInteraction=true if it identified a foreground thread.
+	// holding any run-queue locks.
 	if (updateInteraction)
 		scheduler_update_interaction_state();
 
-	// notify listeners
+	// Issue 84 fix: notify listeners — was unreachable before this fix.
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
 		thread);
 
@@ -457,13 +464,15 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		if (targetCPU->ID() == smp_get_current_cpu()) {
 			gCPU[targetCPU->ID()].invoke_scheduler = true;
 		} else {
-			// Only send IPI if one isn't already in flight for this CPU
+			// Issue 84 fix: this IPI dispatch was unreachable before; now
+			// correctly wakes the target CPU when a thread is enqueued.
 			if (targetCPU->SetReschedulePending()) {
 				smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
 					NULL, SMP_MSG_FLAG_ASYNC);
 			}
 		}
 	}
+	return true;
 }
 
 
@@ -967,11 +976,16 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		{
 			CoreCPUHeapLocker heapLocker(core);
 			cpu->Start();
-			// clear the disabled flag BEFORE AddCPU so that
-			// any concurrent enqueue() → UpdatePriority() call that races
-			// the AddCPU does not hit the ASSERT(!disabled || priority==IDLE).
-			gCPU[cpuID].disabled = false;
+			// Issue 39 fix: AddCPU inserts the CPU into the heap. A concurrent
+			// enqueue() that races between disabled=false and the heap insert
+			// can call UpdatePriority on a CPU with no heap link, panicking.
+			// Fix: complete AddCPU FIRST while disabled is still true, then
+			// clear the disabled flag and publish the CPU via gCPUEnabled.
 			core->AddCPU(cpu);
+			// Issue 69 fix: set disabled=false and SetBitAtomic atomically
+			// under CoreCPUHeapLocker. GetCPUMask reads gCPUEnabled; enqueue
+			// checks !gCPU[id].disabled. Both must agree simultaneously.
+			gCPU[cpuID].disabled = false;
 			gCPUEnabled.SetBitAtomic(cpuID);
 		}
 		cpu->UnlockScheduler();
@@ -1887,16 +1901,20 @@ scheduler_on_team_foreground_changed(Team* team)
 			}
 
 			if (thread != NULL) {
-				// More threads remain; remember the last one we collected
-				// so the next batch starts from its successor.
 				batchStart = batch[count - 1];
-				// Issue 8 fix: acquire a BReference to the cursor BEFORE
-				// releasing the list lock so the thread cannot be destroyed
-				// between the unlock and the next GetNext() call.
-			// Issue 7 fix: Remove redundant AcquireReference() to prevent leak.
-			// SetTo(..., true) already assumes it is taking ownership of a
-			// reference.
+				// Issue 3 fix: batchStart already has a reference from the
+				// AcquireReference() call in the collection loop above (stored
+				// in batch[count-1]). SetTo(batchStart, true) claims ownership
+				// of that reference — do NOT call AcquireReference() again or
+				// we leak one reference per batch boundary.
+				// The batch[count-1] entry's reference is "donated" to
+				// batchStartRef here; it is released when batchStartRef goes
+				// out of scope or is reset at the next batch start.
 				batchStartRef.SetTo(batchStart, true);
+				// Issue 47 fix: remove the batch[count-1] entry from the
+				// batch array to prevent processing it twice — once in this
+				// batch and once as the cursor in the next batch's GetNext().
+				count--;
 				moreBatches = true;
 			}
 		} // thread_list_lock released here
@@ -1904,8 +1922,16 @@ scheduler_on_team_foreground_changed(Team* team)
 		// Second pass: process collected threads without holding list lock.
 		for (int i = 0; i < count; i++) {
 			Thread* thread = batch[i];
-			BReference<Thread> ref(thread, true); // releases on scope exit
+			BReference<Thread> ref(thread, true);
 
+			// Issue 91 fix: document scheduler_lock ordering hazard.
+			// enqueue() → choose_core() → search_local_node() → GetRandom()
+			// acquires no scheduler_lock, so holding it here is safe for
+			// current code. However, enqueue() → Enqueue() → CoreCPULocker
+			// acquires fCPULock; if any path between CoreCPULocker and
+			// scheduler_lock is added in future, deadlock will occur.
+			// Consider releasing scheduler_lock before calling enqueue() in
+			// a future refactor to eliminate this ordering constraint.
 			InterruptsSpinLocker locker(thread->scheduler_lock);
 			ThreadData* threadData = thread->scheduler_data;
 
