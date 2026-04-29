@@ -797,9 +797,7 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		// However, the goto target (track_core_load:) is OUTSIDE this block,
 		// and the fVirtualRuntime += delta line executes before the goto.
 		// For real-time threads, IsRealTime() is true so they never enter
-		// this block — but verify this explicitly to make it compiler-checkable.
-		static_assert(true, "UpdateActivity: real-time threads must not enter this block");
-
+		// this block.
 		if (now == 0) {
 			// Issue 58 fix: when system_time()==0 (very early boot), skip
 			// fVirtualRuntime update entirely rather than accumulating uncapped.

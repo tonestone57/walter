@@ -271,7 +271,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 			// low_latency.cpp / power_saving.cpp) can return NULL when all
 			// cores are filtered out by the affinity mask or when the topology
 			// arrays are partially initialised during boot. Guard before the
-	// CPUMask dereference to avoid a NULL-pointer panic.
+			// CPUMask dereference to avoid a NULL-pointer panic.
 			if (targetCore == NULL) {
 				// Last-resort: fall back to the current CPU's core, which is
 				// always valid while this CPU is running.
@@ -583,7 +583,7 @@ ThreadData::_UpdateDeadline()
 	// avoids the memory barrier cost of atomic_get64 on ARM/RISC-V.
 	// We still use atomic_get64 for correctness on 32-bit targets where
 	// plain reads of 64-bit values are not atomic.
-
+	//
 	// Issue 72 fix: document that _UpdateDeadline is called inside
 	// CoreRunQueueLocker (via HasQuantumEnded → _UpdateDeadline). Calling
 	// system_time() while holding a spinlock adds non-deterministic latency
