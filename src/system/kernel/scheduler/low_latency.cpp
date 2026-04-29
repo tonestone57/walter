@@ -623,7 +623,11 @@ rebalance(const ThreadData* threadData)
 	ASSERT(difference > 0);
 
 	int32 cpuCount = core->CPUCount();
-	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
+	// Issue 4 fix: GetLoad() returns the thread's individual CPU load
+	// contribution, not the total core load. Dividing again by cpuCount
+	// produces a value cpuCount times too small, effectively disabling
+	// migration on SMT systems. Use GetLoad() directly.
+	int32 threadLoad = threadData->GetLoad();
 
 	// Check if migrating the thread would make the scores closer.
 	// We compare the thread's weight on the current core vs its weight on the

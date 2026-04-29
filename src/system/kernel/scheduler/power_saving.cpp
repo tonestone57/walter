@@ -685,7 +685,11 @@ rebalance(const ThreadData* threadData)
 
 	int32 coreScore = core->GetScore();
 	int32 cpuCount = core->CPUCount();
-	int32 threadLoad = cpuCount > 0 ? threadData->GetLoad() / cpuCount : 0;
+	// Issue 4/93 fix: GetLoad() returns the thread's individual CPU load
+	// contribution, not the total core load. Dividing again by cpuCount
+	// produces a value cpuCount times too small, effectively disabling
+	// migration on SMT systems. Use GetLoad() directly.
+	int32 threadLoad = threadData->GetLoad();
 	if (coreScore > kHighLoad) {
 		int32 nodeID = -1;
 		if (core->Package()->Node() != NULL)

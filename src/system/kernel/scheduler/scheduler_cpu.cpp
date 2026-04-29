@@ -895,9 +895,16 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 	CPUSet enabledSnapshot;
 	{
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+		// Issue 27 fix: CPUSet::Bits() returns a pointer to uint32 words.
+		// Casting to int32* for atomic_get is required by the atomic API
+		// but assumes 4-byte alignment. Add a static_assert to verify
+		// alignment at compile time, preventing silent UB on ARM with
+		// packed structs.
+		static_assert(alignof(CPUSet) >= 4,
+			"CPUSet must be 4-byte aligned for atomic_get");
 		for (int32 w = 0; w < kWords; w++) {
 			int32* ptr = const_cast<int32*>(
-				(const int32*)gCPUEnabled.Bits() + w);
+				reinterpret_cast<const int32*>(gCPUEnabled.Bits()) + w);
 			enabledSnapshot.SetWord(w, (uint32)atomic_get(ptr));
 		}
 	}
@@ -910,12 +917,17 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 		if (td->IsIdle())
 			return false;
 
-		// Use pre-snapshotted enabled mask to avoid per-element atomic reads.
-		CPUSet effective = td->GetThread()->cpumask.And(enabledSnapshot);
-		if (effective.IsEmpty() || effective.GetBit(thiefCPU))
-			return true;
-
-		return false;
+		// Issue 81 fix: check cpumask semantics correctly.
+		// An all-zero cpumask means unconstrained (no affinity restriction).
+		// A non-zero cpumask is a positive affinity set.
+		const CPUSet& cpumask = td->GetThread()->cpumask;
+		if (cpumask.IsEmpty()) {
+			// Unconstrained: can run on any enabled CPU including thiefCPU.
+			return enabledSnapshot.GetBit(thiefCPU);
+		}
+		// Constrained: must be allowed on thiefCPU AND thiefCPU must be enabled.
+		return cpumask.GetBit(thiefCPU)
+			&& enabledSnapshot.GetBit(thiefCPU);
 	});
 
 	if (thread != NULL) {
