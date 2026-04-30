@@ -595,7 +595,7 @@ ThreadData::_UpdateDeadline()
 	if (IsIdle() || IsRealTime())
 		return;
 
-	// Issue 6/37 fix fix: _UpdateDeadline is called from HasQuantumEnded which is
+	// Issue 6/37 fix: _UpdateDeadline is called from HasQuantumEnded which is
 	// called under SchedulerModeLocker (read lock). gDeadlineBucketSize won't
 	// change while any CPU holds the read lock. A plain read suffices and
 	// avoids the memory barrier cost of atomic_get64 on ARM/RISC-V.
@@ -633,7 +633,7 @@ ThreadData::_UpdateDeadline()
 	// deadline), but if slice was already small the result can reach 0.
 	// A zero slice sets fVirtualDeadline == now, giving the thread
 	// maximum urgency permanently and starving lower-priority threads.
-	// Issue 6/37 fix fix: bucketSize was already computed via the mode struct
+	// Issue 6/37 fix: bucketSize was already computed via the mode struct
 	// field read at the top of this function. Re-read via atomic_get64
 	// only if the value is not already cached. Since we are under
 	// SchedulerModeLocker (read), gDeadlineBucketSize is stable.
