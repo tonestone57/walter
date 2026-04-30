@@ -649,7 +649,6 @@ rebalance(const ThreadData* threadData)
 	int32 difference = coreScore - otherScore - threshold;
 	ASSERT(difference > 0);
 
-	int32 cpuCount = core->CPUCount();
 	// Issue 4 fix: GetLoad() returns the thread's individual CPU load
 	// contribution, not the total core load. Dividing again by cpuCount
 	// produces a value cpuCount times too small, effectively disabling
