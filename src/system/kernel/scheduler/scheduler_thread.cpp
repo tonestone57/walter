@@ -322,6 +322,11 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	if (targetCore == NULL || targetCore->CPUCount() == 0) {
 		for (int32 i = 0; i < smp_get_num_cpus(); i++) {
 			if (!gCPU[i].disabled) {
+				// Issue 23 fix: verify CPU affinity mask before selecting.
+				// Without this check a thread pinned to CPUs {2,3} could
+				// be assigned to CPU 0 during hot-unplug, violating affinity.
+				if (!mask.IsEmpty() && !mask.GetBit(i))
+					continue;
 				targetCPU = CPUEntry::GetCPU(i);
 				targetCore = targetCPU->Core();
 				if (targetCore != NULL && targetCore->CPUCount() > 0)
@@ -541,9 +546,14 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 		// Callers MUST NOT hold any run-queue spinlock when invoking this
 		// function; doing so inverts the lock ordering (Core/CPU queue lock
 		// → thread scheduler_lock) and risks deadlock.
-		// Issue 12 fix: correctly document and assert interrupts are disabled.
+		// Issue 50 fix: DonateTimesliceTo is only called with interrupts
+		// disabled. InterruptsSpinLocker calls disable_interrupts() again,
+		// then restore_interrupts() in its destructor — which would re-enable
+		// interrupts prematurely if the outer context expects them disabled.
+		// Use plain SpinLocker (no interrupt manipulation) since interrupts
+		// are already disabled by the caller's contract.
 		ASSERT(!are_interrupts_enabled());
-		InterruptsSpinLocker locker(beneficiary->scheduler_lock);
+		SpinLocker locker(beneficiary->scheduler_lock);
 		beneficiaryData->fStolenTime += timeLeft;
 	}
 
@@ -562,8 +572,16 @@ ThreadData::_ComputeNeededLoad()
 
 	int32 oldLoad = compute_load(fLastMeasureAvailableTime,
 		fMeasureAvailableActiveTime, fNeededLoad, system_time());
-	if (oldLoad < 0 || oldLoad == fNeededLoad)
-		return;
+	// Issue 83 fix: compute_load updates fLastMeasureAvailableTime (advancing
+	// the measurement window) even when it returns -1 (insufficient elapsed
+	// time). If we return early on oldLoad < 0, fNeededLoad is not updated
+	// but the window has advanced, causing the next call to see a shorter
+	// window with inflated apparent activity. Only skip the ChangeLoad call
+	// on -1 return; the window advancement is accepted as-is.
+	if (oldLoad < 0)
+		return; // measurement window too short; fNeededLoad unchanged
+	if (oldLoad == fNeededLoad)
+		return; // no change
 
 	fCore->ChangeLoad(fNeededLoad - oldLoad);
 }
@@ -577,7 +595,7 @@ ThreadData::_UpdateDeadline()
 	if (IsIdle() || IsRealTime())
 		return;
 
-	// Issue 37 fix: _UpdateDeadline is called from HasQuantumEnded which is
+	// Issue 6/37 fix fix: _UpdateDeadline is called from HasQuantumEnded which is
 	// called under SchedulerModeLocker (read lock). gDeadlineBucketSize won't
 	// change while any CPU holds the read lock. A plain read suffices and
 	// avoids the memory barrier cost of atomic_get64 on ARM/RISC-V.
@@ -615,7 +633,7 @@ ThreadData::_UpdateDeadline()
 	// deadline), but if slice was already small the result can reach 0.
 	// A zero slice sets fVirtualDeadline == now, giving the thread
 	// maximum urgency permanently and starving lower-priority threads.
-	// Issue 37 fix: bucketSize was already computed via the mode struct
+	// Issue 6/37 fix fix: bucketSize was already computed via the mode struct
 	// field read at the top of this function. Re-read via atomic_get64
 	// only if the value is not already cached. Since we are under
 	// SchedulerModeLocker (read), gDeadlineBucketSize is stable.

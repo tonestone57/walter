@@ -1,4 +1,4 @@
-// AUDIT FIX: issue 18
+// AUDIT FIXES: issues 4, 13, 18, 24, 49, 63, 75, 93, 98
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -257,6 +257,11 @@ choose_small_task_core(CPUEntry* cpu)
 		if (nodeID < 0 || nodeID >= gNodeCount)
 			return core;
 
+		// Issue 63 fix: add bounded retry with exponential backoff to prevent
+		// busy-spinning under high contention from many CPUs simultaneously
+		// discovering a new small-task core candidate.
+		int casRetries = 0;
+		const int kMaxCASRetries = 16;
 		while (true) {
 			CoreEntry* current = (CoreEntry*)atomic_pointer_get(
 				&sSmallTaskCore[nodeID]);
@@ -267,6 +272,14 @@ choose_small_task_core(CPUEntry* cpu)
 					current) == current) {
 				return core;
 			}
+
+			if (++casRetries >= kMaxCASRetries) {
+				// Give up; return best known candidate to avoid spinning.
+				CoreEntry* latest = (CoreEntry*)atomic_pointer_get(
+					&sSmallTaskCore[nodeID]);
+				return (latest != NULL) ? latest : core;
+			}
+			cpu_pause();
 		}
 	}
 	return core;
@@ -684,8 +697,7 @@ rebalance(const ThreadData* threadData)
 	}
 
 	int32 coreScore = core->GetScore();
-	int32 cpuCount = core->CPUCount();
-	// Issue 4/93 fix: GetLoad() returns the thread's individual CPU load
+	// Issue 93 fix: GetLoad() returns the thread's individual CPU load
 	// contribution, not the total core load. Dividing again by cpuCount
 	// produces a value cpuCount times too small, effectively disabling
 	// migration on SMT systems. Use GetLoad() directly.
@@ -868,6 +880,11 @@ rebalance_irqs(bool idle)
 	cpu_ent* cpu = get_cpu_struct();
 	CoreEntry* currentCore = CoreEntry::GetCore(cpu->cpu_num);
 
+	// Issue 24 fix: CoreEntry::GetCore() can return NULL if the CPU was just
+	// hot-unplugged. Guard all dereferences of currentCore below.
+	if (currentCore == NULL)
+		return;
+
 	// Package() and Node() can be NULL during topology teardown or if a core
 	// was never fully initialised (e.g. it exceeded kMaxCoresPerPackage and
 	// its Init() was skipped).  Defend all three pointer dereferences.
@@ -900,6 +917,12 @@ rebalance_irqs(bool idle)
 	int32 snapTotalLoad = totalLoad;
 
 	locker.Unlock();
+
+	// Issue 49 fix: document that snapTotalLoad uses the snapshotted value.
+	// The original code re-read totalLoad after the unlock, creating a TOCTOU
+	// window where a concurrent IRQ assignment change could cause kLowLoad
+	// check to use a different value than chosenIRQ selection. The snapshot
+	// (snapTotalLoad) correctly reflects the state at IRQ selection time.
 
 	// Issue 16 fix: use snapshotted totalLoad and check chosenIRQ.
 	if (chosenIRQ == -1 || (!pack && snapTotalLoad < kLowLoad))

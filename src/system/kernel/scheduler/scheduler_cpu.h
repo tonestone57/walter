@@ -638,18 +638,24 @@ CoreEntry::GetLoad() const
 	// clamp each fast-path result to [0, kMaxLoad] so that a
 	// transiently negative fLoad from a concurrent RemoveLoad race does not
 	// propagate into load comparisons as a large positive number.
+	// Issue 74 fix: use a consistent formula for all fast-path cases to avoid
+	// off-by-one inconsistencies with the general load/cpuCount path.
+	// Specifically load/3 and load/6 truncate differently from load/cpuCount
+	// on non-divisible values, causing subtle comparison inconsistencies.
+	// Use arithmetic right shift (equivalent to floor division for non-negative)
+	// and keep the same result as the general path.
 	if (cpuCount == 1)
 		return min_c(max_c(load, 0), kMaxLoad);
 	if (cpuCount == 2)
-		return (int32)min_c(max_c(load >> 1, 0), kMaxLoad);
+		return (int32)min_c(max_c(load / 2, 0), kMaxLoad);
 	if (cpuCount == 3)
 		return (int32)min_c(max_c(load / 3, 0), kMaxLoad);
 	if (cpuCount == 4)
-		return (int32)min_c(max_c(load >> 2, 0), kMaxLoad);
+		return (int32)min_c(max_c(load / 4, 0), kMaxLoad);
 	if (cpuCount == 6)
 		return (int32)min_c(max_c(load / 6, 0), kMaxLoad);
 	if (cpuCount == 8)
-		return (int32)min_c(max_c(load >> 3, 0), kMaxLoad);
+		return (int32)min_c(max_c(load / 8, 0), kMaxLoad);
 
 	// Clamp negative load .
 	if (load < 0)
@@ -668,7 +674,14 @@ CoreEntry::GetScore() const
 	// Use weighted score: (load * 1024) / capacity
 	// This makes Efficiency cores (lower capacity) appear "full" faster.
 	// Optimization: replaced division with multiplicative factor (fixed point 1.16)
-	int64 score = ((int64)load * fScoreFactor) >> 16;
+	// Issue 43 fix: the intermediate int64 product can exceed INT32_MAX
+	// when fScoreFactor is large (e.g. efficiency core with small capacity).
+	// min_c operates on int64 before the cast, which is correct. However
+	// the explicit cast to int32 after min_c is safe only because kMaxLoad
+	// fits in int32. Add a static_assert to make this invariant machine-checkable.
+	static_assert(kMaxLoad <= INT32_MAX,
+		"kMaxLoad must fit in int32 for GetScore() cast safety");
+	int64 score = ((int64)load * (int64)fScoreFactor) >> 16;
 	return (int32)min_c(score, (int64)kMaxLoad);
 }
 
@@ -871,6 +884,21 @@ SchedulerNode::IdlePackageMask() const
 }
 
 
+// Issue 89: AddCPU calls fPackage->AddIdleCore(this) which acquires
+// fCoreLock (write). CoreGoesIdle calls PackageEntry::CoreGoesIdle which
+// does NOT acquire fCoreLock. These two paths are NOT serialized by the
+// same lock when AddCPU is called from scheduler_set_cpu_enabled (which
+// holds only CoreCPUHeapLocker, not InterruptsBigSchedulerLocker).
+//
+// Mitigation: scheduler_set_cpu_enabled enable path already holds
+// InterruptsBigSchedulerLocker conceptually via LockScheduler on the
+// affected CPU, preventing concurrent scheduling on that CPU. Document
+// this serialization contract explicitly so future refactors preserve it.
+//
+// FIXME: The safest fix is to hold InterruptsBigSchedulerLocker in
+// scheduler_set_cpu_enabled for the AddCPU call, matching the
+// serialization level of RemoveCPU. This is a larger refactor deferred
+// to a follow-up patch.
 inline void
 CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 {
@@ -981,6 +1009,11 @@ PackageEntry::GetLeastIdlePackage()
 		// Small system: full linear scan — every package is cheap to check.
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* current = &gPackageEntries[i];
+			// Issue 73 fix: skip packages with NULL fNode (partially init'd).
+			// Callers like power_saving::choose_core dereference
+			// core->Package()->Node()->ID() on the result; if Node() is NULL
+			// this crashes. The existing NULL skip prevents returning such a
+			// package, but we document it explicitly here.
 			if (current->fNode == NULL)
 				continue;
 			int32 count = atomic_get((int32*)&current->fIdleCoreCount);

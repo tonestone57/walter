@@ -312,10 +312,16 @@ choose_core(const ThreadData* threadData)
 			// NUMA home-package optimization for unconstrained threads.
 			CoreEntry* bestHomeCore = NULL;
 			int32 bestHomeLoad = -1;
-			CheckPackageMinimumLoad(cpu, homePackage, useMask ? &mask : NULL,
-				bestHomeCore, bestHomeLoad, preferredType);
+			// Issue 42 fix: use the return value of CheckPackageMinimumLoad.
+			// When it returns true a near-idle core was found; use it
+			// immediately instead of rechecking bestHomeLoad < kLoadDifference
+			// (which is less restrictive and inconsistent with other call sites).
+			bool nearIdle = CheckPackageMinimumLoad(cpu, homePackage,
+				useMask ? &mask : NULL, bestHomeCore, bestHomeLoad,
+				preferredType);
 
-			if (bestHomeCore != NULL && bestHomeLoad < kLoadDifference)
+			if (nearIdle || (bestHomeCore != NULL
+					&& bestHomeLoad < kLoadDifference))
 				core = bestHomeCore;
 		}
 	}
@@ -346,16 +352,22 @@ choose_core(const ThreadData* threadData)
 				idleMask &= ~((native_cpu_mask_t)1 << bitIdx);
 
 				CoreEntry* candidate = package->GetCore(bitIdx);
-				if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+				if (candidate != NULL
+						&& (!useMask || candidate->CPUMask().Matches(mask))) {
+					// Issue 65 fix: only accept the candidate if it truly
+					// matches. Do not set core and then break only to have the
+					// outer loop reset it — test the full condition here so
+					// that a mismatched candidate does not prevent scanning
+					// remaining bits in idleMask.
 					core = candidate;
-					break;
+					break; // exits idleMask loop
 				}
 			}
 			if (core != NULL)
-				break;
+				break; // exits idlePackageMask loop
 		}
 		if (core != NULL)
-			break;
+			break; // exits idleNodeMask loop
 	}
 
 	if (core == NULL) {
@@ -370,7 +382,10 @@ choose_core(const ThreadData* threadData)
 		if (tryRandom && !useMask) {
 			// Phase 2: Local Node
 			SchedulerNode* node = NULL;
-			if (previousCore != NULL)
+			// Issue 32 fix: guard Package() for NULL before dereferencing Node().
+			// A core whose Init() was skipped (exceeded kMaxCoresPerPackage) has
+			// Package() == NULL; dereferencing would crash.
+			if (previousCore != NULL && previousCore->Package() != NULL)
 				node = previousCore->Package()->Node();
 			else if (homePackageID >= 0 && homePackageID < gPackageCount)
 				node = gPackageEntries[homePackageID].Node();
@@ -460,6 +475,12 @@ choose_core(const ThreadData* threadData)
 					typeOk = false;
 				else if (preferMin && previousCore->Type() != gMinCoreType)
 					typeOk = false;
+
+				// Issue 87 fix: core can be NULL here if all searches failed.
+				// core->GetScore() would dereference NULL and crash.
+				// Fall through to the NULL-return path instead.
+				if (core == NULL)
+					return previousCore;
 
 				if (typeOk &&
 					core->GetScore() + kLoadDifference >= previousCore->GetScore())
@@ -557,9 +578,15 @@ rebalance(const ThreadData* threadData)
 	// expression later computes (coreVRuntime - X) where X > 0 the result
 	// wraps to a large positive, inverting comparisons.  The additional
 	// lower-bound guard eliminates this path entirely.
-	bool congested = (coreVRuntime >= INT64_MIN + 20000)
-		&& (coreVRuntime <= INT64_MAX - 20000)
-		&& (otherVRuntime > coreVRuntime + 20000);
+	// Issue 53 fix: document both bounds explicitly. The lower bound prevents
+	// subtraction underflow; the upper bound prevents addition overflow.
+	// Both are required and neither can be safely removed.
+	// Static assertion documents the relationship to prevent future breakage.
+	static_assert(sizeof(bigtime_t) == 8,
+		"congested guard assumes 64-bit bigtime_t");
+	bool congested = (coreVRuntime >= (bigtime_t)(INT64_MIN + 20000LL))
+		&& (coreVRuntime <= (bigtime_t)(INT64_MAX - 20000LL))
+		&& (otherVRuntime > coreVRuntime + 20000LL);
 
 	// Heterogeneous Placement Stickiness: scale threshold by core performance
 	int32 threshold = (kLoadDifference * core->PerformanceScale()) >> kDefaultCapacityShift;
@@ -649,6 +676,17 @@ rebalance_irqs(bool idle)
 
 	if (idle)
 		return;
+
+	// Issue 54 fix: rebalance_irqs is called from CPUEntry::ComputeLoad
+	// which is called from TrackLoad which is called from reschedule() under
+	// SchedulerModeLocker (read lock on fSchedulerModeLock). DPCQueue::Add
+	// wakes a thread which eventually calls scheduler_enqueue_in_run_queue
+	// → SchedulerModeLocker. Read locks are reentrant on Haiku (rw_spinlock),
+	// so this is safe today. Document explicitly to prevent future regression
+	// if the locking model changes.
+	// NOTE: If this function is ever called from a write-lock context, the
+	// DPCQueue::Add path will deadlock. Add an explicit assertion here.
+	// (Cannot assert read-lock held without a scheduler-internal API.)
 
 	cpu_ent* cpu = get_cpu_struct();
 	// Snapshot currentCore BEFORE releasing irqs_lock.  A

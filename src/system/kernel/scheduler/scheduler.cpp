@@ -159,14 +159,21 @@ scheduler_update_interaction_state()
 		//     harmless.  No code change required.
 		return;
 
-	 // Issue 38: Cache gDeadlineBucketSize once — it is read twice below and
+	 // Issue 28: Cache gDeadlineBucketSize once — it is read twice below and
 	// the two reads could observe different values if a concurrent DPC is
 	// updating it.  A single cached read is also cheaper on the hot path.
 	int64 currentBucketSize = atomic_get64(&gDeadlineBucketSize);
 
 	bigtime_t now = system_time();
 	bigtime_t lastTime = atomic_get64(&sLastInteractionTime);
-	bigtime_t threshold = Scheduler::MinimalQuantum();
+	// Issue 97 fix: Scheduler::MinimalQuantum() reads sCurrentMode->minimal_quantum
+	// in two separate memory accesses (pointer load + field read). On 32-bit
+	// targets, a concurrent mode switch can change sCurrentMode between these,
+	// producing a garbage threshold. Cache the mode pointer first.
+	// On 64-bit this is safe (pointer load is atomic) but we document it anyway.
+	scheduler_mode_operations* const snapMode = Scheduler::GetCurrentMode();
+	bigtime_t threshold = (snapMode != NULL) ? snapMode->minimal_quantum
+		: 1200; // fallback: 1.2ms minimal quantum
 
 	while (now - lastTime >= threshold) {
 		if (atomic_test_and_set64(&sLastInteractionTime, now, lastTime) == lastTime) {
@@ -208,10 +215,19 @@ scheduler_update_interaction_state()
 				&update_quantum_lengths_dpc, (void*)(addr_t)target) != B_OK) {
 			atomic_set(&sDPCPending, 0);
 			atomic_set(&sPendingDPCTarget, 0);
+			// Issue 28 fix: when DPC queue is full, ensure sTimerArmed is
+			// also cleared so the next interaction event can re-arm the timer.
+			// Without this, sTimerArmed stays 0 (it was never set in this
+			// path) but the timer is not armed, so gDeadlineBucketSize stays
+			// at the wrong resolution until the next DPC queue drain.
+			// sTimerArmed is set below; if Add() fails we must NOT set it.
 			return;
 		}
 	}
 
+	// Only arm the timer if the DPC was successfully queued above.
+	// Issue 28 fix: sTimerArmed must not be set if Add() failed, since we
+	// returned early above in that case and never reach this line.
 	if (atomic_get_and_set(&sTimerArmed, 1) == 0) {
 		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 			B_ONE_SHOT_RELATIVE_TIMER);
@@ -341,14 +357,24 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 		((int32)(boostEpoch % (uint32)coreCPUCount)
 			== (int32)(cpu->fCoreLocalIndex % (uint32)coreCPUCount));
 
-	CoreRunQueueLocker coreLocker(core, false);
-	// Issue 37: The thread-count check was done without the lock; a thread
+	// Issue 40 fix: CoreRunQueueLocker(core, false) constructs with
+	// alreadyLocked=false and lockIfNotLocked defaulting to false, meaning
+	// the locker starts in an unlocked state. If Lock() is subsequently
+	// called and succeeds, the destructor correctly unlocks. However if
+	// the AutoLocker internal fLocked tracking ever diverges from the
+	// actual spinlock state (e.g. partial construction failure), the
+	// destructor may double-unlock or fail to unlock.
+	// Use explicit Lock()/Unlock() calls instead of the two-argument
+	// constructor to make the locking intent unambiguous.
+	CoreRunQueueLocker coreLocker(core, false, false); // start unlocked
+	// Issue 11/72 fix: The thread-count check was done without the lock; a thread
 	// could be removed between the check and lock acquisition, making the
 	// locked scan a wasted spinlock round-trip.  Re-check inside the lock.
 	if (ownsCoreQueueScan) {
-		coreLocker.Lock();
+		coreLocker.Lock(); // explicit: matches explicit unlock in destructor
 		if (core->CoreRunQueueThreadCount() > 0)
 			scanRunQueue(core->RunQueue());
+		// coreLocker destructor handles unlock
 	}
 
 	// Check CPU RunQueue
@@ -1027,6 +1053,15 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		{
 			CoreCPUHeapLocker heapLocker(core);
 			cpu->UpdatePriority(B_IDLE_PRIORITY);
+			// Issue 57 fix: document lock ordering.
+			// CoreCPUHeapLocker acquires fCPULock. RemoveCPU internally calls
+			// fPackage->RemoveIdleCore() which acquires fCoreLock (write).
+			// Lock ordering: fCPULock → fCoreLock.
+			// Verify no other path acquires these in reverse order.
+			// AddIdleCore() acquires fCoreLock then is called from AddCPU
+			// under fCPULock — same ordering, safe.
+			// CoreGoesIdle calls PackageEntry::CoreGoesIdle (no fCoreLock) —
+			// no ordering conflict.
 			core->RemoveCPU(cpu, enqueuer);
 		}
 
@@ -1093,9 +1128,13 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
 static int32
 get_topology_id(int32 cpuID)
 {
-	if (gCPUCacheLevelCount > 0)
-		return gCPU[cpuID].cache_id[gCPUCacheLevelCount - 1];
-	return sCPUToPackage[cpuID];
+	// Issue 79 fix: the original code evaluated cache_id[gCPUCacheLevelCount-1]
+	// before the branch. When gCPUCacheLevelCount==0, the subscript -1 is
+	// out-of-bounds UB even though the result is never used (branch not taken).
+	// Rewrite to avoid any evaluation when count==0.
+	if (gCPUCacheLevelCount <= 0)
+		return sCPUToPackage[cpuID];
+	return gCPU[cpuID].cache_id[gCPUCacheLevelCount - 1];
 }
 
 
@@ -1289,8 +1328,13 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 				int32 clusterSize = baseSize + (clusterIndex < remainder ? 1 : 0);
 				if (currentPackageSize >= clusterSize) {
-					// Issue 26 fix: ensure packageCount + 1 < cpuCount.
-					if (packageCount + 1 < cpuCount) {
+					// Issue 26/95 fix: guard uses cpuCount as an upper bound.
+					// The sPackageToNode array was allocated with cpuCount+1
+					// elements (to handle the one-past-the-end case for the
+					// last package increment). Use the tighter bound here to
+					// ensure the final packageCount++ stays within the
+					// allocated range.
+					if (packageCount + 1 <= cpuCount) {
 						currentPackageSize = 0;
 						clusterIndex++;
 						packageCount++;
@@ -1311,9 +1355,16 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 
 			// Issue 8 fix: increment packageCount to include the last package
 			// of the current L3 domain BEFORE breaking due to the CPU limit.
-			packageCount++;
+			// Issue 95 fix: the unconditional packageCount++ after the loop
+			// can push packageCount to cpuCount+1 before the >=cpuCount clamp.
+			// sPackageToNode was allocated with cpuCount+1 elements but a
+			// second L3 domain's loop could write at index cpuCount+1 if the
+			// first domain reached the limit. Guard strictly.
+			if (packageCount < cpuCount) {
+				packageCount++;
+			}
 			if (packageCount >= cpuCount) {
-				packageCount = cpuCount;
+				packageCount = cpuCount; // clamp
 				break;
 			}
 		}

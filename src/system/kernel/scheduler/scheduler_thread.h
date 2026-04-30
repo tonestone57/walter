@@ -407,7 +407,15 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 
 	bigtime_t timeUsed = system_time() - fQuantumStart;
 	ASSERT(timeUsed >= 0);
+	// Issue 68 fix: cap fTimeUsed accumulation. Under extremely rapid
+	// rescheduling, fTimeUsed can accumulate to near INT64_MAX before the
+	// quantum-end check fires. When that happens, quantum - fTimeUsed
+	// underflows to a large positive, granting an unintended stolen-time
+	// bonus. Cap at 2 * MaximumLatency() as a generous but safe upper bound.
 	fTimeUsed += timeUsed;
+	const bigtime_t kMaxTimeUsed = Scheduler::MaximumLatency() * 2;
+	if (fTimeUsed > kMaxTimeUsed)
+		fTimeUsed = kMaxTimeUsed;
 
 	bigtime_t quantum = ComputeQuantum();
 
@@ -518,15 +526,22 @@ ThreadData::GoesAway()
 	// accounting.
 	bigtime_t now = system_time();
 	fWentSleep = now;
-	// Issue 5 fix: cache fCore once.  UnassignCore() can set fCore to NULL
-	// concurrently; the original code checked for NULL to guard GetActiveTime()
-	// but then called RemoveLoad() without re-checking, resulting in a NULL
-	// dereference if fCore changed between the two statements.
-	CoreEntry* const coreSnapshot = fCore;
-	fWentSleepActive = (coreSnapshot != NULL) ? coreSnapshot->GetActiveTime() : 0;
-
-	if (gTrackCoreLoad && coreSnapshot != NULL)
-		fLoadMeasurementEpoch = coreSnapshot->RemoveLoad(fNeededLoad, false);
+	// Issue 7 fix: fCore can be set to NULL by a concurrent MigrateTo() call.
+	// The original code checked for NULL once then called GetActiveTime() and
+	// RemoveLoad() in separate statements — if fCore became NULL between the
+	// check and either call, both would dereference NULL.
+	// Fix: take ONE snapshot under a read of fCore, then use only the snapshot.
+	// MigrateTo() is only called from ChooseCoreAndCPU which holds
+	// CoreCPULocker; GoesAway is called from reschedule() which holds
+	// SchedulerModeLocker (read). These are different locks, so the race
+	// is real. The snapshot approach is the minimal safe fix.
+	{
+		CoreEntry* const snap = atomic_pointer_get(
+			const_cast<CoreEntry* volatile*>(&fCore));
+		fWentSleepActive = (snap != NULL) ? snap->GetActiveTime() : 0;
+		if (gTrackCoreLoad && snap != NULL)
+			fLoadMeasurementEpoch = snap->RemoveLoad(fNeededLoad, false);
+	}
 	fReady = false;
 }
 

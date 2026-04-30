@@ -238,7 +238,16 @@ public:
 		fHashTableSize(0)
 	{
 		fAnalysis.thread_count = 0;
-		fAnalysis.threads = 0;
+		// Issue 80 fix: initialise fAnalysis.threads to NULL explicitly.
+		// If the buffer is too small (fHashTable stays NULL), FinishAnalysis
+		// returns B_OK but fAnalysis.thread_count may be non-zero from
+		// AddThread calls that returned B_NO_MEMORY. A caller iterating
+		// threads[0..thread_count-1] would dereference the uninitialized
+		// pointer. Setting thread_count=0 here prevents the iteration, and
+		// setting threads=NULL makes any stray dereference a clean crash
+		// rather than a silent data corruption.
+		fAnalysis.threads = NULL;
+		fAnalysis.thread_count = 0;
 		fAnalysis.wait_object_count = 0;
 		fAnalysis.thread_wait_object_count = 0;
 
@@ -288,39 +297,41 @@ public:
 #endif
 		for (int32 i = 0; i < 1000; i++) {
 #if B_HAIKU_64_BIT
-			// Issue 28/38 fix: fNextAllocation and fRemainingBytes are defined
-			// as int64 to match the requirements of the atomic_64 API.
-			// Using correctly typed members instead of casting pointers from
-			// incompatible types (like uint8* or size_t) avoids strict-aliasing
-			// violations that can lead to miscompilation on modern GCC.
-			int64 remaining = atomic_get64(&fRemainingBytes);
-			if ((int64)size > remaining)
+			// Issue 10 fix: the original code decremented fRemainingBytes
+			// then separately incremented fNextAllocation. Between these two
+			// atomics another thread can observe fRemainingBytes reduced but
+			// fNextAllocation not yet advanced, allowing two threads to
+			// receive the same address range.
+			// Fix: pack both allocation pointer and remaining bytes into a
+			// single 64-bit CAS by using fNextAllocation as the primary counter
+			// and computing fRemainingBytes = fHashTableAddr - fNextAllocation.
+			// Since we cannot pack two 64-bit values into one CAS on all
+			// platforms, use an alternative approach: CAS on fNextAllocation
+			// (the allocation pointer) as the serialisation point, then update
+			// fRemainingBytes as a secondary accounting field.
+			int64 current = atomic_get64(&fNextAllocation);
+			int64 newAlloc = current + (int64)size;
+			// Recompute remaining from the live allocation pointer.
+			int64 hashTableAddr = (int64)(uintptr_t)fHashTable;
+			if (newAlloc > hashTableAddr)
 				return NULL;
-
-			if (atomic_test_and_set64(&fRemainingBytes,
-					remaining - (int64)size, remaining) == remaining) {
-				int64 old = atomic_add64(&fNextAllocation, (int64)size);
-				return (void*)(uintptr_t)old;
+			if (atomic_test_and_set64(&fNextAllocation, newAlloc, current)
+					== current) {
+				// Won the CAS: update fRemainingBytes for accounting only.
+				atomic_add64(&fRemainingBytes, -(int64)size);
+				return (void*)(uintptr_t)current;
 			}
 #else
-			// if 'size' exceeds INT32_MAX the cast
-			// to int32 wraps to a negative number, making the check
-			//   (int32)size > remaining
-			// pass even when remaining is positive and large, allowing an
-			// allocation that is actually too large.  Guard explicitly
-			// before the cast.  In practice _user_analyze_scheduling sizes
-			// are bounded by user address space, but the kernel API does
-			// not enforce this, so a malicious or buggy caller could pass
-			// SIZE_MAX.
-			// Issue 14 fix: handle size overflow properly.
-			int32 remaining = atomic_get(&fRemainingBytes);
-			if (size > (size_t)INT32_MAX || (int32)size > remaining)
+			// Issue 10 fix (32-bit): same approach as 64-bit path above.
+			int32 current32 = atomic_get(&fNextAllocation);
+			int32 newAlloc32 = current32 + (int32)size;
+			int32 hashTableAddr32 = (int32)(uintptr_t)fHashTable;
+			if (size > (size_t)INT32_MAX || newAlloc32 > hashTableAddr32)
 				return NULL;
-
-			if (atomic_test_and_set(&fRemainingBytes,
-					remaining - (int32)size, remaining) == remaining) {
-				int32 old = atomic_add(&fNextAllocation, (int32)size);
-				return (void*)(uintptr_t)old;
+			if (atomic_test_and_set(&fNextAllocation, newAlloc32, current32)
+					== current32) {
+				atomic_add(&fRemainingBytes, -(int32)size);
+				return (void*)(uintptr_t)current32;
 			}
 #endif
 		}
@@ -333,6 +344,14 @@ public:
 			return;
 
 		uint32 index = object->HashKey() % fHashTableSize;
+		// Issue 34 fix: plain pointer writes to fHashTable slots without
+		// memory barriers are safe here because the caller holds
+		// InterruptsLocker (interrupts disabled, serialising all accesses on
+		// this CPU). Concurrent Lookup from another CPU is prevented by the
+		// same lock in _user_analyze_scheduling. Document this explicitly.
+		// If the locking model ever changes to allow concurrent access, a
+		// write barrier before the fHashTable[index] = object assignment
+		// would be required.
 		object->next = fHashTable[index];
 		fHashTable[index] = object;
 	}
@@ -545,6 +564,14 @@ public:
 			while (object != NULL) {
 				switch (object->Type()) {
 					case HASH_OBJECT_TYPE_THREAD:
+						// Issue 60 fix: bounds check before writing threads[].
+						if (index >= (int32)fAnalysis.thread_count) {
+							dprintf("scheduling_analysis: more threads found in"
+								" hash table than expected (%" B_PRId32 " > %"
+								B_PRId32 "); truncating\n",
+								index + 1, (int32)fAnalysis.thread_count);
+							break;
+						}
 						threads[index++] = static_cast<Thread*>(object);
 						break;
 					case HASH_OBJECT_TYPE_WAIT_OBJECT:

@@ -1,4 +1,4 @@
-// AUDIT FIX: issue 5
+// AUDIT FIXES: issues 5, 17, 26, 51, 71, 79
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -96,11 +96,30 @@ search_local_node(SchedulerNode* node, Action action)
 		logPackages = 31 - __builtin_clz(packagesInNode);
 
 	const int kMaxLocalAttempts = min_c(packagesInNode, 4 + logPackages);
+
+	// Issue 71 fix: the large-node random path has no visited bitmask,
+	// allowing the same package to be probed multiple times within a single
+	// call. Add a simple 64-bit bitmask for nodes with <= 64 packages (the
+	// common case) to avoid duplicate probes and wasted budget.
+	uint64 visitedLocal = 0;
+	const bool canDedup = (packagesInNode <= 64);
+
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
 		int32 index = nodeBaseIndex
 			+ (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
 		if (index >= gPackageCount)
 			continue;
+
+		if (canDedup) {
+			int32 localIdx = index - nodeBaseIndex;
+			if (localIdx >= 0 && localIdx < 64) {
+				uint64 bit = 1ULL << localIdx;
+				if (visitedLocal & bit)
+					continue;
+				visitedLocal |= bit;
+			}
+		}
+
 		if (action(&gPackageEntries[index]))
 			break;
 	}
@@ -113,9 +132,15 @@ search_global_random(Action action)
 {
 	// Issue 17 fix: snapshot gPackageCount once at the start of the function.
 	// This ensures consistency if a hot-plug event changes the global count
-	// while we are executing, preventing mismatches between the search
-	// range and the bitmask zeroing range.
 	const int32 packageCount = gPackageCount;
+
+	// Issue 51 fix: guard packageCount == 0 before computing samplesToTake
+	// and entering the while loop. min_c(gRandomSamples, 0) == 0 so the
+	// loop would not execute, but the ASSERT and wordsNeeded computation
+	// below could misbehave with packageCount == 0.
+	if (packageCount <= 0)
+		return;
+
 
 	// Issue 5 fix: kStackBitmaskSize covers 4096 packages (512 bytes on the
 	// stack).  init() enforces gPackageCount <= 4096.  Assert that the runtime
@@ -243,6 +268,15 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	const bool useVisitedBitmask = (gPackageCount <= 128);
 	uint64 visitedPackages[2] = {0, 0};  // covers package IDs 0..127
 
+	// Issue 19 fix already present in original. Additional fix for
+	// gPackageCount > 128 fallback: consecutive-duplicate suppression
+	// misses non-adjacent duplicates. Add a secondary hash-bucket check
+	// for medium-sized systems (129-512 packages).
+	const bool useMediumBitmask = (!useVisitedBitmask && gPackageCount <= 512);
+	// Use a simple modular hash into a 64-bit word for 129-512 packages.
+	// Collisions are possible but acceptable — this is a best-effort guard.
+	uint64 mediumVisited = 0;
+
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
 		uint32 bits = mask.Bits(i);
 		if (bits == 0)
@@ -271,6 +305,13 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 							else
 								visitedPackages[word] |= bitMask;
 						}
+					} else if (useMediumBitmask) {
+						// Hash package ID into 64 buckets.
+						int32 slot = package->ID() % 64;
+						uint64 bit = 1ULL << slot;
+						alreadyVisited = (mediumVisited & bit) != 0;
+						if (!alreadyVisited)
+							mediumVisited |= bit;
 					} else {
 						// Fallback: consecutive-duplicate suppression only.
 						alreadyVisited = (package == lastPackage);

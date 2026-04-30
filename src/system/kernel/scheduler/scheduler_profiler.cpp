@@ -98,11 +98,16 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 		return false;
 
 	int32 stackDepth = fFunctionStackPointers[cpu];
+
+	// Issue 75 fix: check stack depth BEFORE incrementing fCalled.
+	// The original code incremented fCalled unconditionally, overstating
+	// how many times the function was successfully profiled when the stack
+	// was full and EnterFunction returned false.
 	if (stackDepth >= (int32)kMaxFunctionStackEntries)
 		return false;
 
+	// Only count the call after we know we can successfully profile it.
 	atomic_add(&function->fCalled, 1);
-
 	fFunctionStackPointers[cpu]++;
 	FunctionEntry* stackEntry = &fFunctionStacks[cpu][stackDepth];
 
@@ -299,6 +304,18 @@ Profiler::_FindFunction(const char* function)
 	for (const char* p = function; *p; p++)
 		hash = (hash * 31 + *p);
 
+	// Issue 25 fix: document the ABA safety argument for the lockless path.
+	// FunctionData slots are allocated from fFunctionData[] and NEVER freed
+	// or reused during the lifetime of the Profiler object (fNextFunctionSlot
+	// only increases). Therefore a pointer read from fHashTable[index] via
+	// atomic_pointer_get() cannot become dangling or be reused for a
+	// different function while we dereference it — the "ABA problem" cannot
+	// occur here. The lockless search is safe for the current design.
+	//
+	// WARNING: if function slot reclamation is ever added (e.g. to support
+	// profiler reset), this lockless path MUST be protected by a read-side
+	// hazard pointer or RCU mechanism before the slot can be freed.
+	//
 	// Lockless Search: fast path for existing entries.
 	uint32 index = hash % kHashTableSize;
 	uint32 startIndex = index;
