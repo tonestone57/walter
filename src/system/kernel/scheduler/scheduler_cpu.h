@@ -127,8 +127,7 @@ public:
 
 						void			UpdatePriority(int32 priority);
 
-	inline				int32			GetLoad() const
-											{ return fLoad.load(std::memory_order_acquire); }
+						int32			GetLoad() const;
 						bigtime_t		GetMinVirtualRuntime() const;
 						void			ComputeLoad();
 

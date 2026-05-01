@@ -44,19 +44,6 @@ SmoothLoad(int oldLoad, int newLoad)
 }
 
 
-int
-GetCPULoad(CPUEntry* cpu)
-{
-	int load = cpu->GetLoad();
-
-	// Clamp load to avoid overflow or runaway values
-	if (load < 0)
-		load = 0;
-	else if (load > kLoadClampMax)
-		load = kLoadClampMax;
-
-	return load;
-}
 
 
 static void

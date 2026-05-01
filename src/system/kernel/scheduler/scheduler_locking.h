@@ -49,10 +49,12 @@ public:
 private:
 	void Acquire()
 	{
-		disable_interrupts();
+		fStatus = disable_interrupts();
 
 #ifdef DEBUG_SCHEDULER
-		Thread* thread = thread_get_current_thread();
+		// Use get_cpu_struct()->running_thread for safer access during
+		// context switches and early boot.
+		Thread* thread = get_cpu_struct()->running_thread;
 		if (thread != nullptr)
 			thread->scheduler_lock_depth++;
 #endif
@@ -65,15 +67,17 @@ private:
 		ReleaseSchedulerSpinlock();
 
 #ifdef DEBUG_SCHEDULER
-		Thread* thread = thread_get_current_thread();
+		Thread* thread = get_cpu_struct()->running_thread;
 		if (thread != nullptr) {
 			thread->scheduler_lock_depth--;
 			ASSERT(thread->scheduler_lock_depth >= 0);
 		}
 #endif
 
-		enable_interrupts();
+		restore_interrupts(fStatus);
 	}
+
+	cpu_status fStatus;
 };
 
 

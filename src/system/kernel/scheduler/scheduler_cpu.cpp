@@ -105,6 +105,22 @@ CPUEntry::CPUEntry()
 }
 
 
+int32
+CPUEntry::GetLoad() const
+{
+	int32 load = fLoad.load(std::memory_order_acquire);
+
+	// Penalize SMT siblings to prefer physical cores
+	if (fCore != nullptr && fCore->CPUCount() > 1) {
+		// If at least one other thread is running on this core
+		if (fCore->ThreadCount() > 1)
+			load += kSMTPenalty;
+	}
+
+	return load;
+}
+
+
 void
 CPUEntry::Init(int32 id, CoreEntry* core)
 {
@@ -324,12 +340,21 @@ CPUEntry::ComputeLoad()
 	ASSERT(!gCPU[fCPUNumber].disabled);
 	ASSERT(fCPUNumber == smp_get_current_cpu());
 
-	int oldLoad = compute_load(fMeasureTime, fMeasureActiveTime, fLoad,
+	int32 currentLoad = fLoad.load(std::memory_order_relaxed);
+	int oldLoad = compute_load(fMeasureTime, fMeasureActiveTime, currentLoad,
 			system_time());
 	if (oldLoad < 0)
 		return;
 
-	if (fLoad > kVeryHighLoad)
+	// Clamp load to avoid overflow or runaway values
+	if (currentLoad < 0)
+		currentLoad = 0;
+	else if (currentLoad > kLoadClampMax)
+		currentLoad = kLoadClampMax;
+
+	fLoad.store(currentLoad, std::memory_order_relaxed);
+
+	if (currentLoad > kVeryHighLoad)
 		Scheduler::RebalanceIRQs(false);
 }
 
@@ -1372,8 +1397,10 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	if (cpuCount > 0) {
 		int32 load = currentLoad / cpuCount;
 		load = ((int64)load * fScoreFactor) >> 16;
+
+		int32 oldLoad = atomic_get(&fPackage->fCoreLoads[fPackageIndex]);
 		atomic_set(&fPackage->fCoreLoads[fPackageIndex],
-			min_c(load, (int32)kMaxLoad));
+			SmoothLoad(oldLoad, min_c(load, (int32)kMaxLoad)));
 	}
 }
 

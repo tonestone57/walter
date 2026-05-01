@@ -54,6 +54,13 @@ public:
 	inline	Link*		operator()(Element* element) const;
 };
 
+namespace Scheduler {
+	template<typename Element>
+	struct RunQueueTraits {
+		static inline void SetInRunQueue(Element* element, bool inQueue) {}
+	};
+}
+
 #define RUN_QUEUE_TEMPLATE_LIST	\
 	template<typename Element, unsigned int MaxPriority, typename Compare, typename GetLink>
 #define RUN_QUEUE_CLASS_NAME	RunQueue<Element, MaxPriority, Compare, GetLink>
@@ -61,6 +68,7 @@ public:
 template<typename Element, unsigned int MaxPriority, typename Compare,
 	typename GetLink = RunQueueStandardGetLink<Element> >
 class RunQueue {
+	typedef Scheduler::RunQueueTraits<Element> Traits;
 public:
 	static const int kBitmapSize = (MaxPriority + 32) / 32;
 
@@ -390,6 +398,8 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	fDebugEnqueueCount.fetch_add(1, std::memory_order_relaxed);
 #endif
 
+	Traits::SetInRunQueue(element, true);
+
 	elementLink->fPriority = priority;
 	elementLink->fNext = fHeads[priority];
 	if (fHeads[priority] != NULL)
@@ -455,6 +465,8 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	fDebugEnqueueCount.fetch_add(1, std::memory_order_relaxed);
 #endif
 
+	Traits::SetInRunQueue(element, true);
+
 	elementLink->fPriority = priority;
 	elementLink->fPrevious = fTails[priority];
 	if (fTails[priority] != NULL)
@@ -512,6 +524,8 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	}
 
 	fTotalCount.fetch_sub(1, std::memory_order_acq_rel);
+
+	Traits::SetInRunQueue(element, false);
 
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;

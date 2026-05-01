@@ -23,7 +23,6 @@ using namespace Scheduler;
 // --- Scheduler tuning (low latency mode improvements) ---
 static const int kMigrationThreshold = 2;
 static const bigtime_t kMigrationCooldown = 1000;
-static const int kSMTPenalty = 2;
 static const int kMaxCPUsToScan = 8;
 
 
@@ -508,20 +507,6 @@ choose_core(const ThreadData* threadData)
 }
 
 
-static int
-GetCPULoad(CPUEntry* cpu)
-{
-	int load = LoadAcquire(cpu->fLoad);
-
-	// Penalize SMT siblings to prefer physical cores
-	if (cpu->Core() != nullptr && cpu->Core()->CPUCount() > 1) {
-		// If at least one other thread is running on this core
-		if (cpu->Core()->ThreadCount() > 1)
-			load += kSMTPenalty;
-	}
-
-	return load;
-}
 
 
 static CoreEntry*

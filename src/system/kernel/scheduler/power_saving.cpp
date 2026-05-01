@@ -52,13 +52,6 @@ set_cpu_enabled(int32 cpu, bool enabled)
 }
 
 
-static int
-GetCPULoad(CPUEntry* cpu)
-{
-	return LoadAcquire(cpu->fLoad);
-}
-
-
 static bool
 has_cache_expired(const ThreadData* threadData)
 {

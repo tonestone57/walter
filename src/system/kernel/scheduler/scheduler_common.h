@@ -139,6 +139,8 @@ const int32 kDefaultCapacity = 1024;
 const int32 kDefaultCapacityShift = 10;
 const int32 kRandomSearchThreshold = 32;
 
+const int kSMTPenalty = 2;
+
 // Named constant for the per-package core scan threshold.
 // Switch to random sampling inside a single package when it holds more than
 // this many registered cores.  Kept lower than kRandomSearchThreshold because

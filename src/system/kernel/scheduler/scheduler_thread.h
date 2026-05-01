@@ -19,6 +19,14 @@
 namespace Scheduler {
 
 
+struct ThreadData;
+
+template<>
+struct RunQueueTraits<ThreadData> {
+	static inline void SetInRunQueue(ThreadData* element, bool inQueue);
+};
+
+
 struct CACHE_LINE_ALIGN ThreadData : public DoublyLinkedListLinkImpl<ThreadData>,
 	RunQueueLinkImpl<ThreadData> {
 private:
@@ -779,6 +787,13 @@ ThreadData::Dequeue()
 	fCore->Remove(this);
 	ASSERT(!fEnqueued);
 	return true;
+}
+
+
+inline void
+RunQueueTraits<ThreadData>::SetInRunQueue(ThreadData* element, bool inQueue)
+{
+	element->GetThread()->inRunQueue = inQueue;
 }
 
 
