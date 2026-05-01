@@ -11,6 +11,7 @@
 #define RUN_QUEUE_H
 
 
+#include <atomic>
 #include <util/BitUtils.h>
 #include <util/atomic.h>
 
@@ -63,7 +64,10 @@ class RunQueue {
 public:
 	static const int kBitmapSize = (MaxPriority + 32) / 32;
 
-	inline	bool		IsEmpty() const { return fTotalCount == 0; }
+	inline	bool		IsEmpty() const
+	{
+		return fTotalCount.load(std::memory_order_acquire) == 0;
+	}
 
 	class ConstIterator {
 	public:
@@ -99,6 +103,11 @@ public:
 
 	inline	void		Remove(Element* element);
 
+	inline	int32		Count() const
+	{
+		return fTotalCount.load(std::memory_order_acquire);
+	}
+
 	inline	Element*	GetHead(unsigned int priority) const;
 
 	inline	const uint32*	GetBitmap() const;
@@ -126,7 +135,14 @@ private:
 
 	mutable	Element*	fBest;
 
-			int32		fTotalCount;
+			std::atomic<int32>	fTotalCount;
+
+	// Prevent false sharing (hot structure)
+	alignas(64) char _pad0[64];
+
+#ifdef DEBUG_SCHEDULER
+	std::atomic<int32> fDebugEnqueueCount;
+#endif
 
 	static	GetLink		sGetLink;
 	static	Compare		sCompare;
@@ -366,9 +382,13 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	// Issue 10/24 fix: capture isEmpty before the bitmap update.
 	// Since we hold the run-queue spinlock, this check is atomic
 	// with the subsequent insertion.
-	bool isEmpty = (fTotalCount == 0);
+	bool isEmpty = (fTotalCount.load(std::memory_order_acquire) == 0);
 
-	fTotalCount++;
+	fTotalCount.fetch_add(1, std::memory_order_release);
+
+#ifdef DEBUG_SCHEDULER
+	fDebugEnqueueCount.fetch_add(1, std::memory_order_relaxed);
+#endif
 
 	elementLink->fPriority = priority;
 	elementLink->fNext = fHeads[priority];
@@ -427,9 +447,13 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	// For priority > bestPriority the new element is unconditionally better.
 	// For priority < bestPriority the new element cannot be fBest.
 	// This logic is intentional and correct for all three cases.
-	bool isEmpty = (fTotalCount == 0);
+	bool isEmpty = (fTotalCount.load(std::memory_order_acquire) == 0);
 
-	fTotalCount++;
+	fTotalCount.fetch_add(1, std::memory_order_release);
+
+#ifdef DEBUG_SCHEDULER
+	fDebugEnqueueCount.fetch_add(1, std::memory_order_relaxed);
+#endif
 
 	elementLink->fPriority = priority;
 	elementLink->fPrevious = fTails[priority];
@@ -487,7 +511,7 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 		fBitmap[priority / 32] &= ~(1UL << (priority % 32));
 	}
 
-	fTotalCount--;
+	fTotalCount.fetch_sub(1, std::memory_order_acq_rel);
 
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;

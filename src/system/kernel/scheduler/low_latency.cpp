@@ -20,6 +20,13 @@
 using namespace Scheduler;
 
 
+// --- Scheduler tuning (low latency mode improvements) ---
+static const int kMigrationThreshold = 2;
+static const bigtime_t kMigrationCooldown = 1000;
+static const int kSMTPenalty = 2;
+static const int kMaxCPUsToScan = 8;
+
+
 static void
 switch_to_mode()
 {
@@ -241,8 +248,12 @@ choose_core(const ThreadData* threadData)
 			// Optimization: If P-cores are moderately busy, allow the fallback
 			// Phase 1 to check if a significantly less loaded Standard core
 			// exists before committing to this P-core.
-			if (!preferMax || core->GetScore() < kMediumLoad)
-				return core;
+			if (!preferMax || core->GetScore() < kMediumLoad) {
+				// Avoid waking extra CPUs unless necessary
+				if (core->GetLoad() == 0) {
+					return core;
+				}
+			}
 		}
 
 		// 3-type intermediate fallback: when P-cores are all overloaded and
@@ -328,7 +339,11 @@ choose_core(const ThreadData* threadData)
 
 	// wake new package/core — skipped when thread coloring or home-package
 	// search already found a suitable core.
+	int scannedCount = 0;
 	while (!skipIdleScan && idleNodeMask != 0) {
+		if (++scannedCount > kMaxCPUsToScan)
+			break;
+
 		int32 nodeIndex = __builtin_ctzll(idleNodeMask);
 		idleNodeMask &= ~(1ULL << nodeIndex);
 
@@ -490,6 +505,22 @@ choose_core(const ThreadData* threadData)
 	}
 
 	return core;
+}
+
+
+static int
+GetCPULoad(CPUEntry* cpu)
+{
+	int load = LoadAcquire(cpu->fLoad);
+
+	// Penalize SMT siblings to prefer physical cores
+	if (cpu->Core() != nullptr && cpu->Core()->CPUCount() > 1) {
+		// If at least one other thread is running on this core
+		if (cpu->Core()->ThreadCount() > 1)
+			load += kSMTPenalty;
+	}
+
+	return load;
 }
 
 
@@ -664,7 +695,15 @@ rebalance(const ThreadData* threadData)
 	int32 coreNewScore = coreScore - weightedLoadOnCore;
 	int32 otherNewScore = otherScore + weightedLoadOnOther;
 
-	return coreNewScore - otherNewScore >= threshold ? other : core;
+	if (coreNewScore - otherNewScore < threshold)
+		return core;
+
+	bigtime_t now = system_time();
+	if (now - threadData->GetThread()->lastMigrationTime < kMigrationCooldown)
+		return core;
+
+	threadData->GetThread()->lastMigrationTime = now;
+	return other;
 }
 
 

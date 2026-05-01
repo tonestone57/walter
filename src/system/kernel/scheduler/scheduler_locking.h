@@ -6,12 +6,154 @@
 #define KERNEL_SCHEDULER_LOCKING_H
 
 
+#include <atomic>
 #include <util/AutoLock.h>
 
 #include "scheduler_cpu.h"
 
 
 namespace Scheduler {
+
+
+extern "C" void AcquireSchedulerSpinlock();
+extern "C" void ReleaseSchedulerSpinlock();
+
+
+inline bool
+SchedulerLockHeld()
+{
+#ifdef DEBUG_SCHEDULER
+	Thread* thread = thread_get_current_thread();
+	return thread != nullptr && thread->scheduler_lock_depth > 0;
+#else
+	return true; // assume correct in release
+#endif
+}
+
+
+#define ASSERT_SCHED_LOCK() ASSERT(SchedulerLockHeld())
+
+
+class SchedulerLockGuard {
+public:
+	SchedulerLockGuard()
+	{
+		Acquire();
+	}
+
+	~SchedulerLockGuard()
+	{
+		Release();
+	}
+
+private:
+	void Acquire()
+	{
+		disable_interrupts();
+
+#ifdef DEBUG_SCHEDULER
+		Thread* thread = thread_get_current_thread();
+		if (thread != nullptr)
+			thread->scheduler_lock_depth++;
+#endif
+
+		AcquireSchedulerSpinlock();
+	}
+
+	void Release()
+	{
+		ReleaseSchedulerSpinlock();
+
+#ifdef DEBUG_SCHEDULER
+		Thread* thread = thread_get_current_thread();
+		if (thread != nullptr) {
+			thread->scheduler_lock_depth--;
+			ASSERT(thread->scheduler_lock_depth >= 0);
+		}
+#endif
+
+		enable_interrupts();
+	}
+};
+
+
+#ifdef DEBUG_SCHEDULER
+
+enum SchedulerLockRank {
+	LOCK_RANK_SCHEDULER = 0,
+	LOCK_RANK_RUNQUEUE  = 1,
+	LOCK_RANK_THREAD    = 2,
+};
+
+
+inline void
+AssertLockOrder(int rank)
+{
+	Thread* thread = thread_get_current_thread();
+	if (thread != nullptr) {
+		ASSERT(rank >= thread->current_lock_rank);
+		thread->current_lock_rank = rank;
+	}
+}
+
+
+inline void
+ReleaseLockOrder(int rank)
+{
+	Thread* thread = thread_get_current_thread();
+	if (thread != nullptr) {
+		ASSERT(thread->current_lock_rank == rank);
+		thread->current_lock_rank--;
+	}
+}
+
+#else
+
+inline void AssertLockOrder(int) {}
+inline void ReleaseLockOrder(int) {}
+
+#endif
+
+
+class InterruptGuard {
+public:
+	InterruptGuard()
+	{
+		fWasEnabled = are_interrupts_enabled();
+		if (fWasEnabled)
+			disable_interrupts();
+	}
+
+	~InterruptGuard()
+	{
+		if (fWasEnabled)
+			enable_interrupts();
+	}
+
+private:
+	bool fWasEnabled;
+};
+
+
+#define SCHEDULER_CRITICAL_SECTION() \
+	SchedulerLockGuard _schedLockGuard;
+
+
+#ifdef DEBUG_SCHEDULER
+
+inline void
+AssertInterruptsDisabled()
+{
+	ASSERT(!are_interrupts_enabled());
+}
+
+#define ASSERT_IRQ_DISABLED() AssertInterruptsDisabled()
+
+#else
+
+#define ASSERT_IRQ_DISABLED() ((void)0)
+
+#endif
 
 
 class CPURunQueueLocking {

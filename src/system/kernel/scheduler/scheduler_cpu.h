@@ -9,6 +9,7 @@
 
 #include <OS.h>
 
+#include <atomic>
 #include <smp.h>
 #include <thread.h>
 #include <util/atomic.h>
@@ -126,7 +127,8 @@ public:
 
 						void			UpdatePriority(int32 priority);
 
-	inline				int32			GetLoad() const	{ return fLoad; }
+	inline				int32			GetLoad() const
+											{ return fLoad.load(std::memory_order_acquire); }
 						bigtime_t		GetMinVirtualRuntime() const;
 						void			ComputeLoad();
 
@@ -142,7 +144,7 @@ public:
 						uint32			GetRandom();
 
 	inline				int32			ThreadCount() const
-											{ return atomic_get((int32*)&fThreadCount); }
+											{ return fThreadCount.load(std::memory_order_acquire); }
 
 						bool			SetReschedulePending()
 											{ return atomic_set(&fReschedulePending, 1) == 0; }
@@ -167,8 +169,9 @@ private:
 						ThreadRunQueue	fRunQueue;
 						spinlock		fQueueLock;
 
-						int32			fThreadCount;
-						int32			fLoad;
+						std::atomic<int32>	fThreadCount;
+						std::atomic<int32>	fLoad;
+						bigtime_t		lastReschedule;
 
 						int32			fPerformanceScale;
 
@@ -900,10 +903,12 @@ SchedulerNode::IdlePackageMask() const
 // serialization level of RemoveCPU. This is a larger refactor deferred
 // to a follow-up patch.
 inline void
-CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
+CoreEntry::CPUGoesIdle(CPUEntry* cpu)
 {
 	if (gSingleCore)
 		return;
+
+	SetCPUIDle(gIdleMask, cpu->ID());
 
 	DecrementTotalThreadCount();
 	// Issue 36 fix: on weakly-ordered architectures, without an explicit
@@ -919,10 +924,12 @@ CoreEntry::CPUGoesIdle(CPUEntry* /* cpu */)
 
 
 inline void
-CoreEntry::CPUWakesUp(CPUEntry* /* cpu */)
+CoreEntry::CPUWakesUp(CPUEntry* cpu)
 {
 	if (gSingleCore)
 		return;
+
+	ClearCPUIDle(gIdleMask, cpu->ID());
 
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 

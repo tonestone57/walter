@@ -278,6 +278,13 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	signal_stack_enabled(false),
 	in_kernel(true),
 	has_yielded(false),
+	lastMigrationTime(0),
+	inRunQueue(false),
+	next(NULL),
+#ifdef DEBUG_SCHEDULER
+	scheduler_lock_depth(0),
+	current_lock_rank(-1),
+#endif
 	user_thread(NULL),
 	fault_handler(0),
 	page_faults_allowed(1),

@@ -146,6 +146,7 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 	fInteractionUpdateCounter = 0;
 	fReschedulePending = 0;
 	fLastLocalPackageIndex = 0;	//
+	lastReschedule = 0;
 }
 
 
@@ -221,7 +222,7 @@ CPUEntry::PushFront(ThreadData* thread, int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushFront(thread, priority);
-	atomic_add(&fThreadCount, 1);
+	fThreadCount.fetch_add(1, std::memory_order_release);
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -236,7 +237,7 @@ CPUEntry::PushBack(ThreadData* thread, int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushBack(thread, priority);
-	atomic_add(&fThreadCount, 1);
+	fThreadCount.fetch_add(1, std::memory_order_release);
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -261,7 +262,7 @@ CPUEntry::Remove(ThreadData* thread)
 
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
-	atomic_add(&fThreadCount, -1);
+	fThreadCount.fetch_sub(1, std::memory_order_acq_rel);
 
 	if (!thread->IsIdle()) {
 		Core()->DecrementTotalThreadCount();
@@ -337,6 +338,8 @@ ThreadData*
 CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	ASSERT_SCHED_LOCK();
 
 	int32 oldPriority = -1;
 	if (oldThread != NULL)
@@ -495,6 +498,13 @@ void
 CPUEntry::TrackLoad(ThreadData* nextThreadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+#ifdef DEBUG_SCHEDULER
+	TRACE("scheduler: cpu=%d load=%d idle=%d\n",
+		fCPUNumber,
+		fLoad.load(std::memory_order_relaxed),
+		gCPU[fCPUNumber].idle);
+#endif
 
 	cpu_ent* cpuEntry = &gCPU[fCPUNumber];
 

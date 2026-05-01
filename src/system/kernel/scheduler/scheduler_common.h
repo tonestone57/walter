@@ -7,6 +7,7 @@
 #define KERNEL_SCHEDULER_COMMON_H
 
 
+#include <atomic>
 #include <debug.h>
 #include <kscheduler.h>
 #include <load_tracking.h>
@@ -157,12 +158,127 @@ extern bool gTrackCoreLoad;
 extern bool gTrackCPULoad;
 extern int32 gRandomSamples;
 
+extern const bigtime_t kMinMeasurementWindow;
+extern const int kLoadClampMax;
+
+int SmoothLoad(int oldLoad, int newLoad);
+
 extern int64 gDeadlineBucketSize;
 
-extern atomic_int32 gTotalRunnableThreads;
+extern std::atomic<int> gTotalRunnableThreads;
+extern std::atomic<uint64_t> gIdleMask;
 
 extern CoreType gMinCoreType;
 extern CoreType gMaxCoreType;
+
+
+#define ASSERT_SCHED_LOCK() ASSERT(SchedulerLockHeld())
+
+#ifdef DEBUG_SCHEDULER
+#define SCHED_ASSERT(x) ASSERT(x)
+#else
+#define SCHED_ASSERT(x) ((void)0)
+#endif
+
+
+inline void
+AssertThreadReady(Thread* thread)
+{
+	SCHED_ASSERT(thread != nullptr);
+	SCHED_ASSERT(thread->state == B_THREAD_READY);
+	SCHED_ASSERT(!thread->inRunQueue);
+}
+
+
+inline void
+AssertThreadQueued(Thread* thread)
+{
+	SCHED_ASSERT(thread != nullptr);
+	SCHED_ASSERT(thread->inRunQueue);
+}
+
+
+inline int
+LoadAcquire(const std::atomic<int>& value)
+{
+	return value.load(std::memory_order_acquire);
+}
+
+
+inline void
+StoreRelease(std::atomic<int>& value, int v)
+{
+	value.store(v, std::memory_order_release);
+}
+
+
+inline void
+AddRelease(std::atomic<int>& value, int v)
+{
+	value.fetch_add(v, std::memory_order_release);
+}
+
+
+inline void
+SubAcquireRelease(std::atomic<int>& value, int v)
+{
+	value.fetch_sub(v, std::memory_order_acq_rel);
+}
+
+
+inline void
+SetCPUIDle(std::atomic<uint64_t>& mask, int cpu)
+{
+	mask.fetch_or(1ULL << cpu, std::memory_order_release);
+}
+
+
+inline void
+ClearCPUIDle(std::atomic<uint64_t>& mask, int cpu)
+{
+	mask.fetch_and(~(1ULL << cpu), std::memory_order_release);
+}
+
+
+inline bool
+IsCPUIDle(const std::atomic<uint64_t>& mask, int cpu)
+{
+	return (mask.load(std::memory_order_acquire) & (1ULL << cpu)) != 0;
+}
+
+
+struct SchedulerSnapshot {
+	int totalRunnable;
+	uint64_t idleMask;
+};
+
+
+SchedulerSnapshot TakeSnapshot();
+
+
+inline SchedulerSnapshot
+MakeSchedulerSnapshot(const std::atomic<int>& total,
+	const std::atomic<uint64_t>& idleMask)
+{
+	SchedulerSnapshot s;
+	s.totalRunnable = total.load(std::memory_order_acquire);
+	s.idleMask = idleMask.load(std::memory_order_acquire);
+	return s;
+}
+
+
+inline bool
+ShouldMigrate(int sourceLoad, int targetLoad, int threshold)
+{
+	return sourceLoad > targetLoad + threshold;
+}
+
+
+inline bool
+ShouldReschedule(bigtime_t now, bigtime_t last, bigtime_t cooldown)
+{
+	return (now - last) > cooldown;
+}
 
 
 // True when at least one CORE_TYPE_STANDARD core exists. Used by choose_core

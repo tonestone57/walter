@@ -32,6 +32,32 @@ const static uint64 sCExp[3] = {(uint64)(0.9200444146293232 * kFScale),
 
 static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;
 
+const bigtime_t kMinMeasurementWindow = 1000;
+const int kLoadClampMax = 100000;
+
+
+int
+SmoothLoad(int oldLoad, int newLoad)
+{
+	// Simple exponential smoothing
+	return (oldLoad * 3 + newLoad) / 4;
+}
+
+
+int
+GetCPULoad(CPUEntry* cpu)
+{
+	int load = cpu->GetLoad();
+
+	// Clamp load to avoid overflow or runaway values
+	if (load < 0)
+		load = 0;
+	else if (load > kLoadClampMax)
+		load = kLoadClampMax;
+
+	return load;
+}
+
 
 static void
 _LoadavgUpdate(void *data, int iteration)
@@ -43,7 +69,7 @@ _LoadavgUpdate(void *data, int iteration)
 	// If sub-second load visibility is required in the future, the daemon
 	// period must be reduced and sCExp recalibrated accordingly.
 	// Optimization: Use global atomic counter instead of O(N) core scan.
-	int32 threadCount = atomic_get(&gTotalRunnableThreads);
+	int32 threadCount = gTotalRunnableThreads.load(std::memory_order_acquire);
 	if (threadCount < 0)
 		threadCount = 0;
 

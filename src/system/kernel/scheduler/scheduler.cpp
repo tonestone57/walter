@@ -69,7 +69,11 @@ CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
 
 bool gHasStandardCores = false;
 
-atomic_int32 gTotalRunnableThreads = 0;
+std::atomic<int> gTotalRunnableThreads(0);
+std::atomic<uint64_t> gIdleMask(0);
+
+spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
+
 
 static timer sInteractionTimer;
 static int64 sLastInteractionTime;
@@ -82,6 +86,30 @@ static int32 sDPCPending = 0;
 // before it fires the DPC, allowing future re-arming.
 static int32 sTimerArmed = 0;
 static int32 sPendingDPCTarget = 0;  // 1000 or 5000
+
+
+// --- Safe snapshot for load balancing decisions ---
+static SchedulerSnapshot TakeSnapshot()
+{
+	return MakeSchedulerSnapshot(gTotalRunnableThreads, gIdleMask);
+}
+
+static const int kLoadBalanceThreshold = 2;
+static const bigtime_t kRescheduleCooldown = 500;
+
+
+extern "C" void
+AcquireSchedulerSpinlock()
+{
+	acquire_spinlock(&gSchedulerLock);
+}
+
+
+extern "C" void
+ReleaseSchedulerSpinlock()
+{
+	release_spinlock(&gSchedulerLock);
+}
 
 
 static void
@@ -492,9 +520,13 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		} else {
 			// Issue 84 fix: this IPI dispatch was unreachable before; now
 			// correctly wakes the target CPU when a thread is enqueued.
-			if (targetCPU->SetReschedulePending()) {
-				smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
-					NULL, SMP_MSG_FLAG_ASYNC);
+			bigtime_t now = system_time();
+			if (ShouldReschedule(now, targetCPU->lastReschedule, kRescheduleCooldown)) {
+				if (targetCPU->SetReschedulePending()) {
+					targetCPU->lastReschedule = now;
+					smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
+						NULL, SMP_MSG_FLAG_ASYNC);
+				}
 			}
 		}
 	}
@@ -522,6 +554,8 @@ scheduler_enqueue_in_run_queue(Thread *thread)
 	SCHEDULER_ENTER_FUNCTION();
 
 	SchedulerModeLocker _;
+
+	AssertThreadReady(thread);
 
 	TRACE("enqueueing new thread %" B_PRId32 " with static priority %" B_PRId32 "\n", thread->id,
 		thread->priority);

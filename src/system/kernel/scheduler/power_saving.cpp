@@ -21,6 +21,12 @@
 using namespace Scheduler;
 
 
+// --- Scheduler tuning (power saving mode improvements) ---
+static const int kConsolidationThreshold = 2;
+static const int kMaxCPUsToScan = 8;
+static const bigtime_t kIdleConsolidationCooldown = 2000;
+
+
 static CoreEntry** sSmallTaskCore;
 
 
@@ -43,6 +49,13 @@ set_cpu_enabled(int32 cpu, bool enabled)
 		for (int32 i = 0; i < gNodeCount; i++)
 			atomic_pointer_set(&sSmallTaskCore[i], (CoreEntry*)NULL);
 	}
+}
+
+
+static int
+GetCPULoad(CPUEntry* cpu)
+{
+	return LoadAcquire(cpu->fLoad);
 }
 
 
@@ -296,7 +309,11 @@ choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL)
 	if (package == NULL) {
 		// No partially idle packages. Check for any idle package using the mask.
 		uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
+		int scannedCount = 0;
 		while (idleNodeMask != 0) {
+			if (++scannedCount > kMaxCPUsToScan)
+				break;
+
 			int32 nodeIndex = __builtin_ctzll(idleNodeMask);
 			idleNodeMask &= ~(1ULL << nodeIndex);
 
@@ -828,7 +845,16 @@ rebalance(const ThreadData* threadData)
 
 		int32 coreNewScore = coreScore - weightedLoadOnCore;
 		int32 otherNewScore = other->GetScore() + weightedLoadOnOther;
-		return coreNewScore - otherNewScore >= threshold ? other : core;
+
+		if (coreNewScore - otherNewScore < threshold)
+			return core;
+
+		bigtime_t now = system_time();
+		if (now - threadData->GetThread()->lastMigrationTime < kIdleConsolidationCooldown)
+			return core;
+
+		threadData->GetThread()->lastMigrationTime = now;
+		return other;
 	}
 
 	if (coreScore >= kMediumLoad)

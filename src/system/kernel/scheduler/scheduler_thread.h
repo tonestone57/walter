@@ -487,22 +487,16 @@ ThreadData::GoesAway()
 	ASSERT(fReady);
 
 	if (!IsIdle()) {
-		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
+		int32 prev = gTotalRunnableThreads.fetch_sub(1, std::memory_order_acq_rel);
 		if (prev <= 0) {
-			int32 cur = atomic_get(&gTotalRunnableThreads);
+			int32 cur = gTotalRunnableThreads.load(std::memory_order_acquire);
 			for (int32 i = 0; i < 100 && cur < 0; i++) {
-				int32 was = atomic_test_and_set(&gTotalRunnableThreads, 0,
-					cur);
-				if (was == cur)
+				int32 was = cur;
+				if (gTotalRunnableThreads.compare_exchange_strong(was, 0,
+						std::memory_order_seq_cst)) {
 					break;
-				// Issue 99 fix: on weakly-ordered architectures, atomic_get
-				// after atomic_add may return a value that does not reflect
-				// the just-completed decrement. Use the CAS return value
-				// (was) directly as the next retry value — it is the most
-				// recently observed value and avoids an additional atomic_get.
+				}
 				cur = was;
-				// Insert a read barrier to ensure the next atomic_get
-				// observes the result of the previous CAS attempt.
 				memory_read_barrier();
 			}
 		}
@@ -554,15 +548,15 @@ ThreadData::Dies()
 	ASSERT(fReady);
 
 	if (!IsIdle()) {
-		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
+		int32 prev = gTotalRunnableThreads.fetch_sub(1, std::memory_order_acq_rel);
 		if (prev <= 0) {
-			int32 cur = atomic_get(&gTotalRunnableThreads);
+			int32 cur = gTotalRunnableThreads.load(std::memory_order_acquire);
 			for (int32 i = 0; i < 100 && cur < 0; i++) {
-				int32 was = atomic_test_and_set(&gTotalRunnableThreads, 0,
-					cur);
-				if (was == cur)
+				int32 was = cur;
+				if (gTotalRunnableThreads.compare_exchange_strong(was, 0,
+						std::memory_order_seq_cst)) {
 					break;
-				// Issue 99 fix: same consistent retry value as GoesAway.
+				}
 				cur = was;
 				memory_read_barrier();
 			}
@@ -647,7 +641,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			// CPUCount guard in the non-pinned path (see below).  For the pinned
 			// path the CPU liveness check happens under CPURunQueueLocker.
 			if (!wasReady && !IsIdle())
-				atomic_add(&gTotalRunnableThreads, 1);
+				gTotalRunnableThreads.fetch_add(1, std::memory_order_release);
 
 			ASSERT(!fEnqueued);
 			fEnqueued = true;
@@ -730,7 +724,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		// defer the gTotalRunnableThreads increment until after the
 		// CPUCount guard in the non-pinned path.
 		if (!wasReady && !IsIdle())
-			atomic_add(&gTotalRunnableThreads, 1);
+			gTotalRunnableThreads.fetch_add(1, std::memory_order_release);
 
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
