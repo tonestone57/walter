@@ -36,12 +36,18 @@ const bigtime_t kMinMeasurementWindow = 1000;
 const int kLoadClampMax = 100000;
 
 
+namespace Scheduler {
+
+
 int
 SmoothLoad(int oldLoad, int newLoad)
 {
 	// Simple exponential smoothing
 	return (oldLoad * 3 + newLoad) / 4;
 }
+
+
+}	// namespace Scheduler
 
 
 

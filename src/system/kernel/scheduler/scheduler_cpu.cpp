@@ -354,7 +354,7 @@ CPUEntry::ComputeLoad()
 
 	fLoad.store(currentLoad, std::memory_order_relaxed);
 
-	if (currentLoad > kVeryHighLoad)
+	if (GetLoad() > kVeryHighLoad)
 		Scheduler::RebalanceIRQs(false);
 }
 
@@ -791,10 +791,10 @@ CPUEntry::_RequestPerformanceLevel(ThreadData* threadData)
 		return;
 	}
 
-	int32 load = max_c(threadData->GetLoad(), fCore->GetLoad());
-	ASSERT_PRINT(load >= 0 && load <= kMaxLoad, "load is out of range %"
+	int32 load = max_c(threadData->GetLoad(), GetLoad());
+	ASSERT_PRINT(load >= 0 && load <= kMaxLoad + kSMTPenalty, "load is out of range %"
 		B_PRId32 " (max of %" B_PRId32 " %" B_PRId32 ")", load,
-		threadData->GetLoad(), fCore->GetLoad());
+		threadData->GetLoad(), GetLoad());
 
 	if (load < kTargetLoad) {
 		int32 delta = kTargetLoad - load;

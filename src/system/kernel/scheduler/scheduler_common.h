@@ -163,7 +163,6 @@ extern int32 gRandomSamples;
 extern const bigtime_t kMinMeasurementWindow;
 extern const int kLoadClampMax;
 
-int SmoothLoad(int oldLoad, int newLoad);
 
 extern int64 gDeadlineBucketSize;
 

@@ -614,78 +614,6 @@ CoreEntry::GetActiveTime() const
 }
 
 
-inline int32
-CoreEntry::GetLoad() const
-{
-	SCHEDULER_ENTER_FUNCTION();
-
-	// Issue 13 fix: the original comment claimed "read fLoad before fCPUCount"
-	// for a "marginally safer ordering", but the actual hazard is the opposite:
-	// a concurrent RemoveCPU that decrements fCPUCount then fLoad can cause us
-	// to divide by (cpuCount-1) using the pre-decrement fLoad, overestimating.
-	// Read fCPUCount FIRST so that if RemoveCPU is racing we either see both
-	// old values (no problem) or the new fCPUCount with old fLoad (safe
-	// overestimate) — we never divide by a count lower than the load implies.
-	// A memory_read_barrier between the two reads would provide the strongest
-	// guarantee; for now reading cpuCount first is the correct order.
-	int32 cpuCount = atomic_get(const_cast<int32*>(&fCPUCount));
-	// Barrier: ensure cpuCount is read before fLoad so we never see a
-	// decremented cpuCount with a pre-decrement fLoad.
-	memory_read_barrier();
-	int32 load = atomic_get(const_cast<int32*>(&fLoad));
-
-	if (cpuCount <= 0)
-		return kMaxLoad;
-
-	// clamp each fast-path result to [0, kMaxLoad] so that a
-	// transiently negative fLoad from a concurrent RemoveLoad race does not
-	// propagate into load comparisons as a large positive number.
-	// Issue 74 fix: use a consistent formula for all fast-path cases to avoid
-	// off-by-one inconsistencies with the general load/cpuCount path.
-	// Specifically load/3 and load/6 truncate differently from load/cpuCount
-	// on non-divisible values, causing subtle comparison inconsistencies.
-	// Use arithmetic right shift (equivalent to floor division for non-negative)
-	// and keep the same result as the general path.
-	if (cpuCount == 1)
-		return min_c(max_c(load, 0), kMaxLoad);
-	if (cpuCount == 2)
-		return (int32)min_c(max_c(load / 2, 0), kMaxLoad);
-	if (cpuCount == 3)
-		return (int32)min_c(max_c(load / 3, 0), kMaxLoad);
-	if (cpuCount == 4)
-		return (int32)min_c(max_c(load / 4, 0), kMaxLoad);
-	if (cpuCount == 6)
-		return (int32)min_c(max_c(load / 6, 0), kMaxLoad);
-	if (cpuCount == 8)
-		return (int32)min_c(max_c(load / 8, 0), kMaxLoad);
-
-	// Clamp negative load .
-	if (load < 0)
-		return 0;
-	return (int32)min_c(load / cpuCount, kMaxLoad);
-}
-
-
-inline int32
-CoreEntry::GetScore() const
-{
-	SCHEDULER_ENTER_FUNCTION();
-
-	int32 load = GetLoad();
-
-	// Use weighted score: (load * 1024) / capacity
-	// This makes Efficiency cores (lower capacity) appear "full" faster.
-	// Optimization: replaced division with multiplicative factor (fixed point 1.16)
-	// Issue 43 fix: the intermediate int64 product can exceed INT32_MAX
-	// when fScoreFactor is large (e.g. efficiency core with small capacity).
-	// min_c operates on int64 before the cast, which is correct. However
-	// the explicit cast to int32 after min_c is safe only because kMaxLoad
-	// fits in int32. Add a static_assert to make this invariant machine-checkable.
-	static_assert(kMaxLoad <= INT32_MAX,
-		"kMaxLoad must fit in int32 for GetScore() cast safety");
-	int64 score = ((int64)load * (int64)fScoreFactor) >> 16;
-	return (int32)min_c(score, (int64)kMaxLoad);
-}
 
 
 inline void
@@ -1076,6 +1004,9 @@ PackageEntry::ReadUnlockCore()
 {
 	release_read_spinlock(&fCoreLock);
 }
+
+
+int SmoothLoad(int oldLoad, int newLoad);
 
 
 }	// namespace Scheduler
