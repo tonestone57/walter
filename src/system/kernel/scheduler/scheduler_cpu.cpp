@@ -340,6 +340,7 @@ CPUEntry::ComputeLoad()
 	ASSERT(!gCPU[fCPUNumber].disabled);
 	ASSERT(fCPUNumber == smp_get_current_cpu());
 
+	// Use a local int32 for compute_load to avoid binding a reference to an atomic.
 	int32 currentLoad = fLoad.load(std::memory_order_relaxed);
 	int oldLoad = compute_load(fMeasureTime, fMeasureActiveTime, currentLoad,
 			system_time());
@@ -1386,8 +1387,10 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			if (cpuCount > 0) {
 				int32 load = (int32)(oldCombined >> 32) / freshCPUCount;
 				load = ((int64)load * fScoreFactor) >> 16;
+
+				int32 oldLoad = atomic_get(&fPackage->fCoreLoads[fPackageIndex]);
 				atomic_set(&fPackage->fCoreLoads[fPackageIndex],
-					min_c(load, (int32)kMaxLoad));
+					SmoothLoad(oldLoad, min_c(load, (int32)kMaxLoad)));
 			}
 			return;
 		}
