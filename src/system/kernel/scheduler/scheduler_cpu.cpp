@@ -105,22 +105,6 @@ CPUEntry::CPUEntry()
 }
 
 
-int32
-CPUEntry::GetLoad() const
-{
-	int32 load = fLoad.load(std::memory_order_acquire);
-
-	// Penalize SMT siblings to prefer physical cores
-	if (fCore != nullptr && fCore->CPUCount() > 1) {
-		// If at least one other thread is running on this core
-		if (fCore->ThreadCount() > 1)
-			load += kSMTPenalty;
-	}
-
-	return load;
-}
-
-
 void
 CPUEntry::Init(int32 id, CoreEntry* core)
 {

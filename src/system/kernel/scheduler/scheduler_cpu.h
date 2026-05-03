@@ -127,7 +127,7 @@ public:
 
 						void			UpdatePriority(int32 priority);
 
-						int32			GetLoad() const;
+	inline				int32			GetLoad() const;
 						bigtime_t		GetMinVirtualRuntime() const;
 						void			ComputeLoad();
 
@@ -529,8 +529,23 @@ CPUEntry::UnlockRunQueue()
 /* static */ inline CPUEntry*
 CPUEntry::GetCPU(int32 cpu)
 {
-	SCHEDULER_ENTER_FUNCTION();
 	return &gCPUEntries[cpu];
+}
+
+
+inline int32
+CPUEntry::GetLoad() const
+{
+	int32 load = fLoad.load(std::memory_order_acquire);
+
+	// Penalize SMT siblings to prefer physical cores
+	if (fCore != nullptr && fCore->CPUCount() > 1) {
+		// If at least one other thread is running on this core
+		if (fCore->ThreadCount() > 1)
+			load += kSMTPenalty;
+	}
+
+	return load;
 }
 
 
@@ -609,11 +624,22 @@ CoreEntry::IncreaseActiveTime(bigtime_t activeTime)
 inline bigtime_t
 CoreEntry::GetActiveTime() const
 {
-	SCHEDULER_ENTER_FUNCTION();
 	return atomic_get64((int64*)&fActiveTime);
 }
 
 
+inline int32
+CoreEntry::GetLoad() const
+{
+	return atomic_get(const_cast<int32*>(&fLoad));
+}
+
+
+inline int32
+CoreEntry::GetScore() const
+{
+	return ((int64)GetLoad() * fScoreFactor) >> 16;
+}
 
 
 inline void
