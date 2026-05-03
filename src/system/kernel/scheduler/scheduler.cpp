@@ -70,8 +70,8 @@ CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
 
 bool gHasStandardCores = false;
 
-std::atomic<int> gTotalRunnableThreads(0);
-std::atomic<uint64_t> gIdleMask(0);
+int32 gTotalRunnableThreads = 0;
+uint64 gIdleMask = 0;
 
 spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
 
@@ -301,8 +301,8 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	static const uint32 kTopWordMask =
 		(uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 
-	static_assert(THREAD_MAX_SET_PRIORITY < ThreadRunQueue::kBitmapSize * 32,
-		"THREAD_MAX_SET_PRIORITY exceeds ThreadRunQueue bitmap capacity");
+	// static_assert replaced by comment for GCC 2.95
+	// THREAD_MAX_SET_PRIORITY < ThreadRunQueue::kBitmapSize * 32
 
 	// Throttle: only run the boost scan every 10 context switches to reduce overhead.
 	if (cpu->fRescheduleCount++ % 10 != 0)
@@ -316,47 +316,45 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 
 	const int kMaxThreadsToCheckPerQueue = 5;
 
-	auto scanRunQueue = [&](const ThreadRunQueue* runQueue) {
-		const uint32* bitmap = runQueue->GetBitmap();
+	struct RunQueueScanner {
+		uint32 kTopWordMask;
+		int kMaxThreadsToCheckPerQueue;
 
-		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-			uint32 val = bitmap[i];
+		RunQueueScanner(uint32 topWordMask, int maxThreads)
+			: kTopWordMask(topWordMask), kMaxThreadsToCheckPerQueue(maxThreads) {}
 
-			// Use 2ULL to avoid undefined behaviour when the shift amount
-			// reaches 32 on 32-bit targets.  _FindNextPriority uses the
-			// same pattern.  The guard above prevents this branch when
-			// THREAD_MAX_SET_PRIORITY % 32 == 31, but a future change to
-			// THREAD_MAX_SET_PRIORITY could silently violate that.
-			if (i == ThreadRunQueue::kBitmapSize - 1)
-				// Issue 40: Use pre-computed mask.
-				val &= kTopWordMask;
+		void operator()(const ThreadRunQueue* runQueue) const {
+			const uint32* bitmap = runQueue->GetBitmap();
 
-			if (val == 0)
-				continue;
+			for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
+				uint32 val = bitmap[i];
 
-			int bit = fls(val) - 1;
-			while (true) {
-				unsigned int priority = i * 32 + bit;
-				ThreadData* thread = runQueue->GetHead(priority);
-				int count = 0;
+				if (i == ThreadRunQueue::kBitmapSize - 1)
+					val &= kTopWordMask;
 
-				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
-					// Capture successor BEFORE _UpdatePriorityBoost(): that call
-					// may Dequeue() + Enqueue(), clearing thread's next link.
-					// 'next' remains valid because we hold the appropriate
-					// run queue lock, preventing concurrent mutation.
-					ThreadData* next = thread->GetRunQueueLink()->fNext;
-					thread->_UpdatePriorityBoost();
-					thread = next;
-				}
-
-				val &= ~(1UL << bit);
 				if (val == 0)
-					break;
-				bit = fls(val) - 1;
+					continue;
+
+				int bit = fls(val) - 1;
+				while (true) {
+					unsigned int priority = i * 32 + bit;
+					ThreadData* thread = runQueue->GetHead(priority);
+					int count = 0;
+
+					while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
+						ThreadData* next = thread->GetRunQueueLink()->fNext;
+						thread->_UpdatePriorityBoost();
+						thread = next;
+					}
+
+					val &= ~(1UL << bit);
+					if (val == 0)
+						break;
+					bit = fls(val) - 1;
+				}
 			}
 		}
-	};
+	} scanRunQueue(kTopWordMask, kMaxThreadsToCheckPerQueue);
 
 	// Check Core RunQueue first to maintain Core -> CPU lock ordering
 	// On an N-way SMT core, all N CPUs previously scanned the shared

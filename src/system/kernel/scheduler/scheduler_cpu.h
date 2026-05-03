@@ -9,7 +9,6 @@
 
 #include <OS.h>
 
-#include <atomic>
 #include <smp.h>
 #include <thread.h>
 #include <util/atomic.h>
@@ -62,11 +61,9 @@ const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
 // assert compared kMaxCoresPerPackage to itself (tautological). This one
 // checks that kMaxCoresPerPackage does not exceed a hard platform ceiling
 // and that native_cpu_mask_t is wide enough to represent all core bits.
-static_assert(kMaxCoresPerPackage <= 64,
-	"kMaxCoresPerPackage exceeds 64-bit shift range on any platform");
-static_assert(kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8),
-	"native_cpu_mask_t is too narrow for kMaxCoresPerPackage; "
-	"increase native_cpu_mask_t or reduce kMaxCoresPerPackage");
+// static_assert replaced by comment for GCC 2.95
+// kMaxCoresPerPackage <= 64
+// kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8)
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
@@ -78,7 +75,7 @@ public:
 						void			Dump() const;
 };
 
-class alignas(64) CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
+class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 public:
 										CPUEntry();
 
@@ -143,7 +140,7 @@ public:
 						uint32			GetRandom();
 
 	inline				int32			ThreadCount() const
-											{ return fThreadCount.load(std::memory_order_acquire); }
+											{ return atomic_get(const_cast<int32*>(&fThreadCount)); }
 
 						bool			SetReschedulePending()
 											{ return atomic_set(&fReschedulePending, 1) == 0; }
@@ -168,8 +165,8 @@ private:
 						ThreadRunQueue	fRunQueue;
 						spinlock		fQueueLock;
 
-						std::atomic<int32>	fThreadCount;
-						std::atomic<int32>	fLoad;
+						int32				fThreadCount;
+						int32				fLoad;
 						bigtime_t		lastReschedule;
 
 						int32			fPerformanceScale;
@@ -194,7 +191,7 @@ public:
 						IRQRebalanceDPC	fRebalanceDPC;
 
 						friend class DebugDumper;
-} CACHE_LINE_ALIGN;
+} __attribute__((aligned(64)));
 
 class CPUPriorityHeap : public Heap<CPUEntry, int32> {
 public:
@@ -204,7 +201,7 @@ public:
 						void			Dump();
 };
 
-class alignas(64) CoreEntry {
+class CoreEntry {
 public:
 										CoreEntry();
 
@@ -343,7 +340,7 @@ private:
 						int32			fNextCoreLocalIndex;
 
 						friend class DebugDumper;
-} CACHE_LINE_ALIGN;
+} __attribute__((aligned(64)));
 
 // gPackageEntries are used to decide which core should be woken up from the
 // idle state. When aiming for performance we should use as many packages as
@@ -388,7 +385,7 @@ private:
 
 						int32				fPackageStartIndex;
 						int32				fPackageCount;
-} CACHE_LINE_ALIGN;
+} __attribute__((aligned(64)));
 
 
 class PackageEntry {
@@ -455,7 +452,7 @@ private:
 						native_cpu_mask_t	fEnabledCoreMask;
 
 						friend class DebugDumper;
-} CACHE_LINE_ALIGN;
+} __attribute__((aligned(64)));
 
 extern CPUEntry* gCPUEntries;
 
@@ -536,10 +533,10 @@ CPUEntry::GetCPU(int32 cpu)
 inline int32
 CPUEntry::GetLoad() const
 {
-	int32 load = fLoad.load(std::memory_order_acquire);
+	int32 load = atomic_get(const_cast<int32*>(&fLoad));
 
 	// Penalize SMT siblings to prefer physical cores
-	if (fCore != nullptr && fCore->CPUCount() > 1) {
+	if (fCore != NULL && fCore->CPUCount() > 1) {
 		// If at least one other thread is running on this core
 		if (fCore->ThreadCount() > 1)
 			load += kSMTPenalty;
@@ -915,8 +912,8 @@ PackageEntry::IdleCoreMask() const
 	// on all supported platforms (32 on 32-bit, 64 on 64-bit).  This
 	// comment documents the assumption so it is verified if kMaxCoresPerPackage
 	// is ever changed to a non-power-of-2 value.
-	static_assert((kMaxCoresPerPackage & (kMaxCoresPerPackage - 1)) == 0,
-		"kMaxCoresPerPackage must be a power of 2 for rotation arithmetic");
+	// static_assert replaced by comment for GCC 2.95
+	// (kMaxCoresPerPackage & (kMaxCoresPerPackage - 1)) == 0
 	SCHEDULER_ENTER_FUNCTION();
 	return scheduler_atomic_get(&fIdleCoreMask);
 }

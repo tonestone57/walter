@@ -691,11 +691,11 @@ private:
 	uint32				fHashTableSize;
 
 #if B_HAIKU_64_BIT
-	alignas(8) int64	fNextAllocation;
-	alignas(8) int64	fRemainingBytes;
+	 int64	fNextAllocation;
+	 int64	fRemainingBytes;
 #else
-	alignas(4) int32	fNextAllocation;
-	alignas(4) int32	fRemainingBytes;
+	 int32	fNextAllocation;
+	 int32	fRemainingBytes;
 #endif
 };
 

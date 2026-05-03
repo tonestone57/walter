@@ -6,7 +6,6 @@
 #define KERNEL_SCHEDULER_LOCKING_H
 
 
-#include <atomic>
 #include <util/AutoLock.h>
 
 #include "scheduler_cpu.h"
@@ -24,7 +23,7 @@ SchedulerLockHeld()
 {
 #ifdef DEBUG_SCHEDULER
 	Thread* thread = thread_get_current_thread();
-	return thread != nullptr && thread->scheduler_lock_depth > 0;
+	return thread != NULL && thread->scheduler_lock_depth > 0;
 #else
 	return true; // assume correct in release
 #endif
@@ -55,7 +54,7 @@ private:
 		// Use get_cpu_struct()->running_thread for safer access during
 		// context switches and early boot.
 		Thread* thread = get_cpu_struct()->running_thread;
-		if (thread != nullptr)
+		if (thread != NULL)
 			thread->scheduler_lock_depth++;
 #endif
 
@@ -68,7 +67,7 @@ private:
 
 #ifdef DEBUG_SCHEDULER
 		Thread* thread = get_cpu_struct()->running_thread;
-		if (thread != nullptr) {
+		if (thread != NULL) {
 			thread->scheduler_lock_depth--;
 			ASSERT(thread->scheduler_lock_depth >= 0);
 		}
@@ -94,7 +93,7 @@ inline void
 AssertLockOrder(int rank)
 {
 	Thread* thread = thread_get_current_thread();
-	if (thread != nullptr) {
+	if (thread != NULL) {
 		ASSERT(rank >= thread->current_lock_rank);
 		thread->current_lock_rank = rank;
 	}
@@ -105,7 +104,7 @@ inline void
 ReleaseLockOrder(int rank)
 {
 	Thread* thread = thread_get_current_thread();
-	if (thread != nullptr) {
+	if (thread != NULL) {
 		ASSERT(thread->current_lock_rank == rank);
 		thread->current_lock_rank--;
 	}

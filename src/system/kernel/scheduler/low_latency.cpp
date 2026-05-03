@@ -61,6 +61,22 @@ has_cache_expired(const ThreadData* threadData)
 
 
 
+struct MinimumLoadAction {
+	CPUEntry* cpu;
+	const CPUSet* mask;
+	CoreEntry*& bestCore;
+	int32& bestLoad;
+	CoreType type;
+
+	MinimumLoadAction(CPUEntry* c, const CPUSet* m, CoreEntry*& bc, int32& bl,
+		CoreType t = CORE_TYPE_UNKNOWN)
+		: cpu(c), mask(m), bestCore(bc), bestLoad(bl), type(t) {}
+
+	bool operator()(PackageEntry* entry) const {
+		return CheckPackageMinimumLoad(cpu, entry, mask, bestCore, bestLoad, type);
+	}
+};
+
 static CoreEntry*
 choose_core(const ThreadData* threadData)
 {
@@ -171,6 +187,7 @@ choose_core(const ThreadData* threadData)
 
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
+		MinimumLoadAction minLoadAction(cpu, NULL, core, bestScore, preferredType);
 
 		// Try to find an idle core of the preferred type
 		uint64 typeIdleNodeMask = idleNodeMask;
@@ -204,10 +221,8 @@ choose_core(const ThreadData* threadData)
 			int32 bestScore = -1;
 			bool tryRandom = gPackageCount > kRandomSearchThreshold;
 			if (tryRandom && !useMask) {
-				search_global_random([&](PackageEntry* entry) {
-					return CheckPackageMinimumLoad(cpu, entry, NULL, core,
-						bestScore, preferredType);
-				});
+				search_global_random(MinimumLoadAction(cpu, NULL, core,
+					bestScore, preferredType));
 			} else if (useMask) {
 				CheckMaskedPackagesMinimumLoad(cpu, mask, core, bestScore,
 					preferredType);
@@ -263,10 +278,8 @@ choose_core(const ThreadData* threadData)
 			bool tryRandomStd = gPackageCount > kRandomSearchThreshold;
 
 			if (tryRandomStd && !useMask) {
-				search_global_random([&](PackageEntry* entry) {
-					return CheckPackageMinimumLoad(cpu, entry, NULL, core,
-						stdBestScore, CORE_TYPE_STANDARD);
-				});
+				search_global_random(MinimumLoadAction(cpu, NULL, core,
+					stdBestScore, CORE_TYPE_STANDARD));
 			} else if (useMask) {
 				CheckMaskedPackagesMinimumLoad(cpu, mask, core, stdBestScore,
 					CORE_TYPE_STANDARD);
@@ -388,6 +401,7 @@ choose_core(const ThreadData* threadData)
 		// no idle cores, search global packages for least occupied core
 		CoreEntry* bestCore = NULL;
 		int32 bestLoad = -1;
+		MinimumLoadAction globalMinLoadAction(cpu, NULL, bestCore, bestLoad);
 
 		// If we have many packages, use random sampling (Power of Two Choices)
 		// to avoid the O(N) overhead of locking every package.
@@ -404,16 +418,10 @@ choose_core(const ThreadData* threadData)
 			else if (homePackageID >= 0 && homePackageID < gPackageCount)
 				node = gPackageEntries[homePackageID].Node();
 
-			search_local_node(node, [&](PackageEntry* entry) {
-				return CheckPackageMinimumLoad(cpu, entry, NULL, bestCore,
-					bestLoad);
-			});
+			search_local_node(node, globalMinLoadAction);
 
 			// Phase 3: Global Random
-			search_global_random([&](PackageEntry* entry) {
-				return CheckPackageMinimumLoad(cpu, entry, NULL, bestCore,
-					bestLoad);
-			});
+			search_global_random(globalMinLoadAction);
 
 		} else if (useMask) {
 			CheckMaskedPackagesMinimumLoad(cpu, mask, bestCore, bestLoad);
@@ -537,14 +545,12 @@ rebalance(const ThreadData* threadData)
 		SchedulerNode* node = NULL;
 		if (core->Package() != NULL)
 			node = core->Package()->Node();
-		search_local_node(node, [&](PackageEntry* entry) {
-			return CheckPackageMinimumLoad(cpu, entry, NULL, other, bestLoad);
-		});
+
+		MinimumLoadAction rebalanceMinLoadAction(cpu, NULL, other, bestLoad);
+		search_local_node(node, rebalanceMinLoadAction);
 
 		// Phase 3: Global Random
-		search_global_random([&](PackageEntry* entry) {
-			return CheckPackageMinimumLoad(cpu, entry, NULL, other, bestLoad);
-		});
+		search_global_random(rebalanceMinLoadAction);
 
 	} else if (useMask) {
 		CheckMaskedPackagesMinimumLoad(cpu, mask, other, bestLoad);
@@ -597,9 +603,8 @@ rebalance(const ThreadData* threadData)
 	// Issue 53 fix: document both bounds explicitly. The lower bound prevents
 	// subtraction underflow; the upper bound prevents addition overflow.
 	// Both are required and neither can be safely removed.
-	// Static assertion documents the relationship to prevent future breakage.
-	static_assert(sizeof(bigtime_t) == 8,
-		"congested guard assumes 64-bit bigtime_t");
+	// static_assert replaced by comment for GCC 2.95
+	// sizeof(bigtime_t) == 8
 	bool congested = (coreVRuntime >= (bigtime_t)(INT64_MIN + 20000LL))
 		&& (coreVRuntime <= (bigtime_t)(INT64_MAX - 20000LL))
 		&& (otherVRuntime > coreVRuntime + 20000LL);
@@ -754,19 +759,14 @@ rebalance_irqs(bool idle)
 	if (tryRandom) {
 		// Phase 2: Local Node
 		// Use the pre-lock snapshot .
+		MinimumLoadAction irqMinLoadAction(cpuEntryForIRQ, NULL, other, bestLoad);
 		if (currentCore != NULL && currentCore->Package() != NULL) {
 			SchedulerNode* node = currentCore->Package()->Node();
-			search_local_node(node, [&](PackageEntry* entry) {
-				return CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL,
-					other, bestLoad);
-			});
+			search_local_node(node, irqMinLoadAction);
 		}
 
 		// Phase 3: Global Random
-		search_global_random([&](PackageEntry* entry) {
-			return CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL,
-				other, bestLoad);
-		});
+		search_global_random(irqMinLoadAction);
 	}
 
 	// Use empty mask (NULL), as we don't care about affinity here

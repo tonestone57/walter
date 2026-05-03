@@ -74,7 +74,7 @@ public:
 
 	inline	bool		IsEmpty() const
 	{
-		return fTotalCount.load(std::memory_order_acquire) == 0;
+		return atomic_get(const_cast<int32*>(&fTotalCount)) == 0;
 	}
 
 	class ConstIterator {
@@ -113,7 +113,7 @@ public:
 
 	inline	int32		Count() const
 	{
-		return fTotalCount.load(std::memory_order_acquire);
+		return atomic_get(const_cast<int32*>(&fTotalCount));
 	}
 
 	inline	Element*	GetHead(unsigned int priority) const;
@@ -143,13 +143,13 @@ private:
 
 	mutable	Element*	fBest;
 
-			std::atomic<int32>	fTotalCount;
+			int32		fTotalCount;
 
 	// Prevent false sharing (hot structure)
-	alignas(64) char _pad0[64];
+	char _pad0[64] __attribute__((aligned(64)));
 
 #ifdef DEBUG_SCHEDULER
-	std::atomic<int32> fDebugEnqueueCount;
+	int32 fDebugEnqueueCount;
 #endif
 
 	static	GetLink		sGetLink;
@@ -390,12 +390,12 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	// Issue 10/24 fix: capture isEmpty before the bitmap update.
 	// Since we hold the run-queue spinlock, this check is atomic
 	// with the subsequent insertion.
-	bool isEmpty = (fTotalCount.load(std::memory_order_acquire) == 0);
+	bool isEmpty = (atomic_get(&fTotalCount) == 0);
 
-	fTotalCount.fetch_add(1, std::memory_order_release);
+	atomic_add(&fTotalCount, 1);
 
 #ifdef DEBUG_SCHEDULER
-	fDebugEnqueueCount.fetch_add(1, std::memory_order_relaxed);
+	atomic_add(&fDebugEnqueueCount, 1);
 #endif
 
 	Traits::SetInRunQueue(element, true);
@@ -457,12 +457,12 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	// For priority > bestPriority the new element is unconditionally better.
 	// For priority < bestPriority the new element cannot be fBest.
 	// This logic is intentional and correct for all three cases.
-	bool isEmpty = (fTotalCount.load(std::memory_order_acquire) == 0);
+	bool isEmpty = (atomic_get(&fTotalCount) == 0);
 
-	fTotalCount.fetch_add(1, std::memory_order_release);
+	atomic_add(&fTotalCount, 1);
 
 #ifdef DEBUG_SCHEDULER
-	fDebugEnqueueCount.fetch_add(1, std::memory_order_relaxed);
+	atomic_add(&fDebugEnqueueCount, 1);
 #endif
 
 	Traits::SetInRunQueue(element, true);
@@ -523,7 +523,7 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 		fBitmap[priority / 32] &= ~(1UL << (priority % 32));
 	}
 
-	fTotalCount.fetch_sub(1, std::memory_order_acq_rel);
+	atomic_add(&fTotalCount, -1);
 
 	Traits::SetInRunQueue(element, false);
 

@@ -365,18 +365,6 @@ ThreadData::ComputeQuantum() const
 
 	const bigtime_t kMinGranularity = 1200;
 
-	// Issue 76 fix: guard against fScoreFactor == 0 which occurs if
-	// SetCapacity(0) is ever called (capacity == 0 → division by zero in
-	// Init()). In practice capacity is clamped to >= 128, but the defensive
-	// check prevents a kernel panic if that invariant is ever violated.
-	if (core->Capacity() <= 0 || core->ScoreFactor() == 0)
-		return max_c(minQ, kMinGranularity);
-
-	const bigtime_t kHighLoadQuantum = max_c(baseQ, kMinGranularity);
-	const bigtime_t kMediumQuantum   = baseQ * mult0;
-	const bigtime_t kMaxQuantum      = maxLat;
-	const bigtime_t kDisplayQuantum  = max_c(minQ, kMinGranularity);
-
 	// Cache fCore once. Without this, a concurrent MigrateTo() can change
 	// fCore between the three calls below, mixing data from two different
 	// CoreEntry objects. The reads are still individually approximate (no
@@ -389,6 +377,18 @@ ThreadData::ComputeQuantum() const
 	// quickly and picks up a valid core assignment on the next pass.
 	if (core == NULL)
 		return max_c(minQ, kMinGranularity);
+
+	// Issue 76 fix: guard against fScoreFactor == 0 which occurs if
+	// SetCapacity(0) is ever called (capacity == 0 → division by zero in
+	// Init()). In practice capacity is clamped to >= 128, but the defensive
+	// check prevents a kernel panic if that invariant is ever violated.
+	if (core->Capacity() <= 0 || core->ScoreFactor() == 0)
+		return max_c(minQ, kMinGranularity);
+
+	const bigtime_t kHighLoadQuantum = max_c(baseQ, kMinGranularity);
+	const bigtime_t kMediumQuantum   = baseQ * mult0;
+	const bigtime_t kMaxQuantum      = maxLat;
+	const bigtime_t kDisplayQuantum  = max_c(minQ, kMinGranularity);
 
 	int32 load;
 	int32 threadCount;
@@ -495,7 +495,8 @@ ThreadData::ComputeQuantumLengths()
 
 	atomic_set64(&sMaxLatency, Scheduler::MaximumLatency());
 
-	const bigtime_t kBaseSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
+	const bigtime_t kBaseSlice = atomic_get64(
+		const_cast<int64*>(&Scheduler::gDeadlineBucketSize));
 	const bigtime_t kQuantum0 = Scheduler::BaseQuantum();
 	const bigtime_t kQuantum1 = kQuantum0 * Scheduler::QuantumMultiplier(0);
 	const bigtime_t kQuantum2 = kQuantum0 * Scheduler::QuantumMultiplier(1);
@@ -659,7 +660,8 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 
 	// Cache bucket size: avoids redundant atomic reads on this hot path.
 	// The value is effectively constant within a scheduling decision.
-	const bigtime_t bucketSize = atomic_get64(&Scheduler::gDeadlineBucketSize);
+	const bigtime_t bucketSize = atomic_get64(
+		const_cast<int64*>(&Scheduler::gDeadlineBucketSize));
 
 	// Issue 14 fix: guard against division-by-zero if bucketSize is 0.
 	// This can occur transiently during mode initialisation before
@@ -714,8 +716,8 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		}
 
 		const int32 kMaxDynamicPriority = B_FIRST_REAL_TIME_PRIORITY - 1;
-		static_assert(kMaxDynamicPriority <= THREAD_MAX_SET_PRIORITY,
-			"kMaxDynamicPriority exceeds THREAD_MAX_SET_PRIORITY");
+		// static_assert replaced by comment for GCC 2.95
+		// kMaxDynamicPriority <= THREAD_MAX_SET_PRIORITY
 
 		bigtime_t urgency = kMaxDynamicPriority - diff / bucketSize;
 		if (urgency < 0) urgency = 0;

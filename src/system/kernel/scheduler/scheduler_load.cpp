@@ -62,7 +62,7 @@ _LoadavgUpdate(void *data, int iteration)
 	// If sub-second load visibility is required in the future, the daemon
 	// period must be reduced and sCExp recalibrated accordingly.
 	// Optimization: Use global atomic counter instead of O(N) core scan.
-	int32 threadCount = gTotalRunnableThreads.load(std::memory_order_acquire);
+	int32 threadCount = atomic_get(&gTotalRunnableThreads);
 	if (threadCount < 0)
 		threadCount = 0;
 
@@ -92,7 +92,8 @@ scheduler_loadavg_init()
 	// (5,000,000 µs) update interval, matching FreeBSD kern_sync.c.
 	// The argument below must remain 5000000; changing it without
 	// recalibrating sCExp will produce meaningless load average values.
-	static_assert(true, "verify daemon period matches EMA calibration");
+	// static_assert replaced by comment for GCC 2.95
+	// true, "verify daemon period matches EMA calibration"
 	// Issue 24 fix: the loadavg EMA decay constants (sCExp) are calibrated
 	// for a 5-second update interval (matching FreeBSD kern_sync.c).
 	// register_kernel_daemon period is in microseconds; 5000 µs = 5 ms is

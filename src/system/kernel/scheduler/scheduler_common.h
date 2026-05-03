@@ -7,7 +7,6 @@
 #define KERNEL_SCHEDULER_COMMON_H
 
 
-#include <atomic>
 #include <debug.h>
 #include <kscheduler.h>
 #include <load_tracking.h>
@@ -166,8 +165,8 @@ extern const int kLoadClampMax;
 
 extern int64 gDeadlineBucketSize;
 
-extern std::atomic<int> gTotalRunnableThreads;
-extern std::atomic<uint64_t> gIdleMask;
+extern int32 gTotalRunnableThreads;
+extern uint64 gIdleMask;
 
 extern CoreType gMinCoreType;
 extern CoreType gMaxCoreType;
@@ -185,7 +184,7 @@ extern CoreType gMaxCoreType;
 inline void
 AssertThreadReady(Thread* thread)
 {
-	SCHED_ASSERT(thread != nullptr);
+	SCHED_ASSERT(thread != NULL);
 	SCHED_ASSERT(thread->state == B_THREAD_READY);
 	SCHED_ASSERT(!thread->inRunQueue);
 }
@@ -194,63 +193,63 @@ AssertThreadReady(Thread* thread)
 inline void
 AssertThreadQueued(Thread* thread)
 {
-	SCHED_ASSERT(thread != nullptr);
+	SCHED_ASSERT(thread != NULL);
 	SCHED_ASSERT(thread->inRunQueue);
 }
 
 
 inline int
-LoadAcquire(const std::atomic<int>& value)
+LoadAcquire(const int32& value)
 {
-	return value.load(std::memory_order_acquire);
+	return atomic_get(const_cast<int32*>(&value));
 }
 
 
 inline void
-StoreRelease(std::atomic<int>& value, int v)
+StoreRelease(int32& value, int v)
 {
-	value.store(v, std::memory_order_release);
+	atomic_set(&value, v);
 }
 
 
 inline void
-AddRelease(std::atomic<int>& value, int v)
+AddRelease(int32& value, int v)
 {
-	value.fetch_add(v, std::memory_order_release);
+	atomic_add(&value, v);
 }
 
 
 inline void
-SubAcquireRelease(std::atomic<int>& value, int v)
+SubAcquireRelease(int32& value, int v)
 {
-	value.fetch_sub(v, std::memory_order_acq_rel);
+	atomic_add(&value, -v);
 }
 
 
 inline void
-SetCPUIDle(std::atomic<uint64_t>& mask, int cpu)
+SetCPUIDle(uint64& mask, int cpu)
 {
-	mask.fetch_or(1ULL << cpu, std::memory_order_release);
+	atomic_or64((int64*)&mask, 1ULL << cpu);
 }
 
 
 inline void
-ClearCPUIDle(std::atomic<uint64_t>& mask, int cpu)
+ClearCPUIDle(uint64& mask, int cpu)
 {
-	mask.fetch_and(~(1ULL << cpu), std::memory_order_release);
+	atomic_and64((int64*)&mask, ~(1ULL << cpu));
 }
 
 
 inline bool
-IsCPUIDle(const std::atomic<uint64_t>& mask, int cpu)
+IsCPUIDle(const uint64& mask, int cpu)
 {
-	return (mask.load(std::memory_order_acquire) & (1ULL << cpu)) != 0;
+	return (atomic_get64((int64*)&mask) & (1ULL << cpu)) != 0;
 }
 
 
 struct SchedulerSnapshot {
-	int totalRunnable;
-	uint64_t idleMask;
+	int32 totalRunnable;
+	uint64 idleMask;
 };
 
 
@@ -258,12 +257,12 @@ SchedulerSnapshot TakeSnapshot();
 
 
 inline SchedulerSnapshot
-MakeSchedulerSnapshot(const std::atomic<int>& total,
-	const std::atomic<uint64_t>& idleMask)
+MakeSchedulerSnapshot(const int32& total,
+	const uint64& idleMask)
 {
 	SchedulerSnapshot s;
-	s.totalRunnable = total.load(std::memory_order_acquire);
-	s.idleMask = idleMask.load(std::memory_order_acquire);
+	s.totalRunnable = atomic_get(const_cast<int32*>(&total));
+	s.idleMask = atomic_get64((int64*)&idleMask);
 	return s;
 }
 

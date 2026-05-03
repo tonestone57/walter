@@ -222,7 +222,7 @@ CPUEntry::PushFront(ThreadData* thread, int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushFront(thread, priority);
-	fThreadCount.fetch_add(1, std::memory_order_release);
+	atomic_add(&fThreadCount, 1);
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -237,7 +237,7 @@ CPUEntry::PushBack(ThreadData* thread, int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushBack(thread, priority);
-	fThreadCount.fetch_add(1, std::memory_order_release);
+	atomic_add(&fThreadCount, 1);
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -262,7 +262,7 @@ CPUEntry::Remove(ThreadData* thread)
 
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
-	fThreadCount.fetch_sub(1, std::memory_order_acq_rel);
+	atomic_add(&fThreadCount, -1);
 
 	if (!thread->IsIdle()) {
 		Core()->DecrementTotalThreadCount();
@@ -324,7 +324,7 @@ CPUEntry::ComputeLoad()
 	ASSERT(!gCPU[fCPUNumber].disabled);
 	ASSERT(fCPUNumber == smp_get_current_cpu());
 
-	int32 currentLoad = fLoad.load(std::memory_order_relaxed);
+	int32 currentLoad = atomic_get(const_cast<int32*>(&fLoad));
 	int oldLoad = compute_load(fMeasureTime, fMeasureActiveTime, currentLoad,
 			system_time());
 	if (oldLoad < 0)
@@ -336,7 +336,7 @@ CPUEntry::ComputeLoad()
 	else if (currentLoad > kLoadClampMax)
 		currentLoad = kLoadClampMax;
 
-	fLoad.store(currentLoad, std::memory_order_relaxed);
+	atomic_set(&fLoad, currentLoad);
 
 	if (GetLoad() > kVeryHighLoad)
 		Scheduler::RebalanceIRQs(false);
@@ -511,7 +511,7 @@ CPUEntry::TrackLoad(ThreadData* nextThreadData)
 #ifdef DEBUG_SCHEDULER
 	TRACE("scheduler: cpu=%d load=%d idle=%d\n",
 		fCPUNumber,
-		fLoad.load(std::memory_order_relaxed),
+		atomic_get(const_cast<int32*>(&fLoad)),
 		gCPU[fCPUNumber].idle);
 #endif
 
@@ -556,6 +556,103 @@ get_random_index(uint32 random, uint32 range)
 	return (uint32)(((uint64)random * range) >> 32);
 }
 
+
+struct LocalNodeStealAction {
+	CPUEntry* cpu;
+	PackageEntry* package;
+	ThreadData** stolen;
+
+	LocalNodeStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s)
+		: cpu(c), package(p), stolen(s) {}
+
+	bool operator()(PackageEntry* entry) const {
+		if (*stolen != NULL)
+			return true;
+
+		if (entry == package)
+			return false;
+
+		int32 victimCoreCount = entry->RegisteredCoreCount();
+		if (victimCoreCount == 0)
+			return false;
+
+		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCoreCount);
+		CoreEntry* victim = entry->GetCore(coreIndex);
+
+		if (victim == NULL)
+			return false;
+
+		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
+			return false;
+
+		if (victim->TryLockRunQueue()) {
+			int32 stolenPriority = -1;
+			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+
+			if (*stolen != NULL) {
+				(*stolen)->MigrateTo(cpu->Core());
+				(*stolen)->fStolen = true;
+				cpu->Core()->IncrementTotalThreadCount();
+				victim->UnlockRunQueue();
+				return true;
+			}
+
+			victim->UnlockRunQueue();
+		}
+
+		return false;
+	}
+};
+
+struct GlobalRandomStealAction {
+	CPUEntry* cpu;
+	PackageEntry* package;
+	ThreadData** stolen;
+
+	GlobalRandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s)
+		: cpu(c), package(p), stolen(s) {}
+
+	bool operator()(PackageEntry* entry) const {
+		if (*stolen != NULL)
+			return true;
+
+		if (entry == package)
+			return false;
+
+		if (entry->IdleCoreCount() == entry->CoreCount())
+			return false;
+
+		int32 victimCoreCount = entry->RegisteredCoreCount();
+		if (victimCoreCount == 0)
+			return false;
+
+		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCoreCount);
+		CoreEntry* victim = entry->GetCore(coreIndex);
+
+		if (victim == NULL)
+			return false;
+
+		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
+			return false;
+
+		if (victim->TryLockRunQueue()) {
+			int32 stolenPriority = -1;
+			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+
+			if (*stolen != NULL) {
+				(*stolen)->MigrateTo(cpu->Core());
+				(*stolen)->fStolen = true;
+				cpu->Core()->IncrementTotalThreadCount();
+				victim->UnlockRunQueue();
+				return true;
+			}
+
+			victim->UnlockRunQueue();
+		}
+
+		return false;
+	}
+};
 
 ThreadData*
 CPUEntry::_TryStealWork()
@@ -642,43 +739,7 @@ CPUEntry::_TryStealWork()
 	if (node == NULL)
 		goto phase3;
 
-	search_local_node(node, [this, package, &stolen](PackageEntry* entry) {
-		if (stolen != NULL)
-			return true;
-
-		if (entry == package)
-			return false;
-
-		int32 victimCoreCount = entry->RegisteredCoreCount();
-		if (victimCoreCount == 0)
-			return false;
-
-		int32 coreIndex = (int32)get_random_index(GetRandom(), victimCoreCount);
-		CoreEntry* victim = entry->GetCore(coreIndex);
-
-		if (victim == NULL)
-			return false;
-
-		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
-			return false;
-
-		if (victim->TryLockRunQueue()) {
-			int32 stolenPriority = -1;
-			stolen = victim->StealThread(stolenPriority, fCPUNumber);
-
-			if (stolen != NULL) {
-				stolen->MigrateTo(fCore);
-				stolen->fStolen = true;
-				fCore->IncrementTotalThreadCount();
-				victim->UnlockRunQueue();
-				return true;
-			}
-
-			victim->UnlockRunQueue();
-		}
-
-		return false;
-	});
+	search_local_node(node, LocalNodeStealAction(this, package, &stolen));
 
 	if (stolen != NULL)
 		return stolen;
@@ -696,46 +757,7 @@ phase3:
 	// Why: This is the last resort. If the local node is empty, you are willing to pay
 	// the high cost to steal from a remote socket to avoid sleeping.
 
-	search_global_random([this, package, &stolen](PackageEntry* entry) {
-		if (stolen != NULL)
-			return true;
-
-		if (entry == package)
-			return false;
-
-		if (entry->IdleCoreCount() == entry->CoreCount())
-			return false;
-
-		int32 victimCoreCount = entry->RegisteredCoreCount();
-		if (victimCoreCount == 0)
-			return false;
-
-		int32 coreIndex = (int32)get_random_index(GetRandom(), victimCoreCount);
-		CoreEntry* victim = entry->GetCore(coreIndex);
-
-		if (victim == NULL)
-			return false;
-
-		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
-			return false;
-
-		if (victim->TryLockRunQueue()) {
-			int32 stolenPriority = -1;
-			stolen = victim->StealThread(stolenPriority, fCPUNumber);
-
-			if (stolen != NULL) {
-				stolen->MigrateTo(fCore);
-				stolen->fStolen = true;
-				fCore->IncrementTotalThreadCount();
-				victim->UnlockRunQueue();
-				return true;
-			}
-
-			victim->UnlockRunQueue();
-		}
-
-		return false;
-	});
+	search_global_random(GlobalRandomStealAction(this, package, &stolen));
 
 	if (stolen != NULL)
 		return stolen;
@@ -935,6 +957,26 @@ CoreEntry::Remove(ThreadData* thread)
 }
 
 
+struct StealThreadPredicate {
+	const CPUSet& enabledSnapshot;
+	int32 thiefCPU;
+
+	StealThreadPredicate(const CPUSet& e, int32 t)
+		: enabledSnapshot(e), thiefCPU(t) {}
+
+	bool operator()(ThreadData* td) const {
+		if (td->IsIdle())
+			return false;
+
+		const CPUSet& cpumask = td->GetThread()->cpumask;
+		if (cpumask.IsEmpty()) {
+			return enabledSnapshot.GetBit(thiefCPU);
+		}
+		return cpumask.GetBit(thiefCPU)
+			&& enabledSnapshot.GetBit(thiefCPU);
+	}
+};
+
 ThreadData*
 CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
@@ -955,11 +997,9 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 		// Issue 27 fix: CPUSet::Bits() returns a pointer to uint32 words.
 		// Casting to int32* for atomic_get is required by the atomic API
-		// but assumes 4-byte alignment. Add a static_assert to verify
-		// alignment at compile time, preventing silent UB on ARM with
-		// packed structs.
-		static_assert(alignof(CPUSet) >= 4,
-			"CPUSet must be 4-byte aligned for atomic_get");
+		// but assumes 4-byte alignment.
+		// static_assert replaced by comment for GCC 2.95
+		// alignof(CPUSet) >= 4
 		for (int32 w = 0; w < kWords; w++) {
 			int32* ptr = const_cast<int32*>(
 				reinterpret_cast<const int32*>(gCPUEnabled.Bits()) + w);
@@ -968,25 +1008,7 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 	}
 
 	// Explicitly exclude idle threads from steal candidates.
-	// Idle threads must only live in CPU run queues; stealing one into a
-	// CoreEntry queue would violate the idle-thread invariant and trigger
-	// the ASSERT(!thread->IsIdle()) in CoreEntry::Remove.
-	ThreadData* thread = fRunQueue.PeekOption([&](ThreadData* td) {
-		if (td->IsIdle())
-			return false;
-
-		// Issue 81 fix: check cpumask semantics correctly.
-		// An all-zero cpumask means unconstrained (no affinity restriction).
-		// A non-zero cpumask is a positive affinity set.
-		const CPUSet& cpumask = td->GetThread()->cpumask;
-		if (cpumask.IsEmpty()) {
-			// Unconstrained: can run on any enabled CPU including thiefCPU.
-			return enabledSnapshot.GetBit(thiefCPU);
-		}
-		// Constrained: must be allowed on thiefCPU AND thiefCPU must be enabled.
-		return cpumask.GetBit(thiefCPU)
-			&& enabledSnapshot.GetBit(thiefCPU);
-	});
+	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(enabledSnapshot, thiefCPU));
 
 	if (thread != NULL) {
 		stolenPriority = thread->GetEffectivePriority();
@@ -1772,12 +1794,8 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		// sizeof(native_cpu_mask_t)*8 == 64 on 64-bit and 32 on 32-bit,
 		// so every possible index i < kMaxCoresPerPackage fits within the
 		// bitmask on all supported platforms.  No overflow is possible.
-		// The static_assert below makes this relationship machine-checkable.
-		static_assert(
-			kMaxCoresPerPackage <= (int32)(sizeof(sampledCores) * 8),
-			"sampledCores uint64 dedup bitmask too narrow for "
-			"kMaxCoresPerPackage — widen sampledCores or reduce "
-			"kMaxCoresPerPackage");
+		// static_assert replaced by comment for GCC 2.95
+		// kMaxCoresPerPackage <= (int32)(sizeof(sampledCores) * 8)
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
 		if (registeredCores <= 0)

@@ -33,8 +33,11 @@ static CoreEntry** sSmallTaskCore;
 static void
 switch_to_mode()
 {
-	if (sSmallTaskCore == NULL)
-		sSmallTaskCore = new(std::nothrow) CoreEntry*[gNodeCount]();
+	if (sSmallTaskCore == NULL) {
+		sSmallTaskCore = new(std::nothrow) CoreEntry*[gNodeCount];
+		if (sSmallTaskCore != NULL)
+			memset(sSmallTaskCore, 0, sizeof(CoreEntry*) * gNodeCount);
+	}
 	if (sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
 			atomic_pointer_set(&sSmallTaskCore[i], (CoreEntry*)NULL);
@@ -66,6 +69,86 @@ has_cache_expired(const ThreadData* threadData)
 	return activeTime - threadData->WentSleepActive() > kCacheExpire;
 }
 
+
+struct MinimumLoadAction {
+	CPUEntry* cpu;
+	const CPUSet* mask;
+	CoreEntry*& bestCore;
+	int32& bestLoad;
+	CoreType type;
+
+	MinimumLoadAction(CPUEntry* c, const CPUSet* m, CoreEntry*& bc, int32& bl,
+		CoreType t = CORE_TYPE_UNKNOWN)
+		: cpu(c), mask(m), bestCore(bc), bestLoad(bl), type(t) {}
+
+	bool operator()(PackageEntry* entry) const {
+		return CheckPackageMinimumLoad(cpu, entry, mask, bestCore, bestLoad, type);
+	}
+};
+
+static void
+check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
+	int32& bestScore);
+
+struct SmallTaskAction {
+	CPUEntry* cpu;
+	CoreEntry*& core;
+	int32& bestScore;
+
+	SmallTaskAction(CPUEntry* c, CoreEntry*& co, int32& s)
+		: cpu(c), core(co), bestScore(s) {}
+
+	bool operator()(PackageEntry* entry) const {
+		check_package_small_task(cpu, entry, core, bestScore);
+		return core != NULL && bestScore >= (kHighLoad * 3) / 4;
+	}
+};
+
+struct ECoreSmallTaskAction {
+	CPUEntry* cpu;
+	CoreEntry*& eCore;
+	int32& eBestScore;
+
+	ECoreSmallTaskAction(CPUEntry* c, CoreEntry*& ec, int32& es)
+		: cpu(c), eCore(ec), eBestScore(es) {}
+
+	bool operator()(PackageEntry* entry) const {
+		CoreEntry* candidate
+			= entry->PeekMaximumLoadCore(cpu, NULL, gMinCoreType);
+		if (candidate != NULL && candidate->GetScore() < kHighLoad) {
+			int32 score = candidate->GetScore();
+			if (eCore == NULL || score > eBestScore) {
+				eCore = candidate;
+				eBestScore = score;
+			}
+		}
+		return eCore != NULL && eBestScore >= (kHighLoad * 3) / 4;
+	}
+};
+
+static void
+check_package_packing(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
+	CoreEntry*& other, int32& bestScore, bool& foundNonOverloaded,
+	CoreType type = CORE_TYPE_UNKNOWN);
+
+struct PackagePackingAction {
+	CPUEntry* cpu;
+	const CPUSet* mask;
+	CoreEntry*& other;
+	int32& bestScore;
+	bool& foundNonOverloaded;
+	CoreType type;
+
+	PackagePackingAction(CPUEntry* c, const CPUSet* m, CoreEntry*& o, int32& bs,
+		bool& fno, CoreType t = CORE_TYPE_UNKNOWN)
+		: cpu(c), mask(m), other(o), bestScore(bs), foundNonOverloaded(fno), type(t) {}
+
+	bool operator()(PackageEntry* entry) const {
+		check_package_packing(cpu, entry, mask, other, bestScore,
+			foundNonOverloaded, type);
+		return other != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
+	}
+};
 
 static void
 check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
@@ -149,18 +232,7 @@ choose_small_task_core(CPUEntry* cpu)
 
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 		if (tryRandom) {
-			search_global_random([&](PackageEntry* entry) {
-				CoreEntry* candidate
-					= entry->PeekMaximumLoadCore(cpu, NULL, gMinCoreType);
-				if (candidate != NULL && candidate->GetScore() < kHighLoad) {
-					int32 score = candidate->GetScore();
-					if (eCore == NULL || score > eBestScore) {
-						eCore = candidate;
-						eBestScore = score;
-					}
-				}
-				return eCore != NULL && eBestScore >= (kHighLoad * 3) / 4;
-			});
+			search_global_random(ECoreSmallTaskAction(cpu, eCore, eBestScore));
 		}
 
 		if (eCore == NULL) {
@@ -223,10 +295,7 @@ choose_small_task_core(CPUEntry* cpu)
 
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 	if (tryRandom) {
-		search_global_random([&](PackageEntry* entry) {
-			check_package_small_task(cpu, entry, core, bestScore);
-			return core != NULL && bestScore >= (kHighLoad * 3) / 4;
-		});
+		search_global_random(SmallTaskAction(cpu, core, bestScore));
 	}
 
 	// Fallback to full scan if random sampling failed to find a candidate
@@ -461,11 +530,8 @@ choose_core(const ThreadData* threadData)
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 		if (tryRandom && !useMask) {
-			search_global_random([&](PackageEntry* entry) {
-				check_package_packing(cpu, entry, NULL, core, bestScore,
-					foundNonOverloaded, preferredType);
-				return core != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
-			});
+			search_global_random(PackagePackingAction(cpu, NULL, core, bestScore,
+				foundNonOverloaded, preferredType));
 		} else if (useMask) {
 			check_masked_packages_packing(cpu, mask, core, bestScore,
 				foundNonOverloaded, preferredType);
@@ -510,11 +576,8 @@ choose_core(const ThreadData* threadData)
 			bool tryRandomStd = gPackageCount > kRandomSearchThreshold;
 
 			if (tryRandomStd && !useMask) {
-				search_global_random([&](PackageEntry* entry) {
-					check_package_packing(cpu, entry, useMask ? &mask : NULL,
-						core, stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD);
-					return core != NULL && foundNonOverloadedStd && stdBestScore >= (kHighLoad * 3) / 4;
-				});
+				search_global_random(PackagePackingAction(cpu, useMask ? &mask : NULL,
+						core, stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD));
 			} else if (useMask) {
 				check_masked_packages_packing(cpu, mask, core, stdBestScore,
 					foundNonOverloadedStd, CORE_TYPE_STANDARD);
@@ -572,16 +635,11 @@ choose_core(const ThreadData* threadData)
 				node = gPackageEntries[threadData->HomePackage()].Node();
 			}
 
-			search_local_node(node, [&](PackageEntry* entry) {
-				return CheckPackageMinimumLoad(cpu, entry, NULL, bestCore,
-					bestScore);
-			});
+			MinimumLoadAction minLoadAction(cpu, NULL, bestCore, bestScore);
+			search_local_node(node, minLoadAction);
 
 			// Phase 3: Global Random
-			search_global_random([&](PackageEntry* entry) {
-				return CheckPackageMinimumLoad(cpu, entry, NULL, bestCore,
-					bestScore);
-			});
+			search_global_random(minLoadAction);
 
 		} else if (useMask) {
 			CheckMaskedPackagesMinimumLoad(cpu, mask, bestCore, bestScore);
@@ -746,18 +804,12 @@ rebalance(const ThreadData* threadData)
 			SchedulerNode* node = NULL;
 			if (core->Package() != NULL)
 				node = core->Package()->Node();
-			search_local_node(node, [&](PackageEntry* entry) {
-				check_package_packing(cpu, entry, NULL, other, bestScore,
-					foundNonOverloaded);
-				return other != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
-			});
+
+			PackagePackingAction rebalanceAction(cpu, NULL, other, bestScore, foundNonOverloaded);
+			search_local_node(node, rebalanceAction);
 
 			// Phase 3: Global Random
-			search_global_random([&](PackageEntry* entry) {
-				check_package_packing(cpu, entry, NULL, other, bestScore,
-					foundNonOverloaded);
-				return other != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
-			});
+			search_global_random(rebalanceAction);
 
 		} else if (useMask) {
 			check_masked_packages_packing(cpu, mask, other, bestScore,
@@ -972,21 +1024,16 @@ rebalance_irqs(bool idle)
 			// hot-unplug can change the assignment between the two reads,
 			// producing an inconsistent view of Package() and Node() that
 			// can lead to a NULL dereference or stale-pointer access.
+			MinimumLoadAction irqMinLoadAction(cpuEntryForIRQ, NULL, other, bestScore);
 			if (currentCore != NULL && currentCore->Package() != NULL) {
 				SchedulerNode* node = currentCore->Package()->Node();
 				if (node != NULL) {
-					search_local_node(node, [&](PackageEntry* entry) {
-						return CheckPackageMinimumLoad(cpuEntryForIRQ, entry,
-							NULL, other, bestScore);
-					});
+					search_local_node(node, irqMinLoadAction);
 				}
 			}
 
 			// Phase 3: Global Random
-			search_global_random([&](PackageEntry* entry) {
-				return CheckPackageMinimumLoad(cpuEntryForIRQ, entry, NULL,
-					other, bestScore);
-			});
+			search_global_random(irqMinLoadAction);
 		}
 
 		if (other == NULL) {

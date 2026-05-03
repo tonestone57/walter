@@ -495,16 +495,15 @@ ThreadData::GoesAway()
 	ASSERT(fReady);
 
 	if (!IsIdle()) {
-		int32 prev = gTotalRunnableThreads.fetch_sub(1, std::memory_order_acq_rel);
+		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
 		if (prev <= 0) {
-			int32 cur = gTotalRunnableThreads.load(std::memory_order_acquire);
+			int32 cur = atomic_get(&gTotalRunnableThreads);
 			for (int32 i = 0; i < 100 && cur < 0; i++) {
 				int32 was = cur;
-				if (gTotalRunnableThreads.compare_exchange_strong(was, 0,
-						std::memory_order_seq_cst)) {
+				if (atomic_test_and_set(&gTotalRunnableThreads, 0, was) == was) {
 					break;
 				}
-				cur = was;
+				cur = atomic_get(&gTotalRunnableThreads);
 				memory_read_barrier();
 			}
 		}
@@ -556,16 +555,15 @@ ThreadData::Dies()
 	ASSERT(fReady);
 
 	if (!IsIdle()) {
-		int32 prev = gTotalRunnableThreads.fetch_sub(1, std::memory_order_acq_rel);
+		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
 		if (prev <= 0) {
-			int32 cur = gTotalRunnableThreads.load(std::memory_order_acquire);
+			int32 cur = atomic_get(&gTotalRunnableThreads);
 			for (int32 i = 0; i < 100 && cur < 0; i++) {
 				int32 was = cur;
-				if (gTotalRunnableThreads.compare_exchange_strong(was, 0,
-						std::memory_order_seq_cst)) {
+				if (atomic_test_and_set(&gTotalRunnableThreads, 0, was) == was) {
 					break;
 				}
-				cur = was;
+				cur = atomic_get(&gTotalRunnableThreads);
 				memory_read_barrier();
 			}
 		}
@@ -649,7 +647,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			// CPUCount guard in the non-pinned path (see below).  For the pinned
 			// path the CPU liveness check happens under CPURunQueueLocker.
 			if (!wasReady && !IsIdle())
-				gTotalRunnableThreads.fetch_add(1, std::memory_order_release);
+				atomic_add(&gTotalRunnableThreads, 1);
 
 			ASSERT(!fEnqueued);
 			fEnqueued = true;
@@ -732,7 +730,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		// defer the gTotalRunnableThreads increment until after the
 		// CPUCount guard in the non-pinned path.
 		if (!wasReady && !IsIdle())
-			gTotalRunnableThreads.fetch_add(1, std::memory_order_release);
+			atomic_add(&gTotalRunnableThreads, 1);
 
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
