@@ -1725,13 +1725,16 @@ dump_tracing(int argc, char** argv, WrapperTraceFilter* wrapperFilter)
 }
 
 
-// tracing_is_entry_valid: verifies if a trace entry pointer is valid.
+// tracing_is_entry_valid: verifies if a trace entry pointer is valid and
+// optionally matches a specific timestamp.  Used for safe type-casting.
 bool
 tracing_is_entry_valid(AbstractTraceEntry* candidate, bigtime_t entryTime)
 {
 #if ENABLE_TRACING
-	if (!sTracingMetaData->IsInBuffer(candidate, sizeof(*candidate)))
+	if (candidate == NULL || !sTracingMetaData->IsInBuffer(candidate,
+			sizeof(*candidate))) {
 		return false;
+	}
 
 	if (entryTime < 0)
 		return true;
@@ -1745,7 +1748,8 @@ tracing_is_entry_valid(AbstractTraceEntry* candidate, bigtime_t entryTime)
 		if (abstract != candidate && abstract->Time() > entryTime)
 			return false;
 
-		return candidate->Time() == entryTime;
+		if (abstract == candidate)
+			return candidate->Time() == entryTime;
 	}
 #endif
 
