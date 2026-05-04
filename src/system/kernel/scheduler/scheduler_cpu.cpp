@@ -1243,7 +1243,7 @@ CoreEntry::PeekMinimumLoadCPU()
 {
 	// Optimization: If a physical core is idle, explicitly return the
 	// Primary logical CPU first.
-	// Issue 20 fix: use fCPUSet.FindFirstSet() equivalent via ffs()
+	// Issue 20 fix: use fCPUSet.FindFirstSet() equivalent via scheduler_ctz()
 	// on each bitmap word rather than iterating all (SMP_MAX_CPUS+31)/32
 	// words. For a core with CPUs in a small ID range this avoids scanning
 	// all zero words before finding the first set bit.
@@ -1255,7 +1255,7 @@ CoreEntry::PeekMinimumLoadCPU()
 			uint32 bits = fCPUSet.Bits(i);
 			if (bits == 0)
 				continue;
-			int cpu = i * 32 + (ffs((int)bits) - 1);
+			int cpu = i * 32 + scheduler_ctz((native_cpu_mask_t)bits);
 			if (cpu < smp_get_num_cpus()) {
 				CPUEntry* entry = &gCPUEntries[cpu];
 				// Issue 52 fix: verify the CPU is still in the heap before
