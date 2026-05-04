@@ -20,6 +20,17 @@
 
 namespace Scheduler {
 
+static void
+check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
+	int32& bestScore);
+
+
+static void
+check_package_packing(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
+	CoreEntry*& other, int32& bestScore, bool& foundNonOverloaded,
+	CoreType type = CORE_TYPE_UNKNOWN);
+
+
 struct MinimumLoadAction {
 	CPUEntry* cpu;
 	const CPUSet* mask;
@@ -145,18 +156,6 @@ has_cache_expired(const ThreadData* threadData)
 
 
 
-static void
-check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
-	int32& bestScore);
-
-
-
-
-
-static void
-check_package_packing(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
-	CoreEntry*& other, int32& bestScore, bool& foundNonOverloaded,
-	CoreType type = CORE_TYPE_UNKNOWN);
 
 
 
