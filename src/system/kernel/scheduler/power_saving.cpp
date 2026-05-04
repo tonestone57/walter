@@ -18,7 +18,80 @@
 #include "scheduler_topology.h"
 
 
-using namespace Scheduler;
+namespace Scheduler {
+
+struct MinimumLoadAction {
+	CPUEntry* cpu;
+	const CPUSet* mask;
+	CoreEntry*& bestCore;
+	int32& bestLoad;
+	CoreType type;
+
+	MinimumLoadAction(CPUEntry* c, const CPUSet* m, CoreEntry*& bc, int32& bl,
+		CoreType t = CORE_TYPE_UNKNOWN)
+		: cpu(c), mask(m), bestCore(bc), bestLoad(bl), type(t) {}
+
+	bool operator()(PackageEntry* entry) const {
+		return CheckPackageMinimumLoad(cpu, entry, mask, bestCore, bestLoad, type);
+	}
+};
+
+struct SmallTaskAction {
+	CPUEntry* cpu;
+	CoreEntry*& core;
+	int32& bestScore;
+
+	SmallTaskAction(CPUEntry* c, CoreEntry*& co, int32& s)
+		: cpu(c), core(co), bestScore(s) {}
+
+	bool operator()(PackageEntry* entry) const {
+		check_package_small_task(cpu, entry, core, bestScore);
+		return core != NULL && bestScore >= (kHighLoad * 3) / 4;
+	}
+};
+
+struct ECoreSmallTaskAction {
+	CPUEntry* cpu;
+	CoreEntry*& eCore;
+	int32& eBestScore;
+
+	ECoreSmallTaskAction(CPUEntry* c, CoreEntry*& ec, int32& es)
+		: cpu(c), eCore(ec), eBestScore(es) {}
+
+	bool operator()(PackageEntry* entry) const {
+		CoreEntry* candidate
+			= entry->PeekMaximumLoadCore(cpu, NULL, gMinCoreType);
+		if (candidate != NULL && candidate->GetScore() < kHighLoad) {
+			int32 score = candidate->GetScore();
+			if (eCore == NULL || score > eBestScore) {
+				eCore = candidate;
+				eBestScore = score;
+			}
+		}
+		return eCore != NULL && eBestScore >= (kHighLoad * 3) / 4;
+	}
+};
+
+struct PackagePackingAction {
+	CPUEntry* cpu;
+	const CPUSet* mask;
+	CoreEntry*& other;
+	int32& bestScore;
+	bool& foundNonOverloaded;
+	CoreType type;
+
+	PackagePackingAction(CPUEntry* c, const CPUSet* m, CoreEntry*& o, int32& bs,
+		bool& fno, CoreType t = CORE_TYPE_UNKNOWN)
+		: cpu(c), mask(m), other(o), bestScore(bs), foundNonOverloaded(fno), type(t) {}
+
+	bool operator()(PackageEntry* entry) const {
+		check_package_packing(cpu, entry, mask, other, bestScore,
+			foundNonOverloaded, type);
+		return other != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
+	}
+};
+
+
 
 
 // --- Scheduler tuning (power saving mode improvements) ---
@@ -70,85 +143,22 @@ has_cache_expired(const ThreadData* threadData)
 }
 
 
-struct MinimumLoadAction {
-	CPUEntry* cpu;
-	const CPUSet* mask;
-	CoreEntry*& bestCore;
-	int32& bestLoad;
-	CoreType type;
 
-	MinimumLoadAction(CPUEntry* c, const CPUSet* m, CoreEntry*& bc, int32& bl,
-		CoreType t = CORE_TYPE_UNKNOWN)
-		: cpu(c), mask(m), bestCore(bc), bestLoad(bl), type(t) {}
-
-	bool operator()(PackageEntry* entry) const {
-		return CheckPackageMinimumLoad(cpu, entry, mask, bestCore, bestLoad, type);
-	}
-};
 
 static void
 check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
 	int32& bestScore);
 
-struct SmallTaskAction {
-	CPUEntry* cpu;
-	CoreEntry*& core;
-	int32& bestScore;
 
-	SmallTaskAction(CPUEntry* c, CoreEntry*& co, int32& s)
-		: cpu(c), core(co), bestScore(s) {}
 
-	bool operator()(PackageEntry* entry) const {
-		check_package_small_task(cpu, entry, core, bestScore);
-		return core != NULL && bestScore >= (kHighLoad * 3) / 4;
-	}
-};
 
-struct ECoreSmallTaskAction {
-	CPUEntry* cpu;
-	CoreEntry*& eCore;
-	int32& eBestScore;
-
-	ECoreSmallTaskAction(CPUEntry* c, CoreEntry*& ec, int32& es)
-		: cpu(c), eCore(ec), eBestScore(es) {}
-
-	bool operator()(PackageEntry* entry) const {
-		CoreEntry* candidate
-			= entry->PeekMaximumLoadCore(cpu, NULL, gMinCoreType);
-		if (candidate != NULL && candidate->GetScore() < kHighLoad) {
-			int32 score = candidate->GetScore();
-			if (eCore == NULL || score > eBestScore) {
-				eCore = candidate;
-				eBestScore = score;
-			}
-		}
-		return eCore != NULL && eBestScore >= (kHighLoad * 3) / 4;
-	}
-};
 
 static void
 check_package_packing(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& other, int32& bestScore, bool& foundNonOverloaded,
 	CoreType type = CORE_TYPE_UNKNOWN);
 
-struct PackagePackingAction {
-	CPUEntry* cpu;
-	const CPUSet* mask;
-	CoreEntry*& other;
-	int32& bestScore;
-	bool& foundNonOverloaded;
-	CoreType type;
 
-	PackagePackingAction(CPUEntry* c, const CPUSet* m, CoreEntry*& o, int32& bs,
-		bool& fno, CoreType t = CORE_TYPE_UNKNOWN)
-		: cpu(c), mask(m), other(o), bestScore(bs), foundNonOverloaded(fno), type(t) {}
-
-	bool operator()(PackageEntry* entry) const {
-		check_package_packing(cpu, entry, mask, other, bestScore,
-			foundNonOverloaded, type);
-		return other != NULL && foundNonOverloaded && bestScore >= (kHighLoad * 3) / 4;
-	}
-};
 
 static void
 check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
@@ -1091,3 +1101,5 @@ scheduler_mode_operations gSchedulerPowerSavingMode = {
 	rebalance,
 	rebalance_irqs,
 };
+
+}	// namespace Scheduler

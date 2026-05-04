@@ -77,7 +77,7 @@ spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
 
 
 static timer sInteractionTimer;
-static int64 sLastInteractionTime;
+static int64 sLastInteractionTime __attribute__((aligned(8)));
 static int32 sDPCPending = 0;
 // Atomic guard for sInteractionTimer arming.
 // timer_is_active() followed by add_timer() is not atomic: two CPUs can both
@@ -264,9 +264,68 @@ scheduler_update_interaction_state()
 }
 
 
-}	// namespace Scheduler
 
-using namespace Scheduler;
+struct RunQueueScanner {
+		uint32 kTopWordMask;
+		int kMaxThreadsToCheckPerQueue;
+
+		RunQueueScanner(uint32 topWordMask, int maxThreads)
+			: kTopWordMask(topWordMask), kMaxThreadsToCheckPerQueue(maxThreads) {}
+
+		void operator()(const ThreadRunQueue* runQueue) const {
+			const uint32* bitmap = runQueue->GetBitmap();
+
+			for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
+				uint32 val = bitmap[i];
+
+				if (i == ThreadRunQueue::kBitmapSize - 1)
+					val &= kTopWordMask;
+
+				if (val == 0)
+					continue;
+
+				int bit = fls(val) - 1;
+				while (true) {
+					unsigned int priority = i * 32 + bit;
+					ThreadData* thread = runQueue->GetHead(priority);
+					int count = 0;
+
+					while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
+						ThreadData* next = thread->GetRunQueueLink()->fNext;
+						thread->_UpdatePriorityBoost();
+						thread = next;
+					}
+
+					val &= ~(1UL << bit);
+					if (val == 0)
+						break;
+					bit = fls(val) - 1;
+				}
+			}
+		}
+	};
+
+
+struct TopologyComparator {
+		bool distinctTopology;
+		TopologyComparator(bool distinct) : distinctTopology(distinct) {}
+
+		int32 GetTopoKey(int32 cpu) const
+		{
+			return distinctTopology ? get_topology_id(cpu) : (cpu / 16);
+		}
+
+		bool operator()(int32 a, int32 b) const
+		{
+			int32 topoA = GetTopoKey(a);
+			int32 topoB = GetTopoKey(b);
+			if (topoA != topoB)
+				return topoA < topoB;
+			return a < b;
+		}
+	};
+
+
 
 
 static int32 sSchedulerEnabled;
@@ -316,45 +375,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 
 	const int kMaxThreadsToCheckPerQueue = 5;
 
-	struct RunQueueScanner {
-		uint32 kTopWordMask;
-		int kMaxThreadsToCheckPerQueue;
-
-		RunQueueScanner(uint32 topWordMask, int maxThreads)
-			: kTopWordMask(topWordMask), kMaxThreadsToCheckPerQueue(maxThreads) {}
-
-		void operator()(const ThreadRunQueue* runQueue) const {
-			const uint32* bitmap = runQueue->GetBitmap();
-
-			for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-				uint32 val = bitmap[i];
-
-				if (i == ThreadRunQueue::kBitmapSize - 1)
-					val &= kTopWordMask;
-
-				if (val == 0)
-					continue;
-
-				int bit = fls(val) - 1;
-				while (true) {
-					unsigned int priority = i * 32 + bit;
-					ThreadData* thread = runQueue->GetHead(priority);
-					int count = 0;
-
-					while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
-						ThreadData* next = thread->GetRunQueueLink()->fNext;
-						thread->_UpdatePriorityBoost();
-						thread = next;
-					}
-
-					val &= ~(1UL << bit);
-					if (val == 0)
-						break;
-					bit = fls(val) - 1;
-				}
-			}
-		}
-	} scanRunQueue(kTopWordMask, kMaxThreadsToCheckPerQueue);
+	RunQueueScanner scanRunQueue(kTopWordMask, kMaxThreadsToCheckPerQueue);
 
 	// Check Core RunQueue first to maintain Core -> CPU lock ordering
 	// On an N-way SMT core, all N CPUs previously scanned the shared
@@ -1270,24 +1291,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	}
 
 	// Sort by L3 Topology ID
-	struct TopologyComparator {
-		bool distinctTopology;
-		TopologyComparator(bool distinct) : distinctTopology(distinct) {}
-
-		int32 GetTopoKey(int32 cpu) const
-		{
-			return distinctTopology ? get_topology_id(cpu) : (cpu / 16);
-		}
-
-		bool operator()(int32 a, int32 b) const
-		{
-			int32 topoA = GetTopoKey(a);
-			int32 topoB = GetTopoKey(b);
-			if (topoA != topoB)
-				return topoA < topoB;
-			return a < b;
-		}
-	} comparator(distinctTopology);
+	TopologyComparator comparator(distinctTopology);
 
 	std::sort(cpuList, cpuList + cpuCount, comparator);
 
@@ -1986,19 +1990,12 @@ scheduler_on_team_foreground_changed(Team* team)
 
 			if (thread != NULL) {
 				batchStart = batch[count - 1];
-				// Issue 3 fix: batchStart already has a reference from the
-				// AcquireReference() call in the collection loop above (stored
-				// in batch[count-1]). SetTo(batchStart, true) claims ownership
-				// of that reference — do NOT call AcquireReference() again or
-				// we leak one reference per batch boundary.
-				// The batch[count-1] entry's reference is "donated" to
-				// batchStartRef here; it is released when batchStartRef goes
-				// out of scope or is reset at the next batch start.
-				batchStartRef.SetTo(batchStart, true);
-				// Issue 47 fix: remove the batch[count-1] entry from the
-				// batch array to prevent processing it twice — once in this
-				// batch and once as the cursor in the next batch's GetNext().
-				count--;
+				// We need a reference for batchStart to survive as the cursor
+				// for the next batch.  We already have one from the collection
+				// loop above, but we also want to process it in the current
+				// batch (which also claims ownership of one reference).
+				// So we acquire another one here.
+				batchStartRef.SetTo(batchStart, false);
 				moreBatches = true;
 			}
 		} // thread_list_lock released here
@@ -2048,3 +2045,5 @@ scheduler_on_team_foreground_changed(Team* team)
 		}
 	}
 }
+
+}	// namespace Scheduler

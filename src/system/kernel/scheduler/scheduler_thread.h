@@ -127,7 +127,7 @@ public:
 	SCHEDULER_INLINE	void		UpdateActivity(bigtime_t active,
 								bigtime_t now = 0);
 
-	static	bigtime_t	sMaxLatency;
+	static	bigtime_t	sMaxLatency __attribute__((aligned(8)));
 
 	SCHEDULER_INLINE	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
 
@@ -169,12 +169,12 @@ private:
 							bigtime_t minQuantum, int32 maxPriority,
 							int32 minPriority, int32 priority);
 
-			bigtime_t	fStolenTime;
-			bigtime_t	fQuantumStart;
-			bigtime_t	fLastInterruptTime;
+			bigtime_t	fStolenTime __attribute__((aligned(8)));
+			bigtime_t	fQuantumStart __attribute__((aligned(8)));
+			bigtime_t	fLastInterruptTime __attribute__((aligned(8)));
 
-			bigtime_t	fWentSleep;
-			bigtime_t	fWentSleepActive;
+			bigtime_t	fWentSleep __attribute__((aligned(8)));
+			bigtime_t	fWentSleepActive __attribute__((aligned(8)));
 
 			bool		fEnqueued;
 			bool		fEnqueuedInCPURunQueue;
@@ -190,11 +190,11 @@ private:
 	mutable	int32		fEffectivePriority;
 	mutable	bigtime_t	fBaseQuantum __attribute__((aligned(8)));
 
-			bigtime_t	fTimeUsed;
+			bigtime_t	fTimeUsed __attribute__((aligned(8)));
 
-			bigtime_t	fMeasureAvailableActiveTime;
-			bigtime_t	fMeasureAvailableTime;
-			bigtime_t	fLastMeasureAvailableTime;
+			bigtime_t	fMeasureAvailableActiveTime __attribute__((aligned(8)));
+			bigtime_t	fMeasureAvailableTime __attribute__((aligned(8)));
+			bigtime_t	fLastMeasureAvailableTime __attribute__((aligned(8)));
 
 			int32		fNeededLoad;
 			uint32		fLoadMeasurementEpoch;

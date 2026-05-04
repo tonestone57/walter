@@ -167,15 +167,15 @@ private:
 
 						int32				fThreadCount;
 						int32				fLoad;
-						bigtime_t		lastReschedule;
+						bigtime_t		lastReschedule __attribute__((aligned(8)));
 
 						int32			fPerformanceScale;
 
-						bigtime_t		fMeasureActiveTime;
-						bigtime_t		fMeasureTime;
+						bigtime_t		fMeasureActiveTime __attribute__((aligned(8)));
+						bigtime_t		fMeasureTime __attribute__((aligned(8)));
 
 						bool			fUpdateLoadEvent;
-						uint64			fRandomState;
+						uint64			fRandomState __attribute__((aligned(8)));
 
 						uint32			fRescheduleCount;
 						uint32			fInteractionUpdateCounter;
@@ -306,12 +306,12 @@ private:
 	static				void			_UnassignThread(Thread* thread,
 											void* core);
 
-						bigtime_t		fActiveTime;
+						bigtime_t		fActiveTime __attribute__((aligned(8)));
 
 						// bits 32-63: Current Load, bits 0-31: Epoch
-						int64			fCombinedLoad;
+						int64			fCombinedLoad __attribute__((aligned(8)));
 
-						bigtime_t		fLastLoadUpdate;
+						bigtime_t		fLastLoadUpdate __attribute__((aligned(8)));
 
 						int32			fCoreID;
 						PackageEntry*	fPackage __attribute__((aligned(64)));
@@ -463,7 +463,7 @@ extern PackageEntry* gPackageEntries;
 extern int32 gPackageCount;
 
 extern SchedulerNode* gSchedulerNodes;
-extern uint64 gIdleNodeMask;
+extern uint64 gIdleNodeMask __attribute__((aligned(8)));
 extern int32 gNodeCount;
 
 

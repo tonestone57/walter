@@ -17,7 +17,25 @@
 #include "scheduler_topology.h"
 
 
-using namespace Scheduler;
+namespace Scheduler {
+
+struct MinimumLoadAction {
+	CPUEntry* cpu;
+	const CPUSet* mask;
+	CoreEntry*& bestCore;
+	int32& bestLoad;
+	CoreType type;
+
+	MinimumLoadAction(CPUEntry* c, const CPUSet* m, CoreEntry*& bc, int32& bl,
+		CoreType t = CORE_TYPE_UNKNOWN)
+		: cpu(c), mask(m), bestCore(bc), bestLoad(bl), type(t) {}
+
+	bool operator()(PackageEntry* entry) const {
+		return CheckPackageMinimumLoad(cpu, entry, mask, bestCore, bestLoad, type);
+	}
+};
+
+
 
 
 // --- Scheduler tuning (low latency mode improvements) ---
@@ -61,21 +79,7 @@ has_cache_expired(const ThreadData* threadData)
 
 
 
-struct MinimumLoadAction {
-	CPUEntry* cpu;
-	const CPUSet* mask;
-	CoreEntry*& bestCore;
-	int32& bestLoad;
-	CoreType type;
 
-	MinimumLoadAction(CPUEntry* c, const CPUSet* m, CoreEntry*& bc, int32& bl,
-		CoreType t = CORE_TYPE_UNKNOWN)
-		: cpu(c), mask(m), bestCore(bc), bestLoad(bl), type(t) {}
-
-	bool operator()(PackageEntry* entry) const {
-		return CheckPackageMinimumLoad(cpu, entry, mask, bestCore, bestLoad, type);
-	}
-};
 
 static CoreEntry*
 choose_core(const ThreadData* threadData)
@@ -835,3 +839,5 @@ scheduler_mode_operations gSchedulerLowLatencyMode = {
 	rebalance,
 	rebalance_irqs,
 };
+
+}	// namespace Scheduler

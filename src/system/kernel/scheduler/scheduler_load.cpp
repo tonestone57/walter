@@ -27,7 +27,7 @@ using namespace Scheduler;
 const static int kFShift = 11;
 const static long kFScale = 1 << kFShift;
 static struct loadavg sAverageRunnable = {{0, 0, 0}, kFScale};
-const static uint64 sCExp[3] = {(uint64)(0.9200444146293232 * kFScale),
+const static uint64 sCExp[3] __attribute__((aligned(8))) = {(uint64)(0.9200444146293232 * kFScale),
 	(uint64)(0.9834714538216174 * kFScale), (uint64)(0.9944598480048967 * kFScale)};
 
 static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;

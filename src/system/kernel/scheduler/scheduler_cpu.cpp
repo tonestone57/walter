@@ -20,6 +20,13 @@
 
 namespace Scheduler {
 
+static inline uint32
+get_random_index(uint32 random, uint32 range)
+{
+	// Robust mapping to reduce modulo bias.
+	return (uint32)(((uint64)random * range) >> 32);
+}
+
 
 CPUEntry* gCPUEntries;
 
@@ -30,13 +37,133 @@ PackageEntry* gPackageEntries;
 int32 gPackageCount;
 
 SchedulerNode* gSchedulerNodes;
-uint64 gIdleNodeMask = 0;
+uint64 gIdleNodeMask __attribute__((aligned(8))) = 0;
 int32 gNodeCount;
 
 
-}	// namespace Scheduler
 
-using namespace Scheduler;
+struct LocalNodeStealAction {
+	CPUEntry* cpu;
+	PackageEntry* package;
+	ThreadData** stolen;
+
+	LocalNodeStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s)
+		: cpu(c), package(p), stolen(s) {}
+
+	bool operator()(PackageEntry* entry) const {
+		if (*stolen != NULL)
+			return true;
+
+		if (entry == package)
+			return false;
+
+		int32 victimCoreCount = entry->RegisteredCoreCount();
+		if (victimCoreCount == 0)
+			return false;
+
+		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCoreCount);
+		CoreEntry* victim = entry->GetCore(coreIndex);
+
+		if (victim == NULL)
+			return false;
+
+		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
+			return false;
+
+		if (victim->TryLockRunQueue()) {
+			int32 stolenPriority = -1;
+			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+
+			if (*stolen != NULL) {
+				(*stolen)->MigrateTo(cpu->Core());
+				(*stolen)->fStolen = true;
+				cpu->Core()->IncrementTotalThreadCount();
+				victim->UnlockRunQueue();
+				return true;
+			}
+
+			victim->UnlockRunQueue();
+		}
+
+		return false;
+	}
+};
+
+struct GlobalRandomStealAction {
+	CPUEntry* cpu;
+	PackageEntry* package;
+	ThreadData** stolen;
+
+	GlobalRandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s)
+		: cpu(c), package(p), stolen(s) {}
+
+	bool operator()(PackageEntry* entry) const {
+		if (*stolen != NULL)
+			return true;
+
+		if (entry == package)
+			return false;
+
+		if (entry->IdleCoreCount() == entry->CoreCount())
+			return false;
+
+		int32 victimCoreCount = entry->RegisteredCoreCount();
+		if (victimCoreCount == 0)
+			return false;
+
+		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCoreCount);
+		CoreEntry* victim = entry->GetCore(coreIndex);
+
+		if (victim == NULL)
+			return false;
+
+		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
+			return false;
+
+		if (victim->TryLockRunQueue()) {
+			int32 stolenPriority = -1;
+			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+
+			if (*stolen != NULL) {
+				(*stolen)->MigrateTo(cpu->Core());
+				(*stolen)->fStolen = true;
+				cpu->Core()->IncrementTotalThreadCount();
+				victim->UnlockRunQueue();
+				return true;
+			}
+
+			victim->UnlockRunQueue();
+		}
+
+		return false;
+	}
+};
+
+struct StealThreadPredicate {
+	const CPUSet& enabledSnapshot;
+	int32 thiefCPU;
+
+	StealThreadPredicate(const CPUSet& e, int32 t)
+		: enabledSnapshot(e), thiefCPU(t) {}
+
+	bool operator()(ThreadData* td) const {
+		if (td->IsIdle())
+			return false;
+
+		const CPUSet& cpumask = td->GetThread()->cpumask;
+		if (cpumask.IsEmpty()) {
+			return enabledSnapshot.GetBit(thiefCPU);
+		}
+		return cpumask.GetBit(thiefCPU)
+			&& enabledSnapshot.GetBit(thiefCPU);
+	}
+};
+
+struct CoreThreadsData {
+			CoreEntry*	fCore;
+			int32		fLoad;
+	};
+
 
 
 class Scheduler::DebugDumper {
@@ -48,10 +175,6 @@ public:
 	static	void		DumpPackageCores(PackageEntry* package);
 
 private:
-	struct CoreThreadsData {
-			CoreEntry*	fCore;
-			int32		fLoad;
-	};
 
 	static	void		_AnalyzeCoreThreads(Thread* thread, void* data);
 };
@@ -98,7 +221,11 @@ CPUEntry::CPUEntry()
 	fUpdateLoadEvent(false),
 	fRandomState(1),
 	fRescheduleCount(0),
-	fCoreLocalIndex(0)
+	fCoreLocalIndex(0),
+	fInteractionUpdateCounter(0),
+	fReschedulePending(0),
+	fLastLocalPackageIndex(0),
+	lastReschedule(0)
 {
 	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
@@ -138,15 +265,6 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 		int32 staggerMod = (numCPUs > 1 && numCPUs <= 10) ? numCPUs : 10;
 		fRescheduleCount = (uint32)(id % staggerMod);
 	}
-
-	// Issue 92 fix: explicitly initialise fInteractionUpdateCounter in the
-	// constructor. If Init() is never called (e.g. disabled CPUs that skip
-	// initialisation), the counter contains garbage and the modulo-32 throttle
-	// in scheduler_update_interaction_state fires unpredictably.
-	fInteractionUpdateCounter = 0;
-	fReschedulePending = 0;
-	fLastLocalPackageIndex = 0;	//
-	lastReschedule = 0;
 }
 
 
@@ -549,110 +667,12 @@ CPUEntry::GetRandom()
 }
 
 
-static inline uint32
-get_random_index(uint32 random, uint32 range)
-{
-	// Robust mapping to reduce modulo bias.
-	return (uint32)(((uint64)random * range) >> 32);
-}
 
 
-struct LocalNodeStealAction {
-	CPUEntry* cpu;
-	PackageEntry* package;
-	ThreadData** stolen;
 
-	LocalNodeStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s)
-		: cpu(c), package(p), stolen(s) {}
 
-	bool operator()(PackageEntry* entry) const {
-		if (*stolen != NULL)
-			return true;
 
-		if (entry == package)
-			return false;
 
-		int32 victimCoreCount = entry->RegisteredCoreCount();
-		if (victimCoreCount == 0)
-			return false;
-
-		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCoreCount);
-		CoreEntry* victim = entry->GetCore(coreIndex);
-
-		if (victim == NULL)
-			return false;
-
-		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
-			return false;
-
-		if (victim->TryLockRunQueue()) {
-			int32 stolenPriority = -1;
-			*stolen = victim->StealThread(stolenPriority, cpu->ID());
-
-			if (*stolen != NULL) {
-				(*stolen)->MigrateTo(cpu->Core());
-				(*stolen)->fStolen = true;
-				cpu->Core()->IncrementTotalThreadCount();
-				victim->UnlockRunQueue();
-				return true;
-			}
-
-			victim->UnlockRunQueue();
-		}
-
-		return false;
-	}
-};
-
-struct GlobalRandomStealAction {
-	CPUEntry* cpu;
-	PackageEntry* package;
-	ThreadData** stolen;
-
-	GlobalRandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s)
-		: cpu(c), package(p), stolen(s) {}
-
-	bool operator()(PackageEntry* entry) const {
-		if (*stolen != NULL)
-			return true;
-
-		if (entry == package)
-			return false;
-
-		if (entry->IdleCoreCount() == entry->CoreCount())
-			return false;
-
-		int32 victimCoreCount = entry->RegisteredCoreCount();
-		if (victimCoreCount == 0)
-			return false;
-
-		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCoreCount);
-		CoreEntry* victim = entry->GetCore(coreIndex);
-
-		if (victim == NULL)
-			return false;
-
-		if ((entry->IdleCoreMask() & ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
-			return false;
-
-		if (victim->TryLockRunQueue()) {
-			int32 stolenPriority = -1;
-			*stolen = victim->StealThread(stolenPriority, cpu->ID());
-
-			if (*stolen != NULL) {
-				(*stolen)->MigrateTo(cpu->Core());
-				(*stolen)->fStolen = true;
-				cpu->Core()->IncrementTotalThreadCount();
-				victim->UnlockRunQueue();
-				return true;
-			}
-
-			victim->UnlockRunQueue();
-		}
-
-		return false;
-	}
-};
 
 ThreadData*
 CPUEntry::_TryStealWork()
@@ -957,25 +977,7 @@ CoreEntry::Remove(ThreadData* thread)
 }
 
 
-struct StealThreadPredicate {
-	const CPUSet& enabledSnapshot;
-	int32 thiefCPU;
 
-	StealThreadPredicate(const CPUSet& e, int32 t)
-		: enabledSnapshot(e), thiefCPU(t) {}
-
-	bool operator()(ThreadData* td) const {
-		if (td->IsIdle())
-			return false;
-
-		const CPUSet& cpumask = td->GetThread()->cpumask;
-		if (cpumask.IsEmpty()) {
-			return enabledSnapshot.GetBit(thiefCPU);
-		}
-		return cpumask.GetBit(thiefCPU)
-			&& enabledSnapshot.GetBit(thiefCPU);
-	}
-};
 
 ThreadData*
 CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
@@ -2074,3 +2076,5 @@ void Scheduler::init_debug_commands()
 			"List idle cores", "\nList idle cores", 0);
 	}
 }
+
+}	// namespace Scheduler

@@ -15,7 +15,7 @@
 using namespace Scheduler;
 
 
-static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1];
+static bigtime_t sQuantumLengths __attribute__((aligned(8)))[THREAD_MAX_SET_PRIORITY + 1];
 
 
 // ComputeQuantum load-scaling constants.  Placed at file scope so the
@@ -28,9 +28,9 @@ static const int32 kLoadScaleShift = 10;
 // 1024 / 800 * 1024 = 1310.72 ~= 1311
 static const int32 kRangeReciprocal = (int32)(((int64)kLoadScale * kLoadScale
 	+ (kMaxLoad - kLowLoad) / 2) / (kMaxLoad - kLowLoad));
-static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1];
+static bigtime_t sVirtualDeadlineSlices __attribute__((aligned(8)))[THREAD_MAX_SET_PRIORITY + 1];
 
-bigtime_t ThreadData::sMaxLatency;
+bigtime_t ThreadData::sMaxLatency __attribute__((aligned(8)));
 
 
 void
