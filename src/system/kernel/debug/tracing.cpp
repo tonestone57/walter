@@ -969,8 +969,7 @@ class ThreadTraceFilter : public TraceFilter {
 public:
 	virtual bool Filter(const TraceEntry* _entry, LazyTraceOutput& out)
 	{
-		const AbstractTraceEntry* entry
-			= dynamic_cast<const AbstractTraceEntry*>(_entry);
+		const AbstractTraceEntry* entry = (const AbstractTraceEntry*)_entry;
 		return (entry != NULL && entry->ThreadID() == fThread);
 	}
 };
@@ -980,8 +979,7 @@ class TeamTraceFilter : public TraceFilter {
 public:
 	virtual bool Filter(const TraceEntry* _entry, LazyTraceOutput& out)
 	{
-		const AbstractTraceEntry* entry
-			= dynamic_cast<const AbstractTraceEntry*>(_entry);
+		const AbstractTraceEntry* entry = (const AbstractTraceEntry*)_entry;
 		return (entry != NULL && entry->TeamID() == fTeam);
 	}
 };
@@ -1727,6 +1725,7 @@ dump_tracing(int argc, char** argv, WrapperTraceFilter* wrapperFilter)
 }
 
 
+// tracing_is_entry_valid: verifies if a trace entry pointer is valid.
 bool
 tracing_is_entry_valid(AbstractTraceEntry* candidate, bigtime_t entryTime)
 {
@@ -1739,7 +1738,7 @@ tracing_is_entry_valid(AbstractTraceEntry* candidate, bigtime_t entryTime)
 
 	TraceEntryIterator iterator;
 	while (TraceEntry* entry = iterator.Next()) {
-		AbstractTraceEntry* abstract = dynamic_cast<AbstractTraceEntry*>(entry);
+		AbstractTraceEntry* abstract = (AbstractTraceEntry*)entry;
 		if (abstract == NULL)
 			continue;
 

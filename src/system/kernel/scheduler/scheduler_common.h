@@ -128,10 +128,11 @@ scheduler_ffs64(uint64 value)
 	uint32 low = (uint32)value;
 	if (low != 0)
 		return ffs((int)low);
-	int high = ffs((int)(value >> 32));
-	if (high == 0)
+	uint32 high = (uint32)(value >> 32);
+	int bit = ffs((int)high);
+	if (bit == 0)
 		return 0;
-	return high + 32;
+	return bit + 32;
 }
 
 // scheduler_ctz: portable Count Trailing Zeros for GCC 2.95.
@@ -141,7 +142,7 @@ scheduler_ctz(native_cpu_mask_t value)
 	if (value == 0)
 		return 0;
 #if SCHEDULER_MASK_IS_64_BIT
-	return scheduler_ffs64(value) - 1;
+	return scheduler_ffs64((uint64)value) - 1;
 #else
 	return ffs((int)value) - 1;
 #endif
