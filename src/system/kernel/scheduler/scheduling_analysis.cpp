@@ -699,8 +699,8 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 		// Actually, we can use the fact that our enums are distinct.
 
 		// For now, use the safest available check.
-		// In a real Haiku kernel audit, we'd add Type() to AbstractTraceEntry.
-		// Here we'll use a hack based on our known subclasses.
+		// We use the EntryType() method added to AbstractTraceEntry to
+		// distinguish between different trace entry types without RTTI.
 
 		AbstractTraceEntry* baseEntry = (AbstractTraceEntry*)_entry;
 		if (baseEntry->Time() >= until)
