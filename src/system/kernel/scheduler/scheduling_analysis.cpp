@@ -27,20 +27,23 @@ using namespace SchedulingAnalysisTracing;
 
 struct ThreadWaitObject;
 
-struct HashObjectKey {
-	virtual ~HashObjectKey()
-	{
-	}
-
-	virtual uint32 HashKey() const = 0;
-};
-
-
 enum HashObjectType {
 	HASH_OBJECT_TYPE_THREAD,
 	HASH_OBJECT_TYPE_WAIT_OBJECT,
 	HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT
 };
+
+
+struct HashObjectKey {
+	virtual ~HashObjectKey()
+	{
+	}
+
+	virtual HashObjectType Type() const = 0;
+	virtual uint32 HashKey() const = 0;
+	virtual bool Equals(const HashObjectKey* key) const = 0;
+};
+
 
 struct HashObject {
 	HashObject*	next;
@@ -71,12 +74,24 @@ struct ThreadKey : HashObjectKey {
 
 	virtual uint32 HashKey() const
 	{
-		return id;
+		return (uint32)id;
+	}
+
+	virtual bool Equals(const HashObjectKey* _key) const
+	{
+		if (_key->Type() != HASH_OBJECT_TYPE_THREAD)
+			return false;
+		return static_cast<const ThreadKey*>(_key)->id == id;
 	}
 };
 
 
 struct Thread : HashObject, scheduling_analysis_thread {
+	virtual HashObjectType Type() const
+	{
+		return HASH_OBJECT_TYPE_THREAD;
+	}
+
 	ScheduleState state;
 	bigtime_t lastTime;
 
@@ -116,14 +131,14 @@ struct Thread : HashObject, scheduling_analysis_thread {
 
 	virtual uint32 HashKey() const
 	{
-		return id;
+		return (uint32)id;
 	}
 
 	virtual bool Equals(const HashObjectKey* _key) const
 	{
-		const ThreadKey* key = dynamic_cast<const ThreadKey*>(_key);
-		if (key == NULL)
+		if (_key->Type() != HASH_OBJECT_TYPE_THREAD)
 			return false;
+		const ThreadKey* key = static_cast<const ThreadKey*>(_key);
 		return key->id == id;
 	}
 };
@@ -149,10 +164,23 @@ struct WaitObjectKey : HashObjectKey {
 	{
 		return type ^ (uint32)(addr_t)object;
 	}
+
+	virtual bool Equals(const HashObjectKey* _key) const
+	{
+		if (_key->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
+			return false;
+		const WaitObjectKey* key = static_cast<const WaitObjectKey*>(_key);
+		return key->type == type && key->object == object;
+	}
 };
 
 
 struct WaitObject : HashObject, scheduling_analysis_wait_object {
+	virtual HashObjectType Type() const
+	{
+		return HASH_OBJECT_TYPE_WAIT_OBJECT;
+	}
+
 	WaitObject(uint32 type, void* object)
 	{
 		this->type = type;
@@ -168,9 +196,9 @@ struct WaitObject : HashObject, scheduling_analysis_wait_object {
 
 	virtual bool Equals(const HashObjectKey* _key) const
 	{
-		const WaitObjectKey* key = dynamic_cast<const WaitObjectKey*>(_key);
-		if (key == NULL)
+		if (_key->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
 			return false;
+		const WaitObjectKey* key = static_cast<const WaitObjectKey*>(_key);
 		return key->type == type && key->object == object;
 	}
 };
@@ -189,9 +217,23 @@ struct ThreadWaitObjectKey : HashObjectKey {
 	{
 	}
 
+	virtual HashObjectType Type() const
+	{
+		return HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT;
+	}
+
 	virtual uint32 HashKey() const
 	{
-		return thread ^ type ^ (uint32)(addr_t)object;
+		return (uint32)thread ^ type ^ (uint32)(addr_t)object;
+	}
+
+	virtual bool Equals(const HashObjectKey* _key) const
+	{
+		if (_key->Type() != HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT)
+			return false;
+		const ThreadWaitObjectKey* key
+			= static_cast<const ThreadWaitObjectKey*>(_key);
+		return key->thread == thread && key->type == type && key->object == object;
 	}
 };
 
@@ -213,15 +255,15 @@ struct ThreadWaitObject : HashObject, scheduling_analysis_thread_wait_object {
 
 	virtual uint32 HashKey() const
 	{
-		return thread ^ wait_object->type ^ (uint32)(addr_t)wait_object->object;
+		return (uint32)thread ^ wait_object->type ^ (uint32)(addr_t)wait_object->object;
 	}
 
 	virtual bool Equals(const HashObjectKey* _key) const
 	{
-		const ThreadWaitObjectKey* key
-			= dynamic_cast<const ThreadWaitObjectKey*>(_key);
-		if (key == NULL)
+		if (_key->Type() != HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT)
 			return false;
+		const ThreadWaitObjectKey* key
+			= static_cast<const ThreadWaitObjectKey*>(_key);
 		return key->thread == thread && key->type == wait_object->type
 			&& key->object == wait_object->object;
 	}
@@ -234,20 +276,11 @@ public:
 		:
 		fBuffer(buffer),
 		fSize(size),
-		fHashTable(),
+		fHashTable(NULL),
 		fHashTableSize(0)
 	{
 		fAnalysis.thread_count = 0;
-		// Issue 80 fix: initialise fAnalysis.threads to NULL explicitly.
-		// If the buffer is too small (fHashTable stays NULL), FinishAnalysis
-		// returns B_OK but fAnalysis.thread_count may be non-zero from
-		// AddThread calls that returned B_NO_MEMORY. A caller iterating
-		// threads[0..thread_count-1] would dereference the uninitialized
-		// pointer. Setting thread_count=0 here prevents the iteration, and
-		// setting threads=NULL makes any stray dereference a clean crash
-		// rather than a silent data corruption.
 		fAnalysis.threads = NULL;
-		fAnalysis.thread_count = 0;
 		fAnalysis.wait_object_count = 0;
 		fAnalysis.thread_wait_object_count = 0;
 
@@ -256,9 +289,8 @@ public:
 		size_t entrySize = maxObjectSize + sizeof(HashObject*);
 		fHashTableSize = size / entrySize;
 		if (fHashTableSize == 0) {
-			// Buffer too small even for one entry
 			fHashTable = NULL;
-			fNextAllocation = NULL;
+			fNextAllocation = (uintptr_t)fBuffer;
 			fRemainingBytes = 0;
 			return;
 		}
@@ -276,61 +308,27 @@ public:
 	void* Allocate(size_t size)
 	{
 		size = (size + 7) & ~(size_t)7;
-		// fNextAllocation and fRemainingBytes
-		// are declared as int64 (64-bit) / int32 (32-bit) matching the
-		// atomic API requirements.  Casting them from pointer types would
-		// violate strict aliasing; the current typed members are correct.
-		// The ASSERT checks the buffer layout invariant in DEBUG builds only.
-		// No code change required.
-
-		// (defensive): fHashTable sits at the top of the buffer;
-		// fNextAllocation grows upward from the bottom.  fRemainingBytes
-		// tracks the gap between them and is the single correct guard.
-		// The ASSERT below makes the buffer-layout invariant machine-checkable
-		// in debug builds, catching any future refactoring that might break
-		// the relationship between fNextAllocation, fRemainingBytes, and
-		// fHashTable.
-#if DEBUG
-		ASSERT(fHashTable == NULL
-			|| (uint8*)fHashTable - (uint8*)(uintptr_t)fNextAllocation
-				== (ptrdiff_t)fRemainingBytes);
-#endif
 		for (int32 i = 0; i < 1000; i++) {
 #if B_HAIKU_64_BIT
-			// Issue 10 fix: the original code decremented fRemainingBytes
-			// then separately incremented fNextAllocation. Between these two
-			// atomics another thread can observe fRemainingBytes reduced but
-			// fNextAllocation not yet advanced, allowing two threads to
-			// receive the same address range.
-			// Fix: pack both allocation pointer and remaining bytes into a
-			// single 64-bit CAS by using fNextAllocation as the primary counter
-			// and computing fRemainingBytes = fHashTableAddr - fNextAllocation.
-			// Since we cannot pack two 64-bit values into one CAS on all
-			// platforms, use an alternative approach: CAS on fNextAllocation
-			// (the allocation pointer) as the serialisation point, then update
-			// fRemainingBytes as a secondary accounting field.
-			int64 current = atomic_get64(&fNextAllocation);
+			int64 current = (int64)atomic_get64((int64*)&fNextAllocation);
 			int64 newAlloc = current + (int64)size;
-			// Recompute remaining from the live allocation pointer.
 			int64 hashTableAddr = (int64)(uintptr_t)fHashTable;
 			if (newAlloc > hashTableAddr)
 				return NULL;
-			if (atomic_test_and_set64(&fNextAllocation, newAlloc, current)
+			if (atomic_test_and_set64((int64*)&fNextAllocation, newAlloc, current)
 					== current) {
-				// Won the CAS: update fRemainingBytes for accounting only.
-				atomic_add64(&fRemainingBytes, -(int64)size);
+				atomic_add64((int64*)&fRemainingBytes, -(int64)size);
 				return (void*)(uintptr_t)current;
 			}
 #else
-			// Issue 10 fix (32-bit): same approach as 64-bit path above.
-			int32 current32 = atomic_get(&fNextAllocation);
+			int32 current32 = atomic_get((int32*)&fNextAllocation);
 			int32 newAlloc32 = current32 + (int32)size;
 			int32 hashTableAddr32 = (int32)(uintptr_t)fHashTable;
 			if (size > (size_t)INT32_MAX || newAlloc32 > hashTableAddr32)
 				return NULL;
-			if (atomic_test_and_set(&fNextAllocation, newAlloc32, current32)
+			if (atomic_test_and_set((int32*)&fNextAllocation, newAlloc32, current32)
 					== current32) {
-				atomic_add(&fRemainingBytes, -(int32)size);
+				atomic_add((int32*)&fRemainingBytes, -(int32)size);
 				return (void*)(uintptr_t)current32;
 			}
 #endif
@@ -344,14 +342,6 @@ public:
 			return;
 
 		uint32 index = object->HashKey() % fHashTableSize;
-		// Issue 34 fix: plain pointer writes to fHashTable slots without
-		// memory barriers are safe here because the caller holds
-		// InterruptsLocker (interrupts disabled, serialising all accesses on
-		// this CPU). Concurrent Lookup from another CPU is prevented by the
-		// same lock in _user_analyze_scheduling. Document this explicitly.
-		// If the locking model ever changes to allow concurrent access, a
-		// write barrier before the fHashTable[index] = object assignment
-		// would be required.
 		object->next = fHashTable[index];
 		fHashTable[index] = object;
 	}
@@ -384,19 +374,29 @@ public:
 
 	Thread* ThreadFor(thread_id id) const
 	{
-		return dynamic_cast<Thread*>(Lookup(ThreadKey(id)));
+		HashObject* object = Lookup(ThreadKey(id));
+		if (object == NULL || object->Type() != HASH_OBJECT_TYPE_THREAD)
+			return NULL;
+		return static_cast<Thread*>(object);
 	}
 
 	WaitObject* WaitObjectFor(uint32 type, void* object) const
 	{
-		return dynamic_cast<WaitObject*>(Lookup(WaitObjectKey(type, object)));
+		HashObject* hashObject = Lookup(WaitObjectKey(type, object));
+		if (hashObject == NULL || hashObject->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
+			return NULL;
+		return static_cast<WaitObject*>(hashObject);
 	}
 
 	ThreadWaitObject* ThreadWaitObjectFor(thread_id thread, uint32 type,
 		void* object) const
 	{
-		return dynamic_cast<ThreadWaitObject*>(
-			Lookup(ThreadWaitObjectKey(thread, type, object)));
+		HashObject* hashObject = Lookup(ThreadWaitObjectKey(thread, type, object));
+		if (hashObject == NULL
+			|| hashObject->Type() != HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT) {
+			return NULL;
+		}
+		return static_cast<ThreadWaitObject*>(hashObject);
 	}
 
 	status_t AddThread(thread_id id, const char* name)
@@ -436,8 +436,6 @@ public:
 		Insert(waitObject);
 		fAnalysis.wait_object_count++;
 
-		// Set a dummy name for snooze() and waiting for signals, so we don't
-		// try to update them later on.
 		if (type == THREAD_BLOCK_TYPE_SNOOZE
 			|| type == THREAD_BLOCK_TYPE_SIGNAL) {
 			strcpy(waitObject->name, "?");
@@ -457,7 +455,6 @@ public:
 			return B_OK;
 
 		if (waitObject->name[0] != '\0') {
-			// This is a new object at the same address. Replace the old one.
 			Remove(waitObject);
 			status_t error = AddWaitObject(type, object, &waitObject);
 			if (error != B_OK)
@@ -493,7 +490,6 @@ public:
 	{
 		WaitObject* waitObject = WaitObjectFor(type, object);
 		if (waitObject == NULL) {
-			// The algorithm should prevent this case.
 			return B_ERROR;
 		}
 
@@ -527,15 +523,15 @@ public:
 		if (fHashTable == NULL)
 			return 0;
 
-		// Iterate through the hash table and count the wait objects that don't
-		// have a name yet.
 		int32 count = 0;
 		for (uint32 i = 0; i < fHashTableSize; i++) {
 			HashObject* object = fHashTable[i];
 			while (object != NULL) {
-				WaitObject* waitObject = dynamic_cast<WaitObject*>(object);
-				if (waitObject != NULL && waitObject->name[0] == '\0')
-					count++;
+				if (object->Type() == HASH_OBJECT_TYPE_WAIT_OBJECT) {
+					WaitObject* waitObject = static_cast<WaitObject*>(object);
+					if (waitObject->name[0] == '\0')
+						count++;
+				}
 
 				object = object->next;
 			}
@@ -546,15 +542,12 @@ public:
 
 	status_t FinishAnalysis()
 	{
-		// allocate the thread array
 		scheduling_analysis_thread** threads
 			= (scheduling_analysis_thread**)Allocate(
 				sizeof(Thread*) * fAnalysis.thread_count);
 		if (threads == NULL)
 			return B_NO_MEMORY;
 
-		// Iterate through the hash table and collect all threads. Also polish
-		// all wait objects that haven't been update yet.
 		int32 index = 0;
 		if (fHashTable == NULL)
 			return B_OK;
@@ -564,7 +557,6 @@ public:
 			while (object != NULL) {
 				switch (object->Type()) {
 					case HASH_OBJECT_TYPE_THREAD:
-						// Issue 60 fix: bounds check before writing threads[].
 						if (index >= (int32)fAnalysis.thread_count) {
 							dprintf("scheduling_analysis: more threads found in"
 								" hash table than expected (%" B_PRId32 " > %"
@@ -589,8 +581,6 @@ public:
 
 		fAnalysis.threads = threads;
 #if SCHEDULING_ANALYSIS_TRACING
-		// Development diagnostic: report buffer utilisation. Gated so it
-		// does not pollute the kernel log in production builds.
 		dprintf("scheduling analysis: free bytes: %" B_PRIu64 "/%" B_PRIu64 "\n",
 			(uint64)fRemainingBytes, (uint64)fSize);
 #endif
@@ -616,8 +606,6 @@ private:
 			}
 			case THREAD_BLOCK_TYPE_CONDITION_VARIABLE:
 			{
-				// If the condition variable object is in the kernel image,
-				// assume, it is still initialized.
 				ConditionVariable* variable
 					= (ConditionVariable*)waitObject->object;
 				if (!_IsInKernelImage(variable))
@@ -631,8 +619,6 @@ private:
 
 			case THREAD_BLOCK_TYPE_MUTEX:
 			{
-				// If the mutex object is in the kernel image, assume, it is
-				// still initialized.
 				mutex* lock = (mutex*)waitObject->object;
 				if (!_IsInKernelImage(lock))
 					break;
@@ -643,8 +629,6 @@ private:
 
 			case THREAD_BLOCK_TYPE_RW_LOCK:
 			{
-				// If the mutex object is in the kernel image, assume, it is
-				// still initialized.
 				rw_lock* lock = (rw_lock*)waitObject->object;
 				if (!_IsInKernelImage(lock))
 					break;
@@ -660,9 +644,7 @@ private:
 					return;
 
 				strlcpy(waitObject->name, name, sizeof(waitObject->name));
-// Issue 32 fix: add missing break to prevent fall-through into
-			// THREAD_BLOCK_TYPE_OTHER_OBJECT and default cases.
-			break;
+				break;
 			}
 
 			case THREAD_BLOCK_TYPE_OTHER_OBJECT:
@@ -690,13 +672,8 @@ private:
 	HashObject**		fHashTable;
 	uint32				fHashTableSize;
 
-#if B_HAIKU_64_BIT
-	 int64	fNextAllocation;
-	 int64	fRemainingBytes;
-#else
-	 int32	fNextAllocation;
-	 int32	fRemainingBytes;
-#endif
+	uintptr_t	fNextAllocation;
+	size_t		fRemainingBytes;
 };
 
 
@@ -704,7 +681,6 @@ static status_t
 analyze_scheduling(bigtime_t from, bigtime_t until,
 	SchedulingAnalysisManager& manager)
 {
-	// analyze how much threads and locking primitives we're talking about
 	TraceEntryIterator iterator;
 	iterator.MoveTo(INT_MAX);
 	while (TraceEntry* _entry = iterator.Previous()) {
@@ -755,7 +731,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 
 	while (TraceEntry* _entry = iterator.Next()) {
 #if SCHEDULING_ANALYSIS_TRACING
-		// might be info on a wait object
 		if (WaitObjectTraceEntry* waitObjectEntry
 				= dynamic_cast<WaitObjectTraceEntry*>(_entry)) {
 			status_t error = manager.UpdateWaitObject(waitObjectEntry->Type(),
@@ -775,13 +750,11 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 			break;
 
 		if (ScheduleThread* entry = dynamic_cast<ScheduleThread*>(_entry)) {
-			// scheduled thread
 			Thread* thread = manager.ThreadFor(entry->ThreadID());
 
 			bigtime_t diffTime = entry->Time() - thread->lastTime;
 
 			if (thread->state == READY) {
-				// thread scheduled after having been woken up
 				thread->latencies++;
 				thread->total_latency += diffTime;
 				if (thread->min_latency < 0 || diffTime < thread->min_latency)
@@ -789,7 +762,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 				if (diffTime > thread->max_latency)
 					thread->max_latency = diffTime;
 			} else if (thread->state == PREEMPTED) {
-				// thread scheduled after having been preempted before
 				thread->reruns++;
 				thread->total_rerun_time += diffTime;
 				if (thread->min_rerun_time < 0
@@ -801,7 +773,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 			}
 
 			if (thread->state == STILL_RUNNING) {
-				// Thread was running and continues to run.
 				thread->state = RUNNING;
 			}
 
@@ -809,8 +780,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 				thread->lastTime = entry->Time();
 				thread->state = RUNNING;
 			}
-
-			// unscheduled thread
 
 			if (entry->ThreadID() == entry->PreviousThreadID())
 				continue;
@@ -820,7 +789,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 			diffTime = entry->Time() - thread->lastTime;
 
 			if (thread->state == STILL_RUNNING) {
-				// thread preempted
 				thread->runs++;
 				thread->preemptions++;
 				thread->total_run_time += diffTime;
@@ -832,8 +800,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 				thread->lastTime = entry->Time();
 				thread->state = PREEMPTED;
 			} else if (thread->state == RUNNING) {
-				// thread starts waiting (it hadn't been added to the run
-				// queue before being unscheduled)
 				thread->runs++;
 				thread->total_run_time += diffTime;
 				if (thread->min_run_time < 0 || diffTime < thread->min_run_time)
@@ -878,16 +844,11 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 			}
 		} else if (EnqueueThread* entry
 				= dynamic_cast<EnqueueThread*>(_entry)) {
-			// thread enqueued in run queue
-
 			Thread* thread = manager.ThreadFor(entry->ThreadID());
 
 			if (thread->state == RUNNING || thread->state == STILL_RUNNING) {
-				// Thread was running and is reentered into the run queue. This
-				// is done by the scheduler, if the thread remains ready.
 				thread->state = STILL_RUNNING;
 			} else {
-				// Thread was waiting and is ready now.
 				bigtime_t diffTime = entry->Time() - thread->lastTime;
 				if (thread->waitObject != NULL) {
 					thread->waitObject->wait_time += diffTime;
@@ -900,16 +861,10 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 				thread->state = READY;
 			}
 		} else if (RemoveThread* entry = dynamic_cast<RemoveThread*>(_entry)) {
-			// thread removed from run queue
-
 			Thread* thread = manager.ThreadFor(entry->ThreadID());
-
-			// This really only happens when the thread priority is changed
-			// while the thread is ready.
 
 			bigtime_t diffTime = entry->Time() - thread->lastTime;
 			if (thread->state == RUNNING) {
-				// This should never happen.
 				thread->runs++;
 				thread->total_run_time += diffTime;
 				if (thread->min_run_time < 0 || diffTime < thread->min_run_time)
@@ -917,8 +872,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 				if (diffTime > thread->max_run_time)
 					thread->max_run_time = diffTime;
 			} else if (thread->state == READY || thread->state == PREEMPTED) {
-				// Not really correct, but the case is rare and we keep it
-				// simple.
 				thread->unspecified_wait_time += diffTime;
 			}
 
@@ -964,15 +917,6 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 	if ((addr_t)buffer & 0x7) {
 		addr_t diff = (addr_t)buffer & 0x7;
-		// diff is in [1,7], so (8 - diff) is in [1,7].  On a
-		// 32-bit target size_t is 32 bits; the subtraction can only underflow
-		// if the caller passed size == 0, which is caught by the
-		// "size <= (size_t)(8 - diff)" guard immediately below.  The cast to
-		// (size_t) of (8 - diff) is safe because 8 - diff is always positive
-		// (diff <= 7).  No code change required; comment added for clarity.
-		// Use explicit size check to prevent underflow or wrap-around on
-		// zero/small size when computing the 8-byte alignment fixup.
-		// Issue 17 fix: Use addr_t to avoid integer narrowing on 64-bit.
 		addr_t diff8 = 8 - diff;
 		if (size <= (size_t)diff8)
 			return B_BAD_VALUE;
@@ -995,12 +939,6 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 	}
 
 	SchedulingAnalysisManager manager(buffer, size);
-
-	// (clarification): When fHashTable is NULL (buffer too small for
-	// even one entry), all Allocate() calls return NULL and all Insert/Lookup
-	// calls are no-ops.  The DEBUG assert in Allocate is guarded by
-	// "fHashTable == NULL" precisely to skip the layout-invariant check in
-	// that degenerate case.  Behaviour is correct; comment added for clarity.
 
 	InterruptsLocker locker;
 	lock_tracing_buffer();

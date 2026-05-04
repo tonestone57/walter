@@ -188,7 +188,7 @@ private:
 			int32		fHomePackage;
 
 	mutable	int32		fEffectivePriority;
-	mutable	bigtime_t	fBaseQuantum;
+	mutable	bigtime_t	fBaseQuantum __attribute__((aligned(8)));
 
 			bigtime_t	fTimeUsed;
 
@@ -199,8 +199,8 @@ private:
 			int32		fNeededLoad;
 			uint32		fLoadMeasurementEpoch;
 
-			bigtime_t	fVirtualRuntime;
-			bigtime_t	fVirtualDeadline;
+			bigtime_t	fVirtualRuntime __attribute__((aligned(8)));
+			bigtime_t	fVirtualDeadline __attribute__((aligned(8)));
 
 			int32		fInteractivityScore;
 

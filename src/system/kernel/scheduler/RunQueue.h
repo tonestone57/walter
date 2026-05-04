@@ -11,7 +11,6 @@
 #define RUN_QUEUE_H
 
 
-#include <atomic>
 #include <util/BitUtils.h>
 #include <util/atomic.h>
 

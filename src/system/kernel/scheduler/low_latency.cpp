@@ -187,6 +187,7 @@ choose_core(const ThreadData* threadData)
 
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
+		int32 bestScore = -1;
 		MinimumLoadAction minLoadAction(cpu, NULL, core, bestScore, preferredType);
 
 		// Try to find an idle core of the preferred type
@@ -218,7 +219,7 @@ choose_core(const ThreadData* threadData)
 
 		if (core == NULL) {
 			// No idle core, try finding a lightly loaded one
-			int32 bestScore = -1;
+			bestScore = -1;
 			bool tryRandom = gPackageCount > kRandomSearchThreshold;
 			if (tryRandom && !useMask) {
 				search_global_random(MinimumLoadAction(cpu, NULL, core,
@@ -477,6 +478,9 @@ choose_core(const ThreadData* threadData)
 				if (core != NULL && core->CPUMask().Matches(mask))
 					break;
 			}
+
+			if (core != NULL && !core->CPUMask().Matches(mask))
+				core = NULL;
 		}
 	}
 
