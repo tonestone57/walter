@@ -17,6 +17,8 @@ struct rw_lock;
 #if SCHEDULING_ANALYSIS_TRACING
 namespace SchedulingAnalysisTracing {
 
+// Manual RTTI IDs for wait object tracing.
+// Range 200-299 reserved for SchedulingAnalysisTracing namespace.
 enum WaitObjectTraceEntryType {
 	WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE = 200,
 	WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_CONDITION_VARIABLE,

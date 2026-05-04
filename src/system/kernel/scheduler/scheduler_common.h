@@ -60,6 +60,10 @@ struct ThreadDataVRuntimeCompare {
 	}
 };
 
+// Portability helpers for GCC 2.95 and architecture independence.
+// These wrappers ensure atomic operations and bit manipulation work correctly
+// on both 32-bit and 64-bit systems.
+
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
 	// 64-bit systems: supports up to 64 L3 domains per node
 	typedef uint64 native_cpu_mask_t;

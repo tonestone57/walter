@@ -17,6 +17,8 @@
 
 namespace SchedulerTracing {
 
+// Manual RTTI IDs for scheduler tracing.
+// Range 100-199 reserved for SchedulerTracing namespace.
 enum SchedulerTraceEntryType {
 	SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD = 100,
 	SCHEDULER_TRACE_ENTRY_TYPE_REMOVE_THREAD,
