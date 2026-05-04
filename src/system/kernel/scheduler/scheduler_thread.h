@@ -569,8 +569,12 @@ ThreadData::Dies()
 		}
 	}
 
-	if (gTrackCoreLoad)
-		fCore->RemoveLoad(fNeededLoad, true);
+	if (gTrackCoreLoad) {
+		CoreEntry* const snap = atomic_pointer_get(
+			const_cast<CoreEntry* volatile*>(&fCore));
+		if (snap != NULL)
+			snap->RemoveLoad(fNeededLoad, true);
+	}
 	fReady = false;
 }
 

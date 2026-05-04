@@ -482,7 +482,7 @@ check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 			continue;
 
 		while (bits != 0) {
-			int bit = __builtin_ctz(bits);
+			int bit = ffs((int)bits) - 1;
 			bits &= ~(1U << bit);
 			int32 cpuID = i * 32 + bit;
 
@@ -705,7 +705,7 @@ choose_core(const ThreadData* threadData)
 			for (int32 i = 0; i < kCPUSetArraySize; i++) {
 				uint32 bits = mask.Bits(i);
 				while (bits != 0) {
-					int bit = __builtin_ctz(bits);
+					int bit = ffs((int)bits) - 1;
 					bits &= ~(1U << bit);
 					int32 cpuID = i * 32 + bit;
 

@@ -151,13 +151,20 @@ cmd_scheduler(int argc, char** argv)
 
 	TraceEntryIterator iterator;
 	while (TraceEntry* _entry = iterator.Next()) {
-		if (dynamic_cast<SchedulerTraceEntry*>(_entry) == NULL)
+		// Manual RTTI replacement for dynamic_cast
+		// Use tracing_is_entry_valid for a basic sanity check, then rely on
+		// EntryType() from SchedulerTraceEntry.
+		if (!tracing_is_entry_valid((AbstractTraceEntry*)_entry))
 			continue;
 
-		if (ScheduleThread* entry = dynamic_cast<ScheduleThread*>(_entry)) {
-			if (entry->ThreadID() == threadID) {
+		AbstractTraceEntry* entry = (AbstractTraceEntry*)_entry;
+		uint16 type = entry->EntryType();
+
+		if (type == SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD) {
+			ScheduleThread* scheduleEntry = (ScheduleThread*)entry;
+			if (scheduleEntry->ThreadID() == threadID) {
 				// thread scheduled
-				bigtime_t diffTime = entry->Time() - lastTime;
+				bigtime_t diffTime = scheduleEntry->Time() - lastTime;
 
 				if (state == READY) {
 					// thread scheduled after having been woken up
@@ -184,17 +191,17 @@ cmd_scheduler(int argc, char** argv)
 				if (state == STILL_RUNNING) {
 					// Thread was running and continues to run.
 					// Update lastTime to start of this segment.
-					lastTime = entry->Time();
+					lastTime = scheduleEntry->Time();
 					state = RUNNING;
 				}
 
 				if (state != RUNNING) {
-					lastTime = entry->Time();
+					lastTime = scheduleEntry->Time();
 					state = RUNNING;
 				}
-			} else if (entry->PreviousThreadID() == threadID) {
+			} else if (scheduleEntry->PreviousThreadID() == threadID) {
 				// thread unscheduled
-				bigtime_t diffTime = entry->Time() - lastTime;
+				bigtime_t diffTime = scheduleEntry->Time() - lastTime;
 
 				if (state == STILL_RUNNING) {
 					// thread preempted
@@ -207,11 +214,11 @@ cmd_scheduler(int argc, char** argv)
 						maxRunTime = diffTime;
 
 					state = PREEMPTED;
-					lastTime = entry->Time();
+					lastTime = scheduleEntry->Time();
 				} else if (state == RUNNING) {
 					// thread starts waiting (it hadn't been added to the run
 					// queue before being unscheduled)
-					bigtime_t diffTime = entry->Time() - lastTime;
+					bigtime_t diffTime = scheduleEntry->Time() - lastTime;
 					runs++;
 					totalRunTime += diffTime;
 					if (minRunTime < 0 || diffTime < minRunTime)
@@ -220,12 +227,12 @@ cmd_scheduler(int argc, char** argv)
 						maxRunTime = diffTime;
 
 					state = WAITING;
-					lastTime = entry->Time();
+					lastTime = scheduleEntry->Time();
 				}
 			}
-		} else if (EnqueueThread* entry
-				= dynamic_cast<EnqueueThread*>(_entry)) {
-			if (entry->ThreadID() != threadID)
+		} else if (type == SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD) {
+			EnqueueThread* enqueueEntry = (EnqueueThread*)entry;
+			if (enqueueEntry->ThreadID() != threadID)
 				continue;
 
 			// thread enqueued in run queue
@@ -236,11 +243,12 @@ cmd_scheduler(int argc, char** argv)
 				state = STILL_RUNNING;
 			} else {
 				// Thread was waiting and is ready now.
-				lastTime = entry->Time();
+				lastTime = enqueueEntry->Time();
 				state = READY;
 			}
-		} else if (RemoveThread* entry = dynamic_cast<RemoveThread*>(_entry)) {
-			if (entry->ThreadID() != threadID)
+		} else if (type == SCHEDULER_TRACE_ENTRY_TYPE_REMOVE_THREAD) {
+			RemoveThread* removeEntry = (RemoveThread*)entry;
+			if (removeEntry->ThreadID() != threadID)
 				continue;
 
 			// thread removed from run queue
@@ -250,7 +258,7 @@ cmd_scheduler(int argc, char** argv)
 
 			if (state == RUNNING) {
 				// This should never happen.
-				bigtime_t diffTime = entry->Time() - lastTime;
+				bigtime_t diffTime = removeEntry->Time() - lastTime;
 				runs++;
 				totalRunTime += diffTime;
 				if (minRunTime < 0 || diffTime < minRunTime)

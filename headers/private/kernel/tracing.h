@@ -116,6 +116,8 @@ public:
 
 	virtual void AddDump(TraceOutput& out);
 
+	virtual uint16 EntryType() const { return 0; }
+
 	thread_id ThreadID() const	{ return fThread; }
 	thread_id TeamID() const	{ return fTeam; }
 	bigtime_t Time() const		{ return fTime; }

@@ -283,7 +283,7 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 			continue;
 
 		while (bits != 0) {
-			int bit = __builtin_ctz(bits);
+			int bit = ffs((int)bits) - 1;
 			bits &= ~(1U << bit);
 			int32 cpuID = i * 32 + bit;
 

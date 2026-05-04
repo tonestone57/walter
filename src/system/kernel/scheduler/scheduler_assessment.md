@@ -69,7 +69,7 @@ The system supports switchable operation modes (`scheduler_modes.h`) to adapt to
 ## 7. Performance Optimizations Highlighted
 
 *   **Fast Division:** `ThreadData::ComputeQuantum` uses `kRangeReciprocal` to replace expensive integer division with multiplication and shifts.
-*   **Bitmap Intrinsics:** Extensive use of `__builtin_ctz` and `fls` for bit manipulation.
+*   **Bitmap Intrinsics:** Extensive use of portable `ffs` and `fls` wrappers for bit manipulation, ensuring compatibility with GCC 2.95.
 *   **Stack Allocation:** `search_global_random` allocates its visited bitmask (up to 512 bytes) on the stack to avoid heap allocation overhead in the hot path.
 *   **Cache Locality:** `ThreadData` caches `fHomePackage` and `fCore` to prefer scheduling on the same physical resources (Warm Cache affinity).
 
@@ -104,7 +104,7 @@ While the updated scheduler is highly responsive, its "Statistical Fairness" (bu
 2.  **Increase Priority Resolution**
     *   **Strategy:** Expand `THREAD_MAX_SET_PRIORITY` from 99 to 255 (matching one byte).
     *   **Fairness Improvement:** **Moderate (Rank 2)**. Reduces bucket width from ~5ms to ~2ms, statistically reducing collisions by ~60%.
-    *   **Performance Impact:** **Negligible**. Bitmaps grow slightly (from 4 words to 8 words), but `__builtin_ctz` efficiency remains identical.
+    *   **Performance Impact:** **Negligible**. Bitmaps grow slightly (from 4 words to 8 words), but `ffs` efficiency remains identical.
     *   **Status:** Partially addressed by Issue 40's multi-level `PeekBest` search.
 
 3.  ~~**Simplified Lag Tracking (Starvation Protection)**~~ - **REJECTED**

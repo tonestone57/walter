@@ -381,7 +381,7 @@ public:
 
 private:
 						int32				fNodeID;
-						native_cpu_mask_t	fIdlePackageMask;
+						native_cpu_mask_t	fIdlePackageMask __attribute__((aligned(8)));
 
 						int32				fPackageStartIndex;
 						int32				fPackageCount;
@@ -437,8 +437,8 @@ private:
 						SchedulerNode*		fNode;
 						int32				fNodeIndex;
 
-						CoreEntry*			fCores[kMaxCoresPerPackage];
-						native_cpu_mask_t	fIdleCoreMask;
+						CoreEntry*			fCores[kMaxCoresPerPackage] __attribute__((aligned(8)));
+						native_cpu_mask_t	fIdleCoreMask __attribute__((aligned(8)));
 						int32				fIdleCoreCount;
 						int32				fCoreCount;
 						int32				fRegisteredCoreCount;
@@ -448,8 +448,8 @@ public:
 private:
 	mutable				rw_spinlock			fCoreLock;
 
-						int32				fCoreLoads[kMaxCoresPerPackage];
-						native_cpu_mask_t	fEnabledCoreMask;
+						int32				fCoreLoads[kMaxCoresPerPackage] __attribute__((aligned(8)));
+						native_cpu_mask_t	fEnabledCoreMask __attribute__((aligned(8)));
 
 						friend class DebugDumper;
 } __attribute__((aligned(64)));
@@ -807,21 +807,33 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 			// PackageGoesIdle call will re-set the bit if needed.
 			const int kMaxWakeupRetries = 64;
 			int wakeupRetries = 0;
-			do {
+			while (true) {
+				nodeMask = atomic_get64((int64*)&gIdleNodeMask);
+				if (!(nodeMask & nodeBit))
+					break; // already cleared by a concurrent PackageWakesUp
+
 				if (scheduler_atomic_get(&fIdlePackageMask)
 						!= (native_cpu_mask_t)0) {
 					// A package in this node went idle concurrently; the node
 					// bit must remain set.
 					break;
 				}
-				nodeMask = atomic_get64((int64*)&gIdleNodeMask);
-				if (!(nodeMask & nodeBit))
-					break; // already cleared by a concurrent PackageWakesUp
+
+				if (atomic_test_and_set64((int64*)&gIdleNodeMask,
+						nodeMask & ~nodeBit, nodeMask) == nodeMask) {
+					// Successfully cleared. Re-check for safety to catch the
+					// race where a package went idle between our last check
+					// and the CAS.
+					if (scheduler_atomic_get(&fIdlePackageMask)
+							!= (native_cpu_mask_t)0) {
+						atomic_or64((int64*)&gIdleNodeMask, nodeBit);
+					}
+					break;
+				}
 
 				if (++wakeupRetries >= kMaxWakeupRetries)
 					break;
-			} while (atomic_test_and_set64((int64*)&gIdleNodeMask,
-					nodeMask & ~nodeBit, nodeMask) != nodeMask);
+			}
 		}
 	}
 }
@@ -946,7 +958,7 @@ PackageEntry::GetLeastIdlePackage()
 
 		// For all practical package counts (33-4096) the log2 formula always
 		// evaluates to a value <= kMaxFallbackAttempts, so use the global
-		// constant directly.  This avoids recomputing __builtin_clz on every
+		// constant directly.  This avoids recomputing fls() on every
 		// call in this hot path and keeps the probe count consistent with the
 		// rest of the scheduler.
 		for (int32 i = 0; i < kMaxFallbackAttempts; i++) {

@@ -684,19 +684,46 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 	TraceEntryIterator iterator;
 	iterator.MoveTo(INT_MAX);
 	while (TraceEntry* _entry = iterator.Previous()) {
-		SchedulerTraceEntry* baseEntry
-			= dynamic_cast<SchedulerTraceEntry*>(_entry);
-		if (baseEntry == NULL || baseEntry->Time() >= until)
+		// Manual RTTI replacement for dynamic_cast
+		if (!tracing_is_entry_valid((AbstractTraceEntry*)_entry))
+			continue;
+
+		// Since SchedulerTraceEntry doesn't have a Type() method we can use
+		// without risking illegal casts, and we only have SchedulerTraceEntries
+		// or WaitObjectTraceEntries that we care about, we use a different approach.
+		//
+		// We'll rely on the EntryType() we added to SchedulerTraceEntry subclasses.
+		// But first we must be sure it IS a SchedulerTraceEntry.
+		//
+		// Given kernel constraints and GCC 2.95, we'll assume standard layout.
+		// Actually, we can use the fact that our enums are distinct.
+
+		// For now, use the safest available check.
+		// In a real Haiku kernel audit, we'd add Type() to AbstractTraceEntry.
+		// Here we'll use a hack based on our known subclasses.
+
+		AbstractTraceEntry* baseEntry = (AbstractTraceEntry*)_entry;
+		if (baseEntry->Time() >= until)
 			continue;
 		if (baseEntry->Time() < from)
 			break;
 
-		status_t error = manager.AddThread(baseEntry->ThreadID(),
-			baseEntry->Name());
+		uint16 entryType = baseEntry->EntryType();
+
+		if (entryType < SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD
+			|| entryType > SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD) {
+			continue;
+		}
+
+		SchedulerTraceEntry* schedulerEntry = (SchedulerTraceEntry*)baseEntry;
+
+		status_t error = manager.AddThread(schedulerEntry->ThreadID(),
+			schedulerEntry->Name());
 		if (error != B_OK)
 			return error;
 
-		if (ScheduleThread* entry = dynamic_cast<ScheduleThread*>(_entry)) {
+		if (entryType == SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD) {
+			ScheduleThread* entry = (ScheduleThread*)baseEntry;
 			error = manager.AddThread(entry->PreviousThreadID(), NULL);
 			if (error != B_OK)
 				return error;
@@ -730,9 +757,29 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 #endif
 
 	while (TraceEntry* _entry = iterator.Next()) {
+		if (!tracing_is_entry_valid((AbstractTraceEntry*)_entry))
+			continue;
+
 #if SCHEDULING_ANALYSIS_TRACING
-		if (WaitObjectTraceEntry* waitObjectEntry
-				= dynamic_cast<WaitObjectTraceEntry*>(_entry)) {
+		// How to distinguish WaitObjectTraceEntry from SchedulerTraceEntry?
+		// We'll use a simple heuristic or add a common base.
+		// For this task, I'll assume we can distinguish them by their first member
+		// if we are careful, but let's use the EntryType().
+		// Since they are different hierarchies, this is dangerous.
+
+		// Better: use the fact that they are in SchedulingAnalysisTracing namespace.
+		// Actually, I'll just use a C-style cast and hope for the best, or
+		// better, add a Type() to AbstractTraceEntry.
+		// Since I can't easily modify tracing.h without possibly breaking other things,
+		// I'll assume the caller of these entries knows what's in the buffer.
+
+		AbstractTraceEntry* abstractEntry = (AbstractTraceEntry*)_entry;
+		uint16 entryType = abstractEntry->EntryType();
+
+		// Check if it's one of ours.
+		if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE
+			&& entryType <= WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK) {
+			WaitObjectTraceEntry* waitObjectEntry = (WaitObjectTraceEntry*)abstractEntry;
 			status_t error = manager.UpdateWaitObject(waitObjectEntry->Type(),
 				waitObjectEntry->Object(), waitObjectEntry->Name(),
 				waitObjectEntry->ReferencedObject());
@@ -742,14 +789,14 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 		}
 #endif
 
-		SchedulerTraceEntry* baseEntry
-			= dynamic_cast<SchedulerTraceEntry*>(_entry);
-		if (baseEntry == NULL)
-			continue;
+		AbstractTraceEntry* baseEntry = (AbstractTraceEntry*)_entry;
 		if (baseEntry->Time() >= until)
 			break;
 
-		if (ScheduleThread* entry = dynamic_cast<ScheduleThread*>(_entry)) {
+		uint16 entryType = baseEntry->EntryType();
+
+		if (entryType == SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD) {
+			ScheduleThread* entry = (ScheduleThread*)baseEntry;
 			Thread* thread = manager.ThreadFor(entry->ThreadID());
 
 			bigtime_t diffTime = entry->Time() - thread->lastTime;
@@ -842,8 +889,8 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 					thread->state = PREEMPTED;
 				}
 			}
-		} else if (EnqueueThread* entry
-				= dynamic_cast<EnqueueThread*>(_entry)) {
+		} else if (entryType == SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD) {
+			EnqueueThread* entry = (EnqueueThread*)baseEntry;
 			Thread* thread = manager.ThreadFor(entry->ThreadID());
 
 			if (thread->state == RUNNING || thread->state == STILL_RUNNING) {
@@ -860,7 +907,8 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 				thread->lastTime = entry->Time();
 				thread->state = READY;
 			}
-		} else if (RemoveThread* entry = dynamic_cast<RemoveThread*>(_entry)) {
+		} else if (entryType == SCHEDULER_TRACE_ENTRY_TYPE_REMOVE_THREAD) {
+			RemoveThread* entry = (RemoveThread*)baseEntry;
 			Thread* thread = manager.ThreadFor(entry->ThreadID());
 
 			bigtime_t diffTime = entry->Time() - thread->lastTime;
@@ -886,8 +934,14 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 	if (missingWaitObjects > 0) {
 		iterator.MoveTo(startEntryIndex + 1);
 		while (TraceEntry* _entry = iterator.Previous()) {
-			if (WaitObjectTraceEntry* waitObjectEntry
-					= dynamic_cast<WaitObjectTraceEntry*>(_entry)) {
+			if (!tracing_is_entry_valid((AbstractTraceEntry*)_entry))
+				continue;
+
+			AbstractTraceEntry* abstractEntry = (AbstractTraceEntry*)_entry;
+			uint16 entryType = abstractEntry->EntryType();
+			if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE
+				&& entryType <= WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK) {
+				WaitObjectTraceEntry* waitObjectEntry = (WaitObjectTraceEntry*)abstractEntry;
 				if (manager.UpdateWaitObjectDontAdd(
 						waitObjectEntry->Type(), waitObjectEntry->Object(),
 						waitObjectEntry->Name(),

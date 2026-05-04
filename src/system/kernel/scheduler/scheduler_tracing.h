@@ -17,6 +17,12 @@
 
 namespace SchedulerTracing {
 
+enum SchedulerTraceEntryType {
+	SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD = 100,
+	SCHEDULER_TRACE_ENTRY_TYPE_REMOVE_THREAD,
+	SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD,
+};
+
 class SchedulerTraceEntry : public AbstractTraceEntry {
 public:
 	SchedulerTraceEntry(Thread* thread)
@@ -28,6 +34,7 @@ public:
 	thread_id ThreadID() const	{ return fID; }
 
 	virtual const char* Name() const = 0;
+	virtual uint16 EntryType() const = 0;
 
 protected:
 	thread_id			fID;
@@ -36,6 +43,11 @@ protected:
 
 class EnqueueThread : public SchedulerTraceEntry {
 public:
+	virtual uint16 EntryType() const
+	{
+		return SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD;
+	}
+
 	EnqueueThread(Thread* thread, int32 effectivePriority)
 		:
 		SchedulerTraceEntry(thread),
@@ -60,6 +72,11 @@ private:
 
 class RemoveThread : public SchedulerTraceEntry {
 public:
+	virtual uint16 EntryType() const
+	{
+		return SCHEDULER_TRACE_ENTRY_TYPE_REMOVE_THREAD;
+	}
+
 	RemoveThread(Thread* thread)
 		:
 		SchedulerTraceEntry(thread),
@@ -79,6 +96,11 @@ private:
 
 class ScheduleThread : public SchedulerTraceEntry {
 public:
+	virtual uint16 EntryType() const
+	{
+		return SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD;
+	}
+
 	ScheduleThread(Thread* thread, Thread* previous)
 		:
 		SchedulerTraceEntry(thread),

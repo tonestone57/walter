@@ -17,8 +17,17 @@ struct rw_lock;
 #if SCHEDULING_ANALYSIS_TRACING
 namespace SchedulingAnalysisTracing {
 
+enum WaitObjectTraceEntryType {
+	WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE = 200,
+	WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_CONDITION_VARIABLE,
+	WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_MUTEX,
+	WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK,
+};
+
 class WaitObjectTraceEntry : public AbstractTraceEntry {
 public:
+	virtual uint16 EntryType() const = 0;
+
 	virtual uint32 Type() const = 0;
 	virtual void* Object() const = 0;
 	virtual const char* Name() const = 0;
@@ -32,6 +41,11 @@ public:
 
 class CreateSemaphore : public WaitObjectTraceEntry {
 public:
+	virtual uint16 EntryType() const
+	{
+		return WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE;
+	}
+
 	CreateSemaphore(sem_id id, const char* name)
 		:
 		fID(id),
@@ -68,6 +82,11 @@ private:
 
 class InitConditionVariable : public WaitObjectTraceEntry {
 public:
+	virtual uint16 EntryType() const
+	{
+		return WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_CONDITION_VARIABLE;
+	}
+
 	InitConditionVariable(ConditionVariable* variable, const void* object,
 		const char* objectType)
 		:
@@ -113,6 +132,11 @@ private:
 
 class InitMutex : public WaitObjectTraceEntry {
 public:
+	virtual uint16 EntryType() const
+	{
+		return WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_MUTEX;
+	}
+
 	InitMutex(mutex* lock, const char* name)
 		:
 		fMutex(lock),
@@ -149,6 +173,11 @@ private:
 
 class InitRWLock : public WaitObjectTraceEntry {
 public:
+	virtual uint16 EntryType() const
+	{
+		return WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK;
+	}
+
 	InitRWLock(rw_lock* lock, const char* name)
 		:
 		fLock(lock),
