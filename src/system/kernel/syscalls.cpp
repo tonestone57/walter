@@ -337,6 +337,8 @@ get_syscall_name(uint32 syscall)
 
 class PreSyscall : public AbstractTraceEntry {
 	public:
+		virtual uint16 EntryType() const { return 303; }
+
 		PreSyscall(uint32 syscall, const void* parameters)
 			:
 			fSyscall(syscall),
@@ -432,6 +434,8 @@ class PreSyscall : public AbstractTraceEntry {
 
 class PostSyscall : public AbstractTraceEntry {
 	public:
+		virtual uint16 EntryType() const { return 304; }
+
 		PostSyscall(uint32 syscall, uint64 returnValue)
 			:
 			fSyscall(syscall),
@@ -513,7 +517,10 @@ public:
 		if (fDirection < 0)
 			return fFilter->Filter(_entry, out);
 
-		if (const PreSyscall* entry = dynamic_cast<const PreSyscall*>(_entry)) {
+		uint16 entryType = _entry->EntryType();
+
+		if (entryType == 303) {
+			const PreSyscall* entry = (const PreSyscall*)_entry;
 			_RemovePendingThread(entry->ThreadID());
 
 			bool accepted = fFilter->Filter(entry, out);
@@ -521,14 +528,14 @@ public:
 				_AddPendingThread(entry->ThreadID());
 			return accepted;
 
-		} else if (const PostSyscall* entry
-				= dynamic_cast<const PostSyscall*>(_entry)) {
+		} else if (entryType == 304) {
+			const PostSyscall* entry = (const PostSyscall*)_entry;
 			bool wasPending = _RemovePendingThread(entry->ThreadID());
 
 			return wasPending || fFilter->Filter(entry, out);
 
-		} else if (const AbstractTraceEntry* entry
-				= dynamic_cast<const AbstractTraceEntry*>(_entry)) {
+		} else if (entryType != 0) {
+			const AbstractTraceEntry* entry = (const AbstractTraceEntry*)_entry;
 			bool isPending = _IsPendingThread(entry->ThreadID());
 
 			return isPending || fFilter->Filter(entry, out);

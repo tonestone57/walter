@@ -869,6 +869,8 @@ AbstractTraceEntryWithStackTrace::DumpStackTrace(TraceOutput& out)
 
 class KernelTraceEntry : public AbstractTraceEntry {
 	public:
+		virtual uint16 EntryType() const { return 300; }
+
 		KernelTraceEntry(const char* message)
 		{
 			fMessage = alloc_tracing_buffer_strcpy(message, 256, false);
@@ -902,6 +904,8 @@ class KernelTraceEntry : public AbstractTraceEntry {
 
 class UserTraceEntry : public AbstractTraceEntry {
 	public:
+		virtual uint16 EntryType() const { return 301; }
+
 		UserTraceEntry(const char* message)
 		{
 			fMessage = alloc_tracing_buffer_strcpy(message, 256, true);
@@ -935,6 +939,8 @@ class UserTraceEntry : public AbstractTraceEntry {
 
 class TracingLogStartEntry : public AbstractTraceEntry {
 	public:
+		virtual uint16 EntryType() const { return 302; }
+
 		TracingLogStartEntry()
 		{
 			Initialized();
@@ -969,8 +975,10 @@ class ThreadTraceFilter : public TraceFilter {
 public:
 	virtual bool Filter(const TraceEntry* _entry, LazyTraceOutput& out)
 	{
+		if (_entry == NULL || _entry->EntryType() == 0)
+			return false;
 		const AbstractTraceEntry* entry = (const AbstractTraceEntry*)_entry;
-		return (entry != NULL && entry->ThreadID() == fThread);
+		return entry->ThreadID() == fThread;
 	}
 };
 
@@ -979,8 +987,10 @@ class TeamTraceFilter : public TraceFilter {
 public:
 	virtual bool Filter(const TraceEntry* _entry, LazyTraceOutput& out)
 	{
+		if (_entry == NULL || _entry->EntryType() == 0)
+			return false;
 		const AbstractTraceEntry* entry = (const AbstractTraceEntry*)_entry;
-		return (entry != NULL && entry->TeamID() == fTeam);
+		return entry->TeamID() == fTeam;
 	}
 };
 
@@ -1741,10 +1751,10 @@ tracing_is_entry_valid(AbstractTraceEntry* candidate, bigtime_t entryTime)
 
 	TraceEntryIterator iterator;
 	while (TraceEntry* entry = iterator.Next()) {
-		AbstractTraceEntry* abstract = (AbstractTraceEntry*)entry;
-		if (abstract == NULL)
+		if (entry == NULL || entry->EntryType() == 0)
 			continue;
 
+		AbstractTraceEntry* abstract = (AbstractTraceEntry*)entry;
 		if (abstract != candidate && abstract->Time() > entryTime)
 			return false;
 

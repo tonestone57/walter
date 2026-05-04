@@ -80,7 +80,8 @@ class TraceEntry {
 
 		// EntryType: manual RTTI for GCC 2.95 kernel compatibility.
 		// Returns a unique ID for the entry class. IDs 100-299 are reserved
-		// for the scheduler and its analysis tools.
+		// for the scheduler and its analysis tools. IDs >= 1 identify
+		// AbstractTraceEntry and its descendants.
 		virtual uint16 EntryType() const { return 0; }
 
 		size_t Size() const		{ return ToTraceEntry()->size; }
@@ -120,6 +121,8 @@ public:
 	virtual void Dump(TraceOutput& out);
 
 	virtual void AddDump(TraceOutput& out);
+
+	virtual uint16 EntryType() const { return 1; }
 
 	thread_id ThreadID() const	{ return fThread; }
 	thread_id TeamID() const	{ return fTeam; }
