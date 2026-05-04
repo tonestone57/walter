@@ -684,23 +684,8 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 	TraceEntryIterator iterator;
 	iterator.MoveTo(INT_MAX);
 	while (TraceEntry* _entry = iterator.Previous()) {
-		// Manual RTTI replacement for dynamic_cast
 		if (!tracing_is_entry_valid((AbstractTraceEntry*)_entry))
 			continue;
-
-		// Since SchedulerTraceEntry doesn't have a Type() method we can use
-		// without risking illegal casts, and we only have SchedulerTraceEntries
-		// or WaitObjectTraceEntries that we care about, we use a different approach.
-		//
-		// We'll rely on the EntryType() we added to SchedulerTraceEntry subclasses.
-		// But first we must be sure it IS a SchedulerTraceEntry.
-		//
-		// Given kernel constraints and GCC 2.95, we'll assume standard layout.
-		// Actually, we can use the fact that our enums are distinct.
-
-		// For now, use the safest available check.
-		// We use the EntryType() method added to AbstractTraceEntry to
-		// distinguish between different trace entry types without RTTI.
 
 		AbstractTraceEntry* baseEntry = (AbstractTraceEntry*)_entry;
 		if (baseEntry->Time() >= until)
@@ -761,18 +746,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 			continue;
 
 #if SCHEDULING_ANALYSIS_TRACING
-		// How to distinguish WaitObjectTraceEntry from SchedulerTraceEntry?
-		// We'll use a simple heuristic or add a common base.
-		// For this task, I'll assume we can distinguish them by their first member
-		// if we are careful, but let's use the EntryType().
-		// Since they are different hierarchies, this is dangerous.
-
-		// Better: use the fact that they are in SchedulingAnalysisTracing namespace.
-		// Actually, I'll just use a C-style cast and hope for the best, or
-		// better, add a Type() to AbstractTraceEntry.
-		// Since I can't easily modify tracing.h without possibly breaking other things,
-		// I'll assume the caller of these entries knows what's in the buffer.
-
 		AbstractTraceEntry* abstractEntry = (AbstractTraceEntry*)_entry;
 		uint16 entryType = abstractEntry->EntryType();
 

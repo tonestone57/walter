@@ -151,9 +151,6 @@ cmd_scheduler(int argc, char** argv)
 
 	TraceEntryIterator iterator;
 	while (TraceEntry* _entry = iterator.Next()) {
-		// Manual RTTI replacement for dynamic_cast
-		// Use tracing_is_entry_valid for a basic sanity check, then rely on
-		// EntryType() from SchedulerTraceEntry.
 		if (!tracing_is_entry_valid((AbstractTraceEntry*)_entry))
 			continue;
 
