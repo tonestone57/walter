@@ -76,6 +76,8 @@ struct ThreadDataVRuntimeCompare {
 #endif
 
 // Helpers for atomic operations and bit manipulation on native_cpu_mask_t
+// These wrappers provide architecture-independent atomic access (32/64-bit).
+
 static inline native_cpu_mask_t
 scheduler_atomic_or(native_cpu_mask_t* value, native_cpu_mask_t orValue)
 {
@@ -86,6 +88,7 @@ scheduler_atomic_or(native_cpu_mask_t* value, native_cpu_mask_t orValue)
 #endif
 }
 
+
 static inline native_cpu_mask_t
 scheduler_atomic_and(native_cpu_mask_t* value, native_cpu_mask_t andValue)
 {
@@ -95,6 +98,7 @@ scheduler_atomic_and(native_cpu_mask_t* value, native_cpu_mask_t andValue)
 	return (native_cpu_mask_t)atomic_and((int32*)value, (int32)andValue);
 #endif
 }
+
 
 static inline native_cpu_mask_t
 scheduler_atomic_get(native_cpu_mask_t* value)
@@ -130,6 +134,7 @@ scheduler_ffs64(uint64 value)
 	return high + 32;
 }
 
+// scheduler_ctz: portable Count Trailing Zeros for GCC 2.95.
 static inline int
 scheduler_ctz(native_cpu_mask_t value)
 {
