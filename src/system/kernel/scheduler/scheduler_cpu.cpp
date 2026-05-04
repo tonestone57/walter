@@ -1255,7 +1255,7 @@ CoreEntry::PeekMinimumLoadCPU()
 			uint32 bits = fCPUSet.Bits(i);
 			if (bits == 0)
 				continue;
-			int cpu = i * 32 + (__builtin_ffs(bits) - 1);
+			int cpu = i * 32 + (ffs((int)bits) - 1);
 			if (cpu < smp_get_num_cpus()) {
 				CPUEntry* entry = &gCPUEntries[cpu];
 				// Issue 52 fix: verify the CPU is still in the heap before
@@ -1688,7 +1688,7 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 	// Use formula: 4 + (3 * log2(N)) / 2
 	// For 32 cores: 4 + 7.5 = 11 attempts.
 	if (fRegisteredCoreCount > 0) {
-		fMaxAttempts = 4 + (3 * (31 - __builtin_clz(fRegisteredCoreCount))) / 2;
+		fMaxAttempts = 4 + (3 * (fls((uint32)fRegisteredCoreCount) - 1)) / 2;
 	} else
 		fMaxAttempts = 0;
 }
@@ -2037,12 +2037,12 @@ dump_idle_cores(int /* argc */, char** /* argv */)
 		kprintf("node package cores\n");
 
 		while (nodeMask != 0) {
-			int32 nodeIndex = __builtin_ctzll(nodeMask);
+			int32 nodeIndex = scheduler_ffs64(nodeMask) - 1;
 			nodeMask &= ~(1ULL << nodeIndex);
 
 			uint64 packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
 			while (packageMask != 0) {
-				int32 packageIndex = __builtin_ctzll(packageMask);
+				int32 packageIndex = scheduler_ffs64(packageMask) - 1;
 				packageMask &= ~(1ULL << packageIndex);
 
 				int32 globalPackageIndex

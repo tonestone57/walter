@@ -385,14 +385,14 @@ choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL)
 			if (++scannedCount > kMaxCPUsToScan)
 				break;
 
-			int32 nodeIndex = __builtin_ctzll(idleNodeMask);
+			int32 nodeIndex = scheduler_ffs64(idleNodeMask) - 1;
 			idleNodeMask &= ~(1ULL << nodeIndex);
 
 			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
 			uint64 idlePackageMask = node->IdlePackageMask();
 
 			if (idlePackageMask != 0) {
-				int32 packageIndex = __builtin_ctzll(idlePackageMask);
+				int32 packageIndex = scheduler_ffs64(idlePackageMask) - 1;
 				// fPackageStartIndex + packageIndex gives global index
 				int32 globalIndex = node->PackageStartIndex() + packageIndex;
 				// Issue 3 fix: added missing gPackageCount guard.

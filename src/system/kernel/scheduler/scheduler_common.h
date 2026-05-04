@@ -106,19 +106,35 @@ static inline int
 scheduler_popcount(native_cpu_mask_t value)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return __builtin_popcountll(value);
+	return count_set_bits((uint32)value) + count_set_bits((uint32)(value >> 32));
 #else
-	return __builtin_popcount(value);
+	return count_set_bits((uint32)value);
 #endif
+}
+
+static inline int
+scheduler_ffs64(uint64 value)
+{
+	if (value == 0)
+		return 0;
+	uint32 low = (uint32)value;
+	if (low != 0)
+		return ffs((int)low);
+	int high = ffs((int)(value >> 32));
+	if (high == 0)
+		return 0;
+	return high + 32;
 }
 
 static inline int
 scheduler_ctz(native_cpu_mask_t value)
 {
+	if (value == 0)
+		return 0;
 #if SCHEDULER_MASK_IS_64_BIT
-	return __builtin_ctzll(value);
+	return scheduler_ffs64(value) - 1;
 #else
-	return __builtin_ctz(value);
+	return ffs((int)value) - 1;
 #endif
 }
 
@@ -163,10 +179,10 @@ extern const bigtime_t kMinMeasurementWindow;
 extern const int kLoadClampMax;
 
 
-extern int64 gDeadlineBucketSize;
+extern int64 gDeadlineBucketSize __attribute__((aligned(8)));
 
 extern int32 gTotalRunnableThreads;
-extern uint64 gIdleMask;
+extern uint64 gIdleMask __attribute__((aligned(8)));
 
 extern CoreType gMinCoreType;
 extern CoreType gMaxCoreType;

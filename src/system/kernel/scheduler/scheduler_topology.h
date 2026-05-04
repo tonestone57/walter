@@ -93,7 +93,7 @@ search_local_node(SchedulerNode* node, Action action)
 	// still terminates within kMaxAttempts, bounding stack use unconditionally.
 	int32 logPackages = 0;
 	if (packagesInNode > 1)
-		logPackages = 31 - __builtin_clz(packagesInNode);
+		logPackages = fls((uint32)packagesInNode) - 1;
 
 	const int kMaxLocalAttempts = min_c(packagesInNode, 4 + logPackages);
 

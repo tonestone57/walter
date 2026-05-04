@@ -167,7 +167,7 @@ choose_core(const ThreadData* threadData)
 			if (node != NULL) {
 				uint64 idlePackageMask = node->IdlePackageMask();
 				while (idlePackageMask != 0) {
-					int32 packageIndex = __builtin_ctzll(idlePackageMask);
+					int32 packageIndex = scheduler_ffs64(idlePackageMask) - 1;
 					idlePackageMask &= ~(1ULL << packageIndex);
 
 					int32 globalPackageIndex
@@ -197,14 +197,14 @@ choose_core(const ThreadData* threadData)
 		// Try to find an idle core of the preferred type
 		uint64 typeIdleNodeMask = idleNodeMask;
 		while (typeIdleNodeMask != 0) {
-			int32 nodeIndex = __builtin_ctzll(typeIdleNodeMask);
+			int32 nodeIndex = scheduler_ffs64(typeIdleNodeMask) - 1;
 			typeIdleNodeMask &= ~(1ULL << nodeIndex);
 
 			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
 			uint64 idlePackageMask = node->IdlePackageMask();
 
 			while (idlePackageMask != 0) {
-				int32 packageIndex = __builtin_ctzll(idlePackageMask);
+				int32 packageIndex = scheduler_ffs64(idlePackageMask) - 1;
 				idlePackageMask &= ~(1ULL << packageIndex);
 
 				int32 globalPackageIndex = node->PackageStartIndex() + packageIndex;
@@ -361,14 +361,14 @@ choose_core(const ThreadData* threadData)
 		if (++scannedCount > kMaxCPUsToScan)
 			break;
 
-		int32 nodeIndex = __builtin_ctzll(idleNodeMask);
+		int32 nodeIndex = scheduler_ffs64(idleNodeMask) - 1;
 		idleNodeMask &= ~(1ULL << nodeIndex);
 
 		SchedulerNode* node = &gSchedulerNodes[nodeIndex];
 		uint64 idlePackageMask = node->IdlePackageMask();
 
 		while (idlePackageMask != 0) {
-			int32 packageIndex = __builtin_ctzll(idlePackageMask);
+			int32 packageIndex = scheduler_ffs64(idlePackageMask) - 1;
 			idlePackageMask &= ~(1ULL << packageIndex);
 
 			int32 globalPackageIndex

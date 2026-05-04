@@ -63,7 +63,7 @@ bool gTrackCoreLoad;
 bool gTrackCPULoad;
 int32 gRandomSamples;
 
-int64 gDeadlineBucketSize = 5000;
+int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000;
 
 CoreType gMinCoreType = CORE_TYPE_UNKNOWN;
 CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
@@ -71,7 +71,7 @@ CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
 bool gHasStandardCores = false;
 
 int32 gTotalRunnableThreads = 0;
-uint64 gIdleMask = 0;
+uint64 gIdleMask __attribute__((aligned(8))) = 0;
 
 spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
 
@@ -506,6 +506,10 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 			if (++enqueueAttempts >= kMaxRetries) {
 				dprintf("scheduler: enqueue giving up after %d attempts "
 					"for thread %" B_PRId32 "\n", enqueueAttempts, thread->id);
+
+				if (!threadData->IsIdle())
+					atomic_add(&gTotalRunnableThreads, -1);
+
 				return false;
 			}
 		} else {
