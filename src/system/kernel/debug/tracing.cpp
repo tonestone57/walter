@@ -104,6 +104,29 @@ public:
 
 			bool				IsInBuffer(void* address, size_t size);
 
+			bool				VerifyEntry(trace_entry* entry)
+			{
+				if (entry == NULL || !IsInBuffer(entry, sizeof(trace_entry)))
+					return false;
+
+				if (((uintptr_t)entry - (uintptr_t)fBuffer) % sizeof(trace_entry) != 0)
+					return false;
+
+				if (entry->size == 0 || entry->size > kMaxTracingEntryByteSize / sizeof(trace_entry))
+					return false;
+
+				trace_entry* next = NextEntry(entry);
+				if (next != NULL) {
+					if (next->previous_size != entry->size)
+						return false;
+				} else {
+					if (fAfterLastEntry->previous_size != entry->size)
+						return false;
+				}
+
+				return true;
+			}
+
 private:
 			bool				_FreeFirstEntry();
 			bool				_MakeSpace(size_t needed);
@@ -1741,26 +1764,20 @@ bool
 tracing_is_entry_valid(AbstractTraceEntry* candidate, bigtime_t entryTime)
 {
 #if ENABLE_TRACING
-	if (candidate == NULL || !sTracingMetaData->IsInBuffer(candidate,
-			sizeof(*candidate))) {
+	if (candidate == NULL)
 		return false;
-	}
 
-	if (entryTime < 0)
-		return true;
+	if (!sTracingMetaData->VerifyEntry(candidate->ToTraceEntry()))
+		return false;
 
-	TraceEntryIterator iterator;
-	while (TraceEntry* entry = iterator.Next()) {
-		if (entry == NULL || entry->EntryType() == 0)
-			continue;
-
-		AbstractTraceEntry* abstract = (AbstractTraceEntry*)entry;
-		if (abstract != candidate && abstract->Time() > entryTime)
+	if (entryTime >= 0) {
+		if (!(candidate->ToTraceEntry()->flags & ENTRY_INITIALIZED))
 			return false;
-
-		if (abstract == candidate)
-			return candidate->Time() == entryTime;
+		if (candidate->Time() != entryTime)
+			return false;
 	}
+
+	return true;
 #endif
 
 	return false;

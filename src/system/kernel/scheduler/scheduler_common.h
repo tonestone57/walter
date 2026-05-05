@@ -13,6 +13,7 @@
 #include <smp.h>
 #include <thread.h>
 #include <user_debugger.h>
+#include <util/atomic.h>
 #include <util/MinMaxHeap.h>
 
 #include "RunQueue.h"
@@ -145,6 +146,20 @@ scheduler_ctz(native_cpu_mask_t value)
 	return scheduler_ffs64((uint64)value) - 1;
 #else
 	return ffs((int)value) - 1;
+#endif
+}
+
+
+// atomic_pointer_get: architecture-independent atomic pointer read.
+// Necessary for GCC 2.95 compatibility and 32/64-bit portability.
+template<typename T>
+static inline T*
+atomic_pointer_get(T* const* pointer)
+{
+#if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
+	return (T*)atomic_get64((int64*)pointer);
+#else
+	return (T*)atomic_get((int32*)pointer);
 #endif
 }
 

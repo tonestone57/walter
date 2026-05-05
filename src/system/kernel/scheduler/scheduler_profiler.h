@@ -49,8 +49,8 @@ private:
 
 			int32			fCalled;
 
-			bigtime_t		fTimeInclusive;
-			bigtime_t		fTimeExclusive;
+			bigtime_t		fTimeInclusive __attribute__((aligned(8)));
+			bigtime_t		fTimeExclusive __attribute__((aligned(8)));
 	} __attribute__((aligned(8)));
 
 	struct FunctionEntry {

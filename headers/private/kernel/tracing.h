@@ -79,9 +79,9 @@ class TraceEntry {
 		virtual void DumpStackTrace(TraceOutput& out);
 
 		// EntryType: manual RTTI for GCC 2.95 kernel compatibility.
-		// Returns a unique ID for the entry class. IDs 100-299 are reserved
-		// for the scheduler and its analysis tools. IDs >= 1 identify
-		// AbstractTraceEntry and its descendants.
+		// Returns a unique ID for the entry class. IDs >= 100 are reserved
+		// for specific trace entry classes (scheduler, analysis, etc.).
+		// IDs >= 1 identify AbstractTraceEntry and its descendants.
 		virtual uint16 EntryType() const { return 0; }
 
 		size_t Size() const		{ return ToTraceEntry()->size; }

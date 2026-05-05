@@ -672,8 +672,8 @@ private:
 	HashObject**		fHashTable;
 	uint32				fHashTableSize;
 
-	uintptr_t	fNextAllocation;
-	size_t		fRemainingBytes;
+	uintptr_t	fNextAllocation __attribute__((aligned(8)));
+	size_t		fRemainingBytes __attribute__((aligned(8)));
 };
 
 

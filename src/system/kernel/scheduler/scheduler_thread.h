@@ -537,7 +537,7 @@ ThreadData::GoesAway()
 	// SchedulerModeLocker (read). These are different locks, so the race
 	// is real. The snapshot approach is the minimal safe fix.
 	{
-		CoreEntry* const snap = atomic_pointer_get(
+		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 		fWentSleepActive = (snap != NULL) ? snap->GetActiveTime() : 0;
 		if (gTrackCoreLoad && snap != NULL)
@@ -570,7 +570,7 @@ ThreadData::Dies()
 	}
 
 	if (gTrackCoreLoad) {
-		CoreEntry* const snap = atomic_pointer_get(
+		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 		if (snap != NULL)
 			snap->RemoveLoad(fNeededLoad, true);

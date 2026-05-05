@@ -124,7 +124,7 @@ switch_to_mode()
 	}
 	if (sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
-			atomic_pointer_set(&sSmallTaskCore[i], (CoreEntry*)NULL);
+			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[i], (CoreEntry*)NULL);
 	}
 }
 
@@ -134,7 +134,7 @@ set_cpu_enabled(int32 cpu, bool enabled)
 {
 	if (!enabled && sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
-			atomic_pointer_set(&sSmallTaskCore[i], (CoreEntry*)NULL);
+			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[i], (CoreEntry*)NULL);
 	}
 }
 
@@ -229,7 +229,7 @@ choose_small_task_core(CPUEntry* cpu)
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
-		CoreEntry* current = (CoreEntry*)atomic_pointer_get(
+		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 			&sSmallTaskCore[currentNodeID]);
 		if (current != NULL && current->Type() == gMinCoreType
 				&& current->GetScore() < kHighLoad) {
@@ -273,14 +273,14 @@ choose_small_task_core(CPUEntry* cpu)
 				return eCore;
 
 			while (true) {
-				CoreEntry* currentE = (CoreEntry*)atomic_pointer_get(
+				CoreEntry* currentE = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 					&sSmallTaskCore[nodeID]);
 				if (currentE != NULL && currentE->Type() == gMinCoreType
 						&& currentE->GetScore() < kHighLoad) {
 					return currentE;
 				}
 
-				if (atomic_pointer_test_and_set(&sSmallTaskCore[nodeID], eCore,
+				if (atomic_pointer_test_and_set<CoreEntry>(&sSmallTaskCore[nodeID], eCore,
 						currentE) == currentE) {
 					return eCore;
 				}
@@ -296,7 +296,7 @@ choose_small_task_core(CPUEntry* cpu)
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
-		CoreEntry* current = (CoreEntry*)atomic_pointer_get(
+		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 			&sSmallTaskCore[currentNodeID]);
 		if (current != NULL && current->GetScore() < kHighLoad)
 			return current;
@@ -347,19 +347,19 @@ choose_small_task_core(CPUEntry* cpu)
 		int casRetries = 0;
 		const int kMaxCASRetries = 16;
 		while (true) {
-			CoreEntry* current = (CoreEntry*)atomic_pointer_get(
+			CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 				&sSmallTaskCore[nodeID]);
 			if (current != NULL && current->GetScore() < kHighLoad)
 				return current;
 
-			if (atomic_pointer_test_and_set(&sSmallTaskCore[nodeID], core,
+			if (atomic_pointer_test_and_set<CoreEntry>(&sSmallTaskCore[nodeID], core,
 					current) == current) {
 				return core;
 			}
 
 			if (++casRetries >= kMaxCASRetries) {
 				// Give up; return best known candidate to avoid spinning.
-				CoreEntry* latest = (CoreEntry*)atomic_pointer_get(
+				CoreEntry* latest = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 					&sSmallTaskCore[nodeID]);
 				return (latest != NULL) ? latest : core;
 			}
@@ -787,8 +787,8 @@ rebalance(const ThreadData* threadData)
 		// sSmallTaskCore branch below is skipped safely.
 
 		if (nodeID >= 0 && nodeID < gNodeCount && sSmallTaskCore != NULL
-				&& atomic_pointer_get(&sSmallTaskCore[nodeID]) == core) {
-			atomic_pointer_set(&sSmallTaskCore[nodeID], (CoreEntry*)NULL);
+				&& atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID]) == core) {
+			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[nodeID], (CoreEntry*)NULL);
 			CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 
 			if (threadLoad > coreScore / 3 || smallTaskCore == NULL
@@ -941,7 +941,7 @@ rebalance_irqs(bool idle)
 	bool hasSmallTaskCore = false;
 	if (sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++) {
-			if (atomic_pointer_get(&sSmallTaskCore[i]) != NULL) {
+			if (atomic_pointer_get<CoreEntry>(&sSmallTaskCore[i]) != NULL) {
 				hasSmallTaskCore = true;
 				break;
 			}
@@ -973,7 +973,7 @@ rebalance_irqs(bool idle)
 			&& currentCore->Package()->Node() != NULL) {
 		int32 nodeID = currentCore->Package()->Node()->ID();
 		if (nodeID >= 0 && nodeID < gNodeCount
-				&& atomic_pointer_get(&sSmallTaskCore[nodeID]) == currentCore) {
+				&& atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID]) == currentCore) {
 			return;
 		}
 	}
@@ -1015,7 +1015,7 @@ rebalance_irqs(bool idle)
 				&& currentCore->Package()->Node() != NULL) {
 			int32 nodeID = currentCore->Package()->Node()->ID();
 			if (nodeID >= 0 && nodeID < gNodeCount)
-				other = (CoreEntry*)atomic_pointer_get(&sSmallTaskCore[nodeID]);
+				other = (CoreEntry*)atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID]);
 		}
 	} else {
 		int32 bestScore = -2;
