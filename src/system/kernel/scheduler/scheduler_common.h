@@ -169,7 +169,7 @@ scheduler_ctz(native_cpu_mask_t value)
 // Necessary for GCC 2.95 compatibility and 32/64-bit portability.
 template<typename T>
 static inline T*
-atomic_pointer_get(T* const* pointer)
+atomic_pointer_get(T* const volatile* pointer)
 {
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
 	return (T*)atomic_get64((int64*)pointer);
