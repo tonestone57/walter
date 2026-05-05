@@ -486,8 +486,7 @@ ThreadData::GoesAway()
 	fWentSleep = now;
 	// Issue 7 fix: use ONE snapshot under a read of fCore.
 	{
-		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
-			const_cast<CoreEntry* volatile*>(&fCore));
+		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(&fCore);
 		fWentSleepActive = (snap != NULL) ? snap->GetActiveTime() : 0;
 		if (gTrackCoreLoad && snap != NULL)
 			fLoadMeasurementEpoch = snap->RemoveLoad(fNeededLoad, false);
@@ -519,8 +518,7 @@ ThreadData::Dies()
 	}
 
 	if (gTrackCoreLoad) {
-		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
-			const_cast<CoreEntry* volatile*>(&fCore));
+		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(&fCore);
 		if (snap != NULL)
 			snap->RemoveLoad(fNeededLoad, true);
 	}
