@@ -909,8 +909,8 @@ CoreEntry::CoreEntry()
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
-	// Issue 13 fix: initialise the counter used to assign fCoreLocalIndex.
-	fNextCoreLocalIndex = 0;
+	// Issue 13 fix: initialise the mask used to assign fCoreLocalIndex.
+	fLocalIndices = 0;
 }
 
 
@@ -1031,9 +1031,23 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 
 	// Issue 59 fix: assign fCoreLocalIndex BEFORE SetBitAtomic so that any
 	// concurrent _ChooseCPU reading fCPUSet sees a CPU with a valid index.
-	cpu->fCoreLocalIndex = atomic_add(&fNextCoreLocalIndex, 1);
+	// We use a CAS loop on fLocalIndices to find and reserve a unique bit.
+	native_cpu_mask_t indices;
+	int32 bit;
+	do {
+		indices = scheduler_atomic_get(&fLocalIndices);
+		// Find first zero bit in indices.
+		bit = scheduler_ctz(~indices);
+		if (bit < 0 || bit >= kMaxCoresPerPackage) {
+			panic("CoreEntry::AddCPU: no more core-local indices available (cpu %"
+				B_PRId32 ")", cpu->ID());
+		}
+	} while (scheduler_atomic_test_and_set(&fLocalIndices,
+			indices | ((native_cpu_mask_t)1 << bit), indices) != indices);
 
-	// Issue 21 fix: fNextCoreLocalIndex is incremented BEFORE the heap
+	cpu->fCoreLocalIndex = bit;
+
+	// Issue 21 fix: fLocalIndices is updated BEFORE the heap
 	// insert attempt. On insert failure, we must roll it back. The rollback
 	// is now inside the failure block to ensure atomicity with fCPUSet clear.
 	fCPUSet.SetBitAtomic(cpu->ID());
@@ -1053,18 +1067,17 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	}
 
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
-		// Issue 21/59 fix: clear fCPUSet BEFORE rolling back fNextCoreLocalIndex.
+		// Issue 21/59 fix: clear fCPUSet BEFORE rolling back bit in fLocalIndices.
 		// A concurrent _ChooseCPU that saw the bit must not see an index
 		// that we are about to reuse for a different CPU.
 		fCPUSet.ClearBitAtomic(cpu->ID());
 		if (firstCPU) {
-			// roll back fNextCoreLocalIndex so that if the
-			// CPU is re-added later it receives the same sequential index
+			// roll back fLocalIndices so that if the
+			// CPU is re-added later it can reuse the bit
 			// and the local-index assignment remains dense and unique.
-			// Without this, each failed Insert permanently advances the
-			// counter, eventually exceeding CPUCount and breaking the
-			// round-robin epoch ownership check in UpdatePriorityBoostScalable.
-			atomic_add(&fNextCoreLocalIndex, -1);
+			// Without this, each failed Insert permanently leaked a bit.
+			scheduler_atomic_and(&fLocalIndices,
+				~((native_cpu_mask_t)1 << bit));
 			fLoad = 0;
 			atomic_set64(&fCombinedLoad, 0);
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
@@ -1079,7 +1092,8 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 		} else {
 			atomic_add(&fCPUCount, -1);
 			// Same rollback for the non-firstCPU path.
-			atomic_add(&fNextCoreLocalIndex, -1);
+			scheduler_atomic_and(&fLocalIndices,
+				~((native_cpu_mask_t)1 << bit));
 		}
 		atomic_add(&fIdleCPUCount, -1);
 		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
@@ -1095,45 +1109,22 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
 	// Issue 31: Strictly reorder updates to fIdleCPUCount and fCPUCount.
-	// Issue 2 fix: eliminate TOCTOU in the else-if branch. The two separate
-	// atomic_get calls for fIdleCPUCount and fCPUCount can observe different
-	// states if a concurrent AddCPU modifies them between reads. Instead,
-	// take a single consistent snapshot of both values under a brief
-	// read of the key (already done above) and compare atomically.
-	{
-		int32 keyAtRemoval = CPUPriorityHeap::GetKey(cpu);
-		if (keyAtRemoval == B_IDLE_PRIORITY) {
-			atomic_add(&fIdleCPUCount, -1);
-		} else {
-			// Issue 2 fix: the original code used a single CAS and silently
-			// skipped the decrement on failure, allowing fIdleCPUCount to
-			// drift upward over repeated concurrent AddCPU races.  A retry
-			// loop ensures the decrement is always applied when the condition
-			// is satisfied, without busy-spinning indefinitely because
-			// concurrent AddCPU can only increase cpuCount (making the
-			// condition eventually false), bounding the retry count.
-			int32 idleCount = atomic_get(&fIdleCPUCount);
-			int32 cpuCount  = atomic_get(&fCPUCount);
-			if (idleCount < cpuCount) {
-				for (int32 i = 0; i < 100; i++) {
-					if (atomic_test_and_set(&fIdleCPUCount,
-							idleCount - 1, idleCount) == idleCount) {
-						break;
-					}
-					idleCount = atomic_get(&fIdleCPUCount);
-					cpuCount  = atomic_get(&fCPUCount);
-					// Issue 2 fix: if a concurrent RemoveCPU also decremented
-					// fCPUCount between our reads, idleCount may never be < cpuCount
-					// again. Re-read both atomically and re-evaluate the guard
-					// to avoid spinning when no decrement is needed.
-					if (idleCount >= cpuCount || cpuCount <= 0)
-						break;
-				}
-			}
-		}
+	// Issue 2 fix: eliminate TOCTOU in the else-if branch. The core is
+	// locked (fCPULock), so CPUEntry::UpdatePriority cannot concurrently
+	// change any CPU's idle state in this core. The key check is authoritative.
+	int32 keyAtRemoval = CPUPriorityHeap::GetKey(cpu);
+	bool wasIdle = (keyAtRemoval == B_IDLE_PRIORITY);
+
+	if (wasIdle) {
+		atomic_add(&fIdleCPUCount, -1);
 	}
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
+
+	// Issue 31/9 fix: clear bit in fLocalIndices BEFORE decrementing fCPUCount.
+	scheduler_atomic_and(&fLocalIndices,
+		~((native_cpu_mask_t)1 << cpu->fCoreLocalIndex));
+
 	int32 oldCPUCount = atomic_add(&fCPUCount, -1);
 
 	if (oldCPUCount == 1) {
@@ -1142,10 +1133,9 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 			~((native_cpu_mask_t)1 << fPackageIndex));
 
 		// Issue 96 fix: only call RemoveIdleCore if the core was actually idle
-		// (all its CPUs were idle). Calling unconditionally when a non-idle
-		// core is removed decrements fIdleCoreCount below its true value,
-		// corrupting idle core accounting for the entire package.
-		if (atomic_get(&fIdleCPUCount) >= 1)
+		// in the package. Since this was the last CPU, it was idle if wasIdle
+		// is true.
+		if (wasIdle)
 			fPackage->RemoveIdleCore(this);
 
 		// Issue 66 fix: use CoreRunQueueLocker per-iteration to prevent
@@ -1184,6 +1174,14 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 				" after drain (expected 0) — resetting\n", residual);
 			atomic_set(&fThreadCount, 0);
 		}
+	} else {
+		// Not the last CPU.
+		// Issue 96 fix: if the core WAS active (busy), but now becomes fully
+		// idle because we removed the last busy CPU.
+		// (atomic_get(&fIdleCPUCount) is the count of remaining idle CPUs;
+		// oldCPUCount - 1 is the total remaining CPUs).
+		if (!wasIdle && atomic_get(&fIdleCPUCount) == oldCPUCount - 1)
+			fPackage->CoreGoesIdle(this);
 	}
 
 	// Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
@@ -1200,10 +1198,6 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	// violations by silently proceeding with a wrong root.
 	ASSERT(fCPUHeap.PeekRoot() == cpu);
 	fCPUHeap.RemoveRoot();
-
-	// Issue 9 fix: decrement fNextCoreLocalIndex so that re-added CPUs
-	// get reuse local indices and stay within [0, CPUCount).
-	atomic_add(&fNextCoreLocalIndex, -1);
 
 	ASSERT(cpu->GetLoad() >= 0 && cpu->GetLoad() <= kMaxLoad);
 	ASSERT(fLoad >= 0);

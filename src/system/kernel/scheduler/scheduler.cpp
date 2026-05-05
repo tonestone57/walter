@@ -395,15 +395,18 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 		preCount = THREAD_MAX_SET_PRIORITY; // Arbitrary but stable non-zero value
 
 	uint32 boostEpoch = preCount / 10;
-	// Issue 13 fix: cpu->ID() % coreCPUCount is not unique when CPU IDs are
-	// non-sequential within a core (e.g. SMT with global IDs 0,2,4,6 gives
-	// 0%4=0, 2%4=2, 4%4=0, 6%4=2 — only 2 distinct values for 4 CPUs, so
-	// two CPUs claim ownership each epoch and contend on CoreRunQueueLocker).
-	// fCoreLocalIndex is assigned sequentially (0,1,2,...) as CPUs are added
-	// to the core via AddCPU, guaranteeing distinct values in [0,CPUCount).
+
+	// Derive a dense index [0, coreCPUCount) from the bitmask.
+	// Holes in fLocalIndices could occur after hot-unplugging a CPU that
+	// was not the last-added. Using scheduler_popcount on the bits below
+	// our index gives a stable, dense position for round-robin ownership.
+	native_cpu_mask_t indices = scheduler_atomic_get(&core->fLocalIndices);
+	int32 denseIndex = scheduler_popcount(indices
+		& (((native_cpu_mask_t)1 << cpu->fCoreLocalIndex) - 1));
+
 	bool ownsCoreQueueScan =
 		((int32)(boostEpoch % (uint32)coreCPUCount)
-			== (int32)(cpu->fCoreLocalIndex % (uint32)coreCPUCount));
+			== (int32)(denseIndex % (uint32)coreCPUCount));
 
 	// Issue 40 fix: CoreRunQueueLocker(core, false) constructs with
 	// alreadyLocked=false and lockIfNotLocked defaulting to false, meaning

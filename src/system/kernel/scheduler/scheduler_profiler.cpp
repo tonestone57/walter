@@ -320,7 +320,8 @@ Profiler::_FindFunction(const char* function)
 	uint32 index = hash % kHashTableSize;
 	uint32 startIndex = index;
 	do {
-		FunctionData* entry = atomic_pointer_get<FunctionData>(&fHashTable[index]);
+		FunctionData* entry = atomic_pointer_get<FunctionData>(
+			const_cast<FunctionData* const volatile*>(&fHashTable[index]));
 		if (entry == NULL)
 			break;
 
@@ -340,7 +341,8 @@ Profiler::_FindFunction(const char* function)
 	index = hash % kHashTableSize;
 	startIndex = index;
 	do {
-		FunctionData* entry = atomic_pointer_get<FunctionData>(&fHashTable[index]);
+		FunctionData* entry = atomic_pointer_get<FunctionData>(
+			const_cast<FunctionData* const volatile*>(&fHashTable[index]));
 		if (entry == NULL)
 			break;
 
@@ -361,8 +363,11 @@ Profiler::_FindFunction(const char* function)
 
 		// Insert into hash table.
 		index = hash % kHashTableSize;
-		while (atomic_pointer_get<FunctionData>(&fHashTable[index]) != NULL)
+		while (atomic_pointer_get<FunctionData>(
+				const_cast<FunctionData* const volatile*>(&fHashTable[index]))
+					!= NULL) {
 			index = (index + 1) % kHashTableSize;
+		}
 
 		memory_write_barrier();
 		atomic_pointer_set<FunctionData>(&fHashTable[index], entry);

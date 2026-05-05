@@ -111,6 +111,21 @@ scheduler_atomic_get(native_cpu_mask_t* value)
 #endif
 }
 
+
+static inline native_cpu_mask_t
+scheduler_atomic_test_and_set(native_cpu_mask_t* value, native_cpu_mask_t set,
+	native_cpu_mask_t test)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	return (native_cpu_mask_t)atomic_test_and_set64((int64*)value, (int64)set,
+		(int64)test);
+#else
+	return (native_cpu_mask_t)atomic_test_and_set((int32*)value, (int32)set,
+		(int32)test);
+#endif
+}
+
+
 static inline int
 scheduler_popcount(native_cpu_mask_t value)
 {

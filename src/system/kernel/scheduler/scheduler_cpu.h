@@ -337,7 +337,7 @@ private:
 						uint32			fScoreFactor;
 
 						// Issue 1 fix: added missing member.
-						int32			fNextCoreLocalIndex;
+						native_cpu_mask_t	fLocalIndices __attribute__((aligned(8)));
 
 						friend class DebugDumper;
 } __attribute__((aligned(64)));

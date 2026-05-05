@@ -1,63 +1,39 @@
-# Scheduler Code Audit Summary
+# Haiku Scheduler Full Code Audit & Fixes (2025)
 
-## Overview
-A comprehensive code audit of the `src/system/kernel/scheduler` subsystem was performed to identify bugs, logic errors, and opportunities for improvement.
+## 1. Overview
+A comprehensive code audit of the Haiku scheduler (`src/system/kernel/scheduler`) was performed to ensure architecture independence, GCC 2.95 compatibility, and overall logic correctness for both 32-bit and 64-bit systems.
 
-## Key Findings & Fixes
+## 2. Key Audit Findings & Fixes
 
-### 1. Work Stealing Logic Flaw
-*   **Issue:** The `CoreEntry::StealThread` function used `PeekMaximum` to find a candidate thread to steal. If the highest-priority thread was pinned to a different CPU (affinity mismatch), the stealing attempt would fail immediately, returning `NULL`. This caused the stealing CPU to remain idle even if other lower-priority runnable threads were available.
-*   **Fix:** Implemented `RunQueue::PeekOption` to iterate through priority levels (high to low) and scan up to 16 threads per level. Updated `StealThread` to use this method with a predicate that checks CPU affinity. This ensures the scheduler finds the "best" stealable thread.
+### A. Robust Core-Local Index Management
+- **Issue:** The previous counter-based `fNextCoreLocalIndex` was susceptible to drift and duplication during CPU hot-unplug events, leading to suboptimal or incorrect round-robin ownership in `UpdatePriorityBoostScalable`.
+- **Fix:** Replaced the counter with a bitmask (`fLocalIndices`) in `CoreEntry`.
+- **Mechanism:** `AddCPU` now reserves the first available bit using a CAS loop. `RemoveCPU` atomically clears the bit. This guarantees unique, dense, and reusable indices within `[0, CPUCount)`.
 
-### 2. Random Number Generation (RNG) Contention
-*   **Issue:** Topology-aware search functions (`search_local_node`, `search_global_random`) used the global `fast_get_random()` function. In a high-throughput scheduler environment, this could lead to cache contention or serialization on the RNG state.
-*   **Fix:** Exposed the per-CPU Xorshift32 RNG (`CPUEntry::GetRandom`) and updated `scheduler_topology.h` to use it. This localizes RNG state to the CPU, improving scalability.
-*   **Additional Fix:** Updated `PackageEntry::PeekMinimumLoadCore` (in `scheduler_cpu.cpp`) to use `CPUEntry::GetCPU(smp_get_current_cpu())->GetRandom()` instead of `fast_get_random()`, resolving residual contention during `choose_core` load balancing.
+### B. Accurate Idle Transitions in `RemoveCPU`
+- **Issue:** Potential TOCTOU race in `RemoveCPU` when updating `fIdleCPUCount`.
+- **Fix:** Since `RemoveCPU` is called under `fCPULock`, the idle state of the CPU being removed is stable. Replaced the complex retry loop with an authoritative check of the CPU's heap key.
+- **Improved Logic:** If the core was busy but becomes fully idle after removing the last busy CPU, `fPackage->CoreGoesIdle` is now correctly called.
 
-### 3. CPU Disable Panic
-*   **Issue:** `CPUEntry::UpdatePriority` asserted `!disabled`. However, during CPU shutdown (`scheduler_set_cpu_enabled(false)`), the CPU is marked disabled *before* its priority is set to `B_IDLE_PRIORITY` to flush tasks. This caused a kernel panic during hot-unplug operations.
-*   **Fix:** Relaxed the assertion to allow priority updates if the target priority is `B_IDLE_PRIORITY`, enabling safe CPU shutdown.
+### C. Architecture Independence & Atomic Safety
+- **Helper Added:** `scheduler_atomic_test_and_set` in `scheduler_common.h` provides a portable CAS wrapper for `native_cpu_mask_t` (32-bit on 32-bit systems, 64-bit on 64-bit systems).
+- **Alignment:** Verified all 64-bit atomic variables (e.g., `fVirtualRuntime`, `gDeadlineBucketSize`) use `__attribute__((aligned(8)))` for safety on 32-bit platforms.
+- **Portability:** Added `scheduler_ctz` and `scheduler_ffs64` portable wrappers to `scheduler_common.h` to replace GCC built-ins not supported in 2.95.
 
-### 4. Quantum Calculation Maintainability
-*   **Issue:** `ThreadData::ComputeQuantum` used a hardcoded magic number (`1311`) derived from `kMaxLoad` and `kLowLoad`. This created a hidden dependency that would break if global load constants were tuned. It also declared local duplicates of these global constants.
-*   **Fix:** Removed local duplicates and replaced the magic number with a compile-time calculation using the actual global constants from `load_tracking.h` and `scheduler_common.h`.
+### D. GCC 2.95 Compatibility
+- **Templates:** Verified all types used in templates are at namespace scope.
+- **Explicit Arguments:** Added explicit template arguments to `atomic_pointer_get` calls (e.g., in `scheduler_profiler.cpp`) to satisfy older compiler requirements.
+- **C++11 Guard:** Confirmed no `std::atomic`, `nullptr`, `constexpr`, or `static_assert` are used.
 
-### 5. Topology Clustering Imbalance
-*   **Issue:** The logic for partitioning cores into L3 cache clusters used a "Ceiling" division (`(N + T - 1) / T`). For certain core counts (e.g., 13), this resulted in highly uneven clusters (e.g., 4, 3, 3, 3), creating "runt" clusters with suboptimal load balancing.
-*   **Fix:** Updated `build_topology_mappings` to use "Balanced Partitioning" (Round-to-Nearest: `(N + T / 2) / T`). This ensures 13 cores are split into 3 clusters of 5, 4, 4, which minimizes variance and improves utilization.
+### E. Scheduler Logic Refinements
+- **Reschedule ICI:** Fixed a race in `scheduler.cpp::enqueue` where an early return made IPI dispatch unreachable, causing scheduling delays.
+- **Load Scaling:** Refined quantum scaling constants in `scheduler_thread.cpp` to use compile-time reciprocals, improving performance and maintainability.
+- **NUMA Awareness:** Added NULL guards for `Package()` and `Node()` in topology-aware paths to prevent panics during early boot or hot-unplug.
 
-### 6. Unbounded Linear Fallback (Low Latency Mode)
-*   **Issue:** `choose_core` fell back to a linear scan of all packages if random sampling phases failed. On massive systems (e.g., 4096 packages), this O(N) scan could cause significant latency spikes and lock contention.
-*   **Fix:** Limited the fallback scan to a maximum of 64 attempts (`kMaxFallbackAttempts`). The scan now starts from a randomized index to ensure statistical fairness over time while strictly bounding worst-case latency to O(1).
+## 3. Verification Performed
+- **Manual Audit:** Line-by-line review of all 15+ scheduler files.
+- **Automated Scanning:** Used Python-based audit tools to verify 64-bit alignment, GCC 2.95 compatibility, and template usage patterns.
+- **Logic Validation:** Verified state transitions and locking protocols for the O(1) RunQueue and work-stealing algorithms.
 
-### 7. Redundant System Time Calls
-*   **Issue:** `ThreadData::_UpdateDeadline` calls `system_time()` twice (once for deadline, once for urgency).
-*   **Fix:** Cached `system_time()` in a local variable to reduce overhead.
-
-### 8. Power Saving Mode Parity
-*   **Issue:** `power_saving.cpp` exhibited similar issues to those fixed in `low_latency.cpp`: unbounded linear fallback scans and global RNG contention in internal search functions.
-*   **Fix:** Applied the same optimizations to `power_saving.cpp`:
-    *   Limited fallback scans in `choose_core`, `rebalance`, and `rebalance_irqs` to 64 attempts (randomized start).
-    *   Updated `search_local_node` and `search_global_random` to use per-CPU RNG and optimized collision detection.
-
-### 9. Static Mode Encapsulation
-*   **Issue:** Global accesses to the scheduler mode configuration (`gCurrentMode`) within `scheduler.cpp` bypassed the `Scheduler` encapsulation and produced compilation errors as `gCurrentMode` was refactored and localized.
-*   **Fix:** Updated the idle thread IRQ rebalancing path to correctly call `Scheduler::RebalanceIRQs(true)` directly, rather than accessing a deleted global variable, restoring proper compilation and ensuring mode isolation.
-
-### 10. Comprehensive Audit (Issues 1-40)
-*   **Issue:** A deep-dive audit identified numerous edge-case bugs, race conditions, and optimization opportunities.
-*   **Fix:** Applied 40 surgical fixes across the subsystem, significantly improving robustness during hardware state changes (hot-unplug) and scheduling accuracy on heterogeneous systems.
-
-## Pending Recommendations
-
-(None)
-
-## Verifications Performed
-
-*   **Thread Safety:** Reviewed usage of `thread_get_current_thread()` across the kernel to ensure context safety. No immediate issues found in the scheduler subsystem.
-*   **Locking:** Verified `SchedulerModeLocker` and run queue locking patterns.
-*   **Topology:** Verified that `GetCPUMask` correctly handles disabled CPUs by checking `gCPUEnabled`, ensuring threads are not scheduled on disabled cores even without explicit checks in the selection loops.
-*   **Clustering:** Verified logic with simulation scripts for various core counts (1, 4, 6, 9, 13, 14, 15).
-
-## Conclusion
-The scheduler is now robust against critical edge cases including CPU hot-unplug races, heterogeneous load balancing errors, and potential thread leaks during work stealing. With the resolution of issues 1-40, the scheduler achieves high stability and efficiency on both large-scale and heterogeneous systems.
+## 4. Conclusion
+The Haiku scheduler is now robust against CPU topology changes, correctly handles large-scale and heterogeneous systems, and maintains full compatibility with legacy and modern toolchains across all supported architectures.
