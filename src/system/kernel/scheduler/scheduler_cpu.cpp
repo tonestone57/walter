@@ -57,11 +57,11 @@ struct LocalNodeStealAction {
 		if (entry == package)
 			return false;
 
-		int32 victimCoreCount = entry->RegisteredCoreCount();
-		if (victimCoreCount == 0)
+		int32 victimCount = entry->RegisteredCoreCount();
+		if (victimCount == 0)
 			return false;
 
-		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCoreCount);
+		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCount);
 		CoreEntry* victim = entry->GetCore(coreIndex);
 
 		if (victim == NULL)
@@ -107,11 +107,11 @@ struct GlobalRandomStealAction {
 		if (entry->IdleCoreCount() == entry->CoreCount())
 			return false;
 
-		int32 victimCoreCount = entry->RegisteredCoreCount();
-		if (victimCoreCount == 0)
+		int32 victimCount = entry->RegisteredCoreCount();
+		if (victimCount == 0)
 			return false;
 
-		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCoreCount);
+		int32 coreIndex = (int32)get_random_index(cpu->GetRandom(), victimCount);
 		CoreEntry* victim = entry->GetCore(coreIndex);
 
 		if (victim == NULL)

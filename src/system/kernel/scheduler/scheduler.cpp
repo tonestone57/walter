@@ -495,7 +495,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 	// bound the retry loop so that a total hot-unplug (all cores
 	// disabled simultaneously during shutdown) cannot spin forever.
 	const int32 kMaxRetries = smp_get_num_cpus() * 2 + 8;
-	int32 enqueueAttempts = 0;
+	int32 attemptsToEnqueue = 0;
 	do {
 		rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU);
 
@@ -506,9 +506,9 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 				updateInteraction)) {
 			targetCore = NULL;
 			targetCPU = NULL;
-			if (++enqueueAttempts >= kMaxRetries) {
+			if (++attemptsToEnqueue >= kMaxRetries) {
 				dprintf("scheduler: enqueue giving up after %d attempts "
-					"for thread %" B_PRId32 "\n", enqueueAttempts, thread->id);
+					"for thread %" B_PRId32 "\n", attemptsToEnqueue, thread->id);
 
 				if (!threadData->IsIdle())
 					atomic_add(&gTotalRunnableThreads, -1);

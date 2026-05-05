@@ -294,8 +294,8 @@ choose_core(const ThreadData* threadData)
 				int32 startIndex2 = tryRandomStd
 					? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
 					: 0;
-				int32 attempts2 = min_c(gPackageCount, kMaxFallbackAttempts);
-				for (int32 i = 0; i < attempts2; i++) {
+				int32 attemptsFallback = min_c(gPackageCount, kMaxFallbackAttempts);
+				for (int32 i = 0; i < attemptsFallback; i++) {
 					int32 index = startIndex2 + i;
 					if (index >= gPackageCount)
 						index -= gPackageCount;
@@ -356,9 +356,9 @@ choose_core(const ThreadData* threadData)
 
 	// wake new package/core — skipped when thread coloring or home-package
 	// search already found a suitable core.
-	int scannedCount = 0;
+	int scannedPackageCount = 0;
 	while (!skipIdleScan && idleNodeMask != 0) {
-		if (++scannedCount > kMaxCPUsToScan)
+		if (++scannedPackageCount > kMaxCPUsToScan)
 			break;
 
 		int32 nodeIndex = scheduler_ffs64(idleNodeMask) - 1;

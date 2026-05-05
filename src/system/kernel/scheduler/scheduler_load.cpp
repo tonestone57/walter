@@ -75,10 +75,10 @@ _LoadavgUpdate(void *data, int iteration)
 		// 2^31 runnable threads).  The FreeBSD algorithm assumes the same
 		// practical bound.
 		// GCC 2.95 compatibility: use uint64; intermediate fits in 64 bits.
-		uint64 acc =
+		uint64 accumulated =
 			(uint64)sCExp[i] * sAverageRunnable.ldavg[i]
 			+ (uint64)threadCount * (kFScale - sCExp[i]) * kFScale;
-		uint64 result = (uint64)(acc >> kFShift);
+		uint64 calculated = (uint64)(acc >> kFShift);
 		const uint64 kMaxLdAvg = (uint64)INT32_MAX;
 		sAverageRunnable.ldavg[i] = (result < kMaxLdAvg) ? result : kMaxLdAvg;
 	}

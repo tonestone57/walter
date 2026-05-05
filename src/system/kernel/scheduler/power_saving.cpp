@@ -344,7 +344,7 @@ choose_small_task_core(CPUEntry* cpu)
 		// Issue 63 fix: add bounded retry with exponential backoff to prevent
 		// busy-spinning under high contention from many CPUs simultaneously
 		// discovering a new small-task core candidate.
-		int casRetries = 0;
+		int casRetryCount = 0;
 		const int kMaxCASRetries = 16;
 		while (true) {
 			CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
@@ -357,7 +357,7 @@ choose_small_task_core(CPUEntry* cpu)
 				return core;
 			}
 
-			if (++casRetries >= kMaxCASRetries) {
+			if (++casRetryCount >= kMaxCASRetries) {
 				// Give up; return best known candidate to avoid spinning.
 				CoreEntry* latest = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 					&sSmallTaskCore[nodeID]);
@@ -380,9 +380,9 @@ choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL)
 	if (package == NULL) {
 		// No partially idle packages. Check for any idle package using the mask.
 		uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
-		int scannedCount = 0;
+		int scannedPkgCount = 0;
 		while (idleNodeMask != 0) {
-			if (++scannedCount > kMaxCPUsToScan)
+			if (++scannedPkgCount > kMaxCPUsToScan)
 				break;
 
 			int32 nodeIndex = scheduler_ffs64(idleNodeMask) - 1;

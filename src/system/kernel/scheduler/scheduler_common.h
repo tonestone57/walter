@@ -80,71 +80,71 @@ struct ThreadDataVRuntimeCompare {
 // These wrappers provide architecture-independent atomic access (32/64-bit).
 
 static inline native_cpu_mask_t
-scheduler_atomic_or(native_cpu_mask_t* value, native_cpu_mask_t orValue)
+scheduler_atomic_or(native_cpu_mask_t* _v, native_cpu_mask_t _or)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_or64((int64*)value, (int64)orValue);
+	return (native_cpu_mask_t)atomic_or64((int64*)_v, (int64)_or);
 #else
-	return (native_cpu_mask_t)atomic_or((int32*)value, (int32)orValue);
+	return (native_cpu_mask_t)atomic_or((int32*)_v, (int32)_or);
 #endif
 }
 
 
 static inline native_cpu_mask_t
-scheduler_atomic_and(native_cpu_mask_t* value, native_cpu_mask_t andValue)
+scheduler_atomic_and(native_cpu_mask_t* _v, native_cpu_mask_t _and)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_and64((int64*)value, (int64)andValue);
+	return (native_cpu_mask_t)atomic_and64((int64*)_v, (int64)_and);
 #else
-	return (native_cpu_mask_t)atomic_and((int32*)value, (int32)andValue);
+	return (native_cpu_mask_t)atomic_and((int32*)_v, (int32)_and);
 #endif
 }
 
 
 static inline native_cpu_mask_t
-scheduler_atomic_get(native_cpu_mask_t* value)
+scheduler_atomic_get(native_cpu_mask_t* _v)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_get64((int64*)value);
+	return (native_cpu_mask_t)atomic_get64((int64*)_v);
 #else
-	return (native_cpu_mask_t)atomic_get((int32*)value);
+	return (native_cpu_mask_t)atomic_get((int32*)_v);
 #endif
 }
 
 
 static inline native_cpu_mask_t
-scheduler_atomic_test_and_set(native_cpu_mask_t* value, native_cpu_mask_t set,
-	native_cpu_mask_t test)
+scheduler_atomic_test_and_set(native_cpu_mask_t* _v, native_cpu_mask_t _set,
+	native_cpu_mask_t _test)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_test_and_set64((int64*)value, (int64)set,
-		(int64)test);
+	return (native_cpu_mask_t)atomic_test_and_set64((int64*)_v, (int64)_set,
+		(int64)_test);
 #else
-	return (native_cpu_mask_t)atomic_test_and_set((int32*)value, (int32)set,
-		(int32)test);
+	return (native_cpu_mask_t)atomic_test_and_set((int32*)_v, (int32)_set,
+		(int32)_test);
 #endif
 }
 
 
 static inline int
-scheduler_popcount(native_cpu_mask_t value)
+scheduler_popcount(native_cpu_mask_t _v)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return count_set_bits((uint32)value) + count_set_bits((uint32)(value >> 32));
+	return count_set_bits((uint32)_v) + count_set_bits((uint32)(_v >> 32));
 #else
-	return count_set_bits((uint32)value);
+	return count_set_bits((uint32)_v);
 #endif
 }
 
 static inline int
-scheduler_ffs64(uint64 value)
+scheduler_ffs64(uint64 _v)
 {
-	if (value == 0)
+	if (_v == 0)
 		return 0;
-	uint32 low = (uint32)value;
+	uint32 low = (uint32)_v;
 	if (low != 0)
 		return ffs((int)low);
-	uint32 high = (uint32)(value >> 32);
+	uint32 high = (uint32)(_v >> 32);
 	int bit = ffs((int)high);
 	if (bit == 0)
 		return 0;
@@ -153,14 +153,14 @@ scheduler_ffs64(uint64 value)
 
 // scheduler_ctz: portable Count Trailing Zeros for GCC 2.95.
 static inline int
-scheduler_ctz(native_cpu_mask_t value)
+scheduler_ctz(native_cpu_mask_t _v)
 {
-	if (value == 0)
+	if (_v == 0)
 		return 0;
 #if SCHEDULER_MASK_IS_64_BIT
-	return scheduler_ffs64((uint64)value) - 1;
+	return scheduler_ffs64((uint64)_v) - 1;
 #else
-	return ffs((int)value) - 1;
+	return ffs((int)_v) - 1;
 #endif
 }
 
@@ -169,12 +169,12 @@ scheduler_ctz(native_cpu_mask_t value)
 // Necessary for GCC 2.95 compatibility and 32/64-bit portability.
 template<typename T>
 static inline T*
-atomic_pointer_get(T* const volatile* pointer)
+atomic_pointer_get(T* const volatile* _p)
 {
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
-	return (T*)atomic_get64((int64*)pointer);
+	return (T*)atomic_get64((int64*)_p);
 #else
-	return (T*)atomic_get((int32*)pointer);
+	return (T*)atomic_get((int32*)_p);
 #endif
 }
 
