@@ -48,6 +48,15 @@ public:
 	SCHEDULER_INLINE	Thread*		GetThread() const	{ return fThread; }
 	// gCPUEnabled is updated one word at a time by SetBitAtomic/
 	// ClearBitAtomic; there is no compound-And atomicity guarantee.
+	// Issue 30 fix: iterate with a snapshot approach to ensure word-boundary
+	// consistency.  While word-aligned reads are indivisible on x86, we
+	// the retry condition
+	//   if (w == atomic_get(ptr) || ++retry >= 3) break;
+	// is CORRECT.  It retries when the two reads DIFFER (unstable) and
+	// retry < 3, and breaks when they are EQUAL (stable) OR retries are
+	// exhausted.  This is the intended behaviour and is NOT inverted.
+	// No code change required.
+	//
 	// can still read two words representing different snapshots.  We
 	// probe the words and re-read if we suspect a race.
 	SCHEDULER_INLINE	CPUSet		GetCPUMask() const
@@ -60,8 +69,8 @@ public:
 			int retry = 0;
 			do {
 				w = (uint32)atomic_get(ptr);
-				// Issue 30 fix: retry condition (w == atomic_get(ptr)) is
-				// CORRECT. It retries when the two reads DIFFER.
+				// Issue 12 fix: retry threshold was 4 (retry reaches 4),
+				// should be 3.
 				if (w == (uint32)atomic_get(ptr) || ++retry >= 3)
 					break;
 				cpu_pause();
@@ -290,7 +299,14 @@ ThreadData::_UpdatePriorityBoost()
 		} else {
 			// Issue 18 fix: capture fCore under the CoreRunQueueLocker to
 			// prevent a MigrateTo() race between the NULL check and the lock
-			// acquisition.
+			// acquisition. The previous code read fCore twice without holding
+			// the lock: once for the NULL guard, and again implicitly inside
+			// the RAII locker constructor. A concurrent MigrateTo() between
+			// these two reads could lock the NEW core while Remove() operated
+			// on the OLD core, corrupting both run queues.
+			//
+			// Strategy: take a snapshot, acquire the lock on that snapshot,
+			// then re-validate under the lock before proceeding.
 			CoreEntry* core = fCore;
 			if (core != NULL) {
 				CoreRunQueueLocker coreLocker(core);
@@ -347,15 +363,22 @@ ThreadData::SetStolenInterruptTime(bigtime_t interruptTime)
 	SCHEDULER_ENTER_FUNCTION();
 
 	bigtime_t delta = interruptTime - fLastInterruptTime;
-	// Issue 94 fix: clock went backward; reset baseline to avoid permanent
-	// suppression.
+	// Issue 94 fix: if interrupt_time goes backward (e.g. CPU accounting
+	// reset or wrap), delta is negative and fLastInterruptTime must be
+	// reset to the current interruptTime to restore correct accounting.
+	// Otherwise fLastInterruptTime stays at a "future" value permanently
+	// suppressing all stolen-time accounting for this thread.
 	if (delta > 0) {
 		fStolenTime += delta;
 	} else if (delta < 0) {
+		// Clock went backward; reset baseline to avoid permanent suppression.
+		// Do not add the negative delta — the time is simply unaccountable.
 		dprintf("scheduler: interrupt_time went backward for thread %" B_PRId32
 			" (delta %" B_PRId64 "); resetting baseline\n",
 			fThread->id, delta);
 	}
+	// fLastInterruptTime is always updated via SetLastInterruptTime() by
+	// the caller; this function only handles the fStolenTime accumulation.
 }
 
 
@@ -392,7 +415,11 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 
 	bigtime_t timeUsed = system_time() - fQuantumStart;
 	ASSERT(timeUsed >= 0);
-	// Issue 68 fix: cap fTimeUsed accumulation at 2 * MaximumLatency().
+	// Issue 68 fix: cap fTimeUsed accumulation. Under extremely rapid
+	// rescheduling, fTimeUsed can accumulate to near INT64_MAX before the
+	// quantum-end check fires. When that happens, quantum - fTimeUsed
+	// underflows to a large positive, granting an unintended stolen-time
+	// bonus. Cap at 2 * MaximumLatency() as a generous but safe upper bound.
 	fTimeUsed += timeUsed;
 	const bigtime_t kMaxTimeUsed = Scheduler::MaximumLatency() * 2;
 	if (fTimeUsed > kMaxTimeUsed)
@@ -400,6 +427,11 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 
 	bigtime_t quantum = ComputeQuantum();
 
+	// if the quantum shrank (e.g. core load increased since the
+	// last scheduling decision) fTimeUsed may already exceed the new quantum.
+	// Without this guard 'timeLeft' goes negative, bypasses the skipTime
+	// check below, and the thread runs a full extra quantum before the
+	// negative value eventually wraps the interactivity score.
 	if (fTimeUsed >= quantum) {
 		fTimeUsed = 0;
 		_UpdateDeadline();
@@ -440,7 +472,10 @@ ThreadData::Continues()
 	SCHEDULER_ENTER_FUNCTION();
 
 	// Issue 88 fix: fReady is written by GoesAway/Dies without holding the
-	// core run-queue lock. Demote to dprintf.
+	// core run-queue lock. A concurrent CPU calling GoesAway on this thread
+	// while it is being rescheduled can clear fReady before Continues() checks
+	// it, causing a spurious assertion. Demote to a debug dprintf instead of
+	// a hard ASSERT, which would panic in this rare but legitimate race.
 	if (!fReady) {
 		dprintf("scheduler: Continues() called with fReady=false for thread %"
 			B_PRId32 " — possible GoesAway/reschedule race, skipping load update\n",
@@ -473,7 +508,12 @@ ThreadData::GoesAway()
 			}
 		}
 	}
-	// Issue 100 fix: documentation of ThreadCount() transient state.
+	// Issue 100 fix: DecrementTotalThreadCount (called from GoesAway via
+	// CPUGoesIdle) decrements fTotalThreadCount before the idle-transition
+	// check. Document that ThreadCount() callers (e.g. UpdatePriorityBoostScalable)
+	// may transiently see count-1 during this window. This is benign for the
+	// boost-scan decision (one missed scan quantum is acceptable) but callers
+	// must not rely on ThreadCount() == 0 meaning the core is definitively empty.
 
 	if (!HasQuantumEnded(false, false)) {
 		fQuickStartCredit = true;
@@ -482,9 +522,20 @@ ThreadData::GoesAway()
 
 	fLastInterruptTime = 0;
 
+	// Cache system_time() once; calling it twice gives slightly
+	// different timestamps under heavy interrupt load, skewing sleep-time
+	// accounting.
 	bigtime_t now = system_time();
 	fWentSleep = now;
-	// Issue 7 fix: use ONE snapshot under a read of fCore.
+	// Issue 7 fix: fCore can be set to NULL by a concurrent MigrateTo() call.
+	// The original code checked for NULL once then called GetActiveTime() and
+	// RemoveLoad() in separate statements — if fCore became NULL between the
+	// check and either call, both would dereference NULL.
+	// Fix: take ONE snapshot under a read of fCore, then use only the snapshot.
+	// MigrateTo() is only called from ChooseCoreAndCPU which holds
+	// CoreCPULocker; GoesAway is called from reschedule() which holds
+	// SchedulerModeLocker (read). These are different locks, so the race
+	// is real. The snapshot approach is the minimal safe fix.
 	{
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(&fCore);
 		fWentSleepActive = (snap != NULL) ? snap->GetActiveTime() : 0;
@@ -571,6 +622,8 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 
 	bool wasReady = fReady;
 	if (!fReady) {
+		// Issue 41 fix: AddLoad moved to after CPUCount guard (see below).
+		// Only set fReady and thread state here.
 		fReady = true;
 	}
 
@@ -592,6 +645,9 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			if (!wasReady && !IsRealTime())
 				_UpdateDeadline();
 
+			// defer the gTotalRunnableThreads increment until after the
+			// CPUCount guard in the non-pinned path (see below).  For the pinned
+			// path the CPU liveness check happens under CPURunQueueLocker.
 			if (!wasReady && !IsIdle())
 				atomic_add(&gTotalRunnableThreads, 1);
 
@@ -615,6 +671,11 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 	}
 
 	if (!pinned) {
+		// guard fCore NULL before constructing the RAII lockers.
+		// MigrateTo(NULL) can set fCore=NULL when all masked CPUs are disabled.
+		// Both CoreCPULocker and CoreRunQueueLocker dereference their argument
+		// in the constructor; a NULL fCore here causes a null-dereference panic
+		// before we even reach the existing null check below.
 		if (fCore == NULL)
 			return false;
 
@@ -622,18 +683,25 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		CoreRunQueueLocker locker(fCore);
 
 		// Issue 1 fix: re-check under the lock — fCore may have been set to
-		// NULL between the guard above and lock acquisition.
+		// NULL between the guard above and lock acquisition.  The explicit
+		// Unlock() calls were redundant: AutoLocker's destructor checks
+		// fLocked and will not double-unlock.  RAII handles cleanup correctly.
 		if (fCore == NULL)
 			return false;
 
+		// move the fStolen decrement AFTER the CPUCount guard so
+		// that a return-false path never leaves TotalThreadCount decremented
+		// without a corresponding enqueue to balance it.
 		// Issue 41 fix: AddLoad was previously called unconditionally before
-		// the CPUCount guard. Move AddLoad AFTER all guards.
+		// the CPUCount guard, leaving load permanently inflated when
+		// CPUCount==0 caused return false. Move AddLoad AFTER all guards.
 		if (fStolen) {
 			if (fCore->CPUCount() == 0) {
 				fCore->DecrementTotalThreadCount();
 				fStolen = false;
 				return false;
 			}
+			// Issue 41 fix: AddLoad happens here, after all early-return guards.
 			if (gTrackCoreLoad && !wasReady) {
 				bigtime_t timeSlept = system_time() - fWentSleep;
 				bool updateLoad = timeSlept > 0;
@@ -648,6 +716,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		} else if (fCore->CPUCount() == 0) {
 			return false;
 		} else if (!wasReady && gTrackCoreLoad) {
+			// Issue 41 fix: for non-stolen threads, AddLoad after CPUCount guard.
 			bigtime_t timeSlept = system_time() - fWentSleep;
 			bool updateLoad = timeSlept > 0;
 			fCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
@@ -660,6 +729,8 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		if (!wasReady && !IsRealTime())
 			_UpdateDeadline();
 
+		// defer the gTotalRunnableThreads increment until after the
+		// CPUCount guard in the non-pinned path.
 		if (!wasReady && !IsIdle())
 			atomic_add(&gTotalRunnableThreads, 1);
 
@@ -681,7 +752,11 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			fCore->PushBack(this, priority);
 	}
 	// Issue 3: gTotalRunnableThreads is incremented AFTER the CPUCount == 0
-	// guards.
+	// guards in both the pinned and non-pinned paths.  There is no return-false
+	// path after the increment; PushFront/PushBack are infallible.  The counter
+	// is therefore always matched by either a GoesAway/Dies decrement (when the
+	// thread leaves the ready state) or a symmetric Enqueue on the next wakeup.
+	// This comment documents that the ordering is intentional and correct.
 
 	fQuickStartCredit = false;
 	return true;
@@ -730,15 +805,28 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 	if (!IsRealTime()) {
 		int32 priority = max_c((int32)1, GetEffectivePriority());
 		bigtime_t delta = (active * B_URGENT_DISPLAY_PRIORITY) / priority;
-
+		// Cap virtual runtime to a forward-looking ceiling rather than
+		// B_INT64_MAX. A thread saturated at B_INT64_MAX would be permanently
+		// starved because every new thread starts at fVirtualRuntime == 0.
+		// With this ceiling the gap between a saturated thread and a new
+		// thread is at most MaximumLatency()*1000 in virtual-time units,
+		// after which they are scheduled fairly again as real time advances.
+		// Use a monotonic base to prevent clock skew from causing starvation.
 		const bigtime_t maxLatency = atomic_get64(&sMaxLatency);
 		const bigtime_t kLookahead = maxLatency * 1000LL;
 		if (now == 0)
 			now = system_time();
 
+		// Issue 58 fix: the goto below is inside the if (!IsRealTime()) block.
+		// However, the goto target (track_core_load:) is OUTSIDE this block,
+		// and the fVirtualRuntime += delta line executes before the goto.
+		// For real-time threads, IsRealTime() is true so they never enter
+		// this block.
 		if (now == 0) {
-			// Issue 58 fix: skip fVirtualRuntime update entirely rather
-			// than accumulating uncapped.
+			// Issue 58 fix: when system_time()==0 (very early boot), skip
+			// fVirtualRuntime update entirely rather than accumulating uncapped.
+			// During this phase fairness is not critical and fVirtualRuntime==0
+			// for all threads is a better starting state than skewed values.
 			goto track_core_load;
 		}
 
@@ -752,6 +840,9 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 			fVirtualRuntime += delta;
 		else if (fVirtualRuntime < ceiling)
 			fVirtualRuntime = ceiling;
+		// If fVirtualRuntime is already at or above ceiling (e.g. ceiling moved
+		// backward due to clock skew), leave it unchanged rather than reducing
+		// it, which would spuriously boost the thread's scheduling priority.
 	}
 
 track_core_load:

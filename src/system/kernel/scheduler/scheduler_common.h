@@ -2,8 +2,6 @@
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Copyright 2011, Ingo Weinhold, ingo_weinhold@gmx.de.
  * Distributed under the terms of the MIT License.
- *
- * Audit and portability fixes (2025).
  */
 #ifndef KERNEL_SCHEDULER_COMMON_H
 #define KERNEL_SCHEDULER_COMMON_H
@@ -16,7 +14,6 @@
 #include <thread.h>
 #include <user_debugger.h>
 #include <util/atomic.h>
-#include <util/BitUtils.h>
 #include <util/MinMaxHeap.h>
 
 #include "RunQueue.h"
@@ -114,29 +111,13 @@ scheduler_atomic_get(native_cpu_mask_t* value)
 #endif
 }
 
-
-static inline native_cpu_mask_t
-scheduler_atomic_test_and_set(native_cpu_mask_t* value, native_cpu_mask_t set,
-	native_cpu_mask_t test)
-{
-#if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_test_and_set64((int64*)value, (int64)set,
-		(int64)test);
-#else
-	return (native_cpu_mask_t)atomic_test_and_set((int32*)value, (int32)set,
-		(int32)test);
-#endif
-}
-
-
 static inline int
 scheduler_popcount(native_cpu_mask_t value)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (int)(count_set_bits((uint32)value)
-		+ count_set_bits((uint32)(value >> 32)));
+	return count_set_bits((uint32)value) + count_set_bits((uint32)(value >> 32));
 #else
-	return (int)count_set_bits((uint32)value);
+	return count_set_bits((uint32)value);
 #endif
 }
 
@@ -156,12 +137,11 @@ scheduler_ffs64(uint64 value)
 }
 
 // scheduler_ctz: portable Count Trailing Zeros for GCC 2.95.
-// Returns the index of the first set bit (0-31/63) or -1 if no bits set.
 static inline int
 scheduler_ctz(native_cpu_mask_t value)
 {
 	if (value == 0)
-		return -1;
+		return 0;
 #if SCHEDULER_MASK_IS_64_BIT
 	return scheduler_ffs64((uint64)value) - 1;
 #else
@@ -170,39 +150,16 @@ scheduler_ctz(native_cpu_mask_t value)
 }
 
 
-// atomic_pointer helpers: architecture-independent atomic pointer access.
+// atomic_pointer_get: architecture-independent atomic pointer read.
 // Necessary for GCC 2.95 compatibility and 32/64-bit portability.
-
 template<typename T>
 static inline T*
-atomic_pointer_get(T* const volatile* pointer)
+atomic_pointer_get(T* volatile* pointer)
 {
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
 	return (T*)atomic_get64((int64*)pointer);
 #else
 	return (T*)atomic_get((int32*)pointer);
-#endif
-}
-
-template<typename T>
-static inline void
-atomic_pointer_set(T* volatile* pointer, T* value)
-{
-#if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
-	atomic_set64((int64*)pointer, (int64)value);
-#else
-	atomic_set((int32*)pointer, (int32)value);
-#endif
-}
-
-template<typename T>
-static inline T*
-atomic_pointer_test_and_set(T* volatile* pointer, T* set, T* test)
-{
-#if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
-	return (T*)atomic_test_and_set64((int64*)pointer, (int64)set, (int64)test);
-#else
-	return (T*)atomic_test_and_set((int32*)pointer, (int32)set, (int32)test);
 #endif
 }
 
@@ -224,7 +181,16 @@ const int32 kRandomSearchThreshold = 32;
 
 const int kSMTPenalty = 2;
 
+// Named constant for the per-package core scan threshold.
+// Switch to random sampling inside a single package when it holds more than
+// this many registered cores.  Kept lower than kRandomSearchThreshold because
+// individual packages contain far fewer cores than the global package count,
+// and a linear scan of <= 8 cores is always inexpensive.
 const int32 kRandomCoreSearchThreshold = 8;
+
+// Maximum number of packages to scan in O(1)-bounded fallback paths.
+// Referenced by GetLeastIdlePackage (scheduler_cpu.h) and the choose_core /
+// rebalance / rebalance_irqs functions in low_latency.cpp and power_saving.cpp.
 const int32 kMaxFallbackAttempts = 64;
 
 const bigtime_t kCacheExpire = 15000;
@@ -356,6 +322,9 @@ ShouldReschedule(bigtime_t now, bigtime_t last, bigtime_t cooldown)
 }
 
 
+// True when at least one CORE_TYPE_STANDARD core exists. Used by choose_core
+// to decide whether a STANDARD-core intermediate fallback is available for
+// 3-type systems (EFFICIENCY + STANDARD + PERFORMANCE).
 extern bool gHasStandardCores;
 
 
@@ -373,6 +342,11 @@ public:
 		sCurrentModeID = mode;
 	}
 
+	// expose sCurrentMode via a public accessor.
+	// ThreadData::ComputeQuantum lives in scheduler_thread.cpp, outside
+	// the Scheduler class, and needs to cache the pointer once to guard
+	// against mid-quantum mode switches.  Direct access to a private
+	// static member from a non-member function is ill-formed in C++.
 	static inline scheduler_mode_operations* GetCurrentMode()
 	{
 		return sCurrentMode;

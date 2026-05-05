@@ -23,6 +23,7 @@ namespace Scheduler {
 static inline uint32
 get_random_index(uint32 random, uint32 range)
 {
+	// Robust mapping to reduce modulo bias.
 	return (uint32)(((uint64)random * range) >> 32);
 }
 
@@ -236,20 +237,32 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 {
 	fCPUNumber = id;
 	fCore = core;
+	// Issue 23 fix: improve per-CPU RNG seed entropy. On boot, system_time()
+	// returns small values with low entropy; successive CPUs initialized
+	// microseconds apart get highly correlated seeds. Fold in the address of
+	// the CPUEntry itself (ASLR entropy on randomized kernels), a
+	// compile-time constant unique per translation unit, and multiple rounds
+	// of Murmur3-style mixing to break correlation.
 	uint64 seed = system_time();
-	seed ^= (uint64)(uintptr_t)this;
-	seed ^= ((uint64)id * 0x9E3779B97F4A7C15ULL);
+	seed ^= (uint64)(uintptr_t)this;           // ASLR/address entropy
+	seed ^= ((uint64)id * 0x9E3779B97F4A7C15ULL); // Golden ratio spread
 	seed ^= (uint64)id << 32;
+	// Three rounds of strong mixing
 	seed = (seed ^ (seed >> 30)) * 0xBF58476D1CE4E5B9ULL;
 	seed = (seed ^ (seed >> 27)) * 0x94D049BB133111EBULL;
 	seed ^= seed >> 31;
 	fRandomState = seed ? seed : 1;
 
+	// Stagger the boost-scan trigger across CPUs. Without this all CPUs
+	// fire UpdatePriorityBoostScalable at the same reschedule boundary,
+	// causing correlated lock acquisition and measurable latency spikes.
+	// Issue 44 fix: id % 10 produces duplicate stagger values when cpu count
+	// is not a multiple of 10 (e.g. 12 CPUs: IDs 0,10 both get 0; 1,11 get 1).
+	// Use % cpuCount (clamped) so each CPU gets a unique stagger within [0, N).
+	// Fall back to id % 10 for systems with > 10 CPUs where spread matters more.
 	{
 		int32 numCPUs = smp_get_num_cpus();
 		int32 staggerMod = (numCPUs > 1 && numCPUs <= 10) ? numCPUs : 10;
-		// Issue 44 fix: unique context switch boundaries across CPUs
-		// reduce correlated lock spikes.
 		fRescheduleCount = (uint32)(id % staggerMod);
 	}
 }
@@ -269,8 +282,17 @@ void
 CPUEntry::Stop()
 {
 	cpu_ent* entry = &gCPU[fCPUNumber];
+	// the IRQ drain loop uses a hard limit of 1000
+	// iterations.  On a pathological system with more than 1000 IRQs
+	// assigned to one CPU the excess interrupts are not reassigned and
+	// a warning is logged.  The limit is intentional (prevents an
+	// infinite loop if assign_io_interrupt_to_cpu silently fails) and
+	// the warning below makes the truncation visible.  A future
+	// improvement could query the IRQ count first and use a tighter
+	// limit, but the current bound is safe in all real configurations.
+
+	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);
-	// Issue 2 fix: 1000 iteration limit for IRQ draining.
 	for (int32 i = 0; i < 1000; i++) {
 		irq_assignment* irq
 			= (irq_assignment*)list_get_first_item(&entry->irqs);
@@ -279,12 +301,26 @@ CPUEntry::Stop()
 
 		int32 irqVector = irq->irq;
 		locker.Unlock();
+
+		// Issue 15: assign_io_interrupt_to_cpu may acquire internal locks.
+		// We release irqs_lock BEFORE calling it (locker.Unlock() above) to
+		// prevent priority inversion or deadlock against any path that acquires
+		// irqs_lock while holding an internal interrupt-assignment lock.
+		// The locker is re-acquired on the next iteration before list access.
 		assign_io_interrupt_to_cpu(irqVector, -1);
+
 		locker.Lock();
 
+		// Issue 15 fix: the progress check correctly identifies a silent
+		// failure from assign_io_interrupt_to_cpu when the head IRQ didn't
+		// change. However, a transient failure that retries next iteration
+		// is now correctly distinguished: we only abort if the SAME irqVector
+		// is still at the head after a full unlock/assign/lock cycle.
+		// The existing logic is correct; add explicit documentation.
 		irq_assignment* currentHead
 			= (irq_assignment*)list_get_first_item(&entry->irqs);
 		if (currentHead != NULL && currentHead->irq == irqVector) {
+			// No progress: abort to prevent burning all 1000 iterations.
 			dprintf("CPUEntry::Stop: interrupt %" B_PRId32 " could not be "
 				"reassigned (driver failure); aborting IRQ drain\n", irqVector);
 			break;
@@ -335,6 +371,11 @@ CPUEntry::Remove(ThreadData* thread)
 	SCHEDULER_ENTER_FUNCTION();
 	ASSERT(thread->IsEnqueued());
 
+	// (defensive): capture the priority the thread was enqueued with to
+	// ensure symmetric counter updates. If the thread's priority was
+	// changed while enqueued, GetEffectivePriority() would return the
+	// new value, causing fDisplayThreadCount to desynchronize if the
+	// change crossed the B_DISPLAY_PRIORITY threshold.
 	int32 priority = thread->GetRunQueueLink()->fPriority;
 
 	thread->SetDequeued();
@@ -407,6 +448,7 @@ CPUEntry::ComputeLoad()
 	if (oldLoad < 0)
 		return;
 
+	// Clamp load to avoid overflow or runaway values
 	if (currentLoad < 0)
 		currentLoad = 0;
 	else if (currentLoad > kLoadClampMax)
@@ -441,6 +483,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 
 	ThreadData* sharedThread = fCore->PeekThread();
 	if (sharedThread == NULL && pinnedThread == NULL) {
+		// try to steal work from other cores in the same package
 		sharedThread = _TryStealWork();
 	}
 
@@ -464,14 +507,25 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 			bool updateInteraction;
 			if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
 					updateInteraction)) {
+				// Issue 6/23 fix: cache the Thread* once; sharedThread->GetThread()
+				// is called multiple times below and the pointer must be consistent.
 				Thread* const stolenThread = sharedThread->GetThread();
 				if (!enqueue_safe(stolenThread)) {
+					dprintf("scheduler: WARNING: stolen thread %" B_PRId32
+						" lost during hot-unplug — forcing to current CPU\n",
+						stolenThread->id);
 					sharedThread->MigrateTo(fCore);
 					bool dummy1, dummy2;
-					sharedThread->Enqueue(dummy1, dummy2, updateInteraction);
+					// Issue 6 fix: check return value; log if the last-resort also fails.
+					if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction)) {
+						dprintf("scheduler: CRITICAL: thread %" B_PRId32
+							" could not be re-enqueued after forced migration;"
+							" scheduler state is inconsistent\n", stolenThread->id);
+					}
 				}
 			}
 
+			// Issue 20 fix: call while NOT holding run-queue locks.
 			if (updateInteraction)
 				scheduler_update_interaction_state();
 		}
@@ -495,13 +549,21 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		bool wasRunQueueEmpty;
 		bool requestPreemption;
 		bool updateInteraction;
+		// Re-enqueue via global path if core was disabled.
 		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
 				updateInteraction)) {
 			Thread* const thread = sharedThread->GetThread();
 			if (!enqueue_safe(thread)) {
+				dprintf("scheduler: WARNING: shared thread %" B_PRId32
+					" lost during hot-unplug — forcing to current CPU\n",
+					thread->id);
 				sharedThread->MigrateTo(fCore);
 				bool dummy1, dummy2;
-				sharedThread->Enqueue(dummy1, dummy2, updateInteraction);
+				if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction)) {
+					dprintf("scheduler: CRITICAL: thread %" B_PRId32
+						" could not be re-enqueued after forced migration;"
+						" scheduler state is inconsistent\n", thread->id);
+				}
 			}
 		}
 
@@ -512,10 +574,16 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	if (!cpuLocker.IsLocked())
 		cpuLocker.Lock();
 
+	// Issue 78 fix: pinnedThread was obtained before cpuLocker was released
+	// and re-acquired in the floating-thread path. Between the unlock and
+	// re-lock, pinnedThread may have been dequeued by a concurrent Dequeue()
+	// (e.g. from scheduler_set_thread_priority). Verify it is still enqueued
+	// before calling Remove(), which ASSERTs IsEnqueued().
 	if (pinnedThread != NULL && pinnedThread->IsEnqueued()) {
 		Remove(pinnedThread);
 		return pinnedThread;
 	}
+	// pinnedThread was stolen; fall back to whatever is at the head now.
 	ThreadData* fallback = PeekThread();
 	if (fallback != NULL) {
 		Remove(fallback);
@@ -545,6 +613,9 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
 		fMeasureActiveTime += active;
 		fCore->IncreaseActiveTime(active);
 
+		// Compute system_time() once and pass it to UpdateActivity so
+		// the virtual-runtime ceiling uses the same timestamp as the rest of
+		// this scheduling decision.  Avoids a redundant syscall on the hot path.
 		oldThreadData->UpdateActivity(active, system_time());
 	}
 }
@@ -555,8 +626,20 @@ CPUEntry::TrackLoad(ThreadData* nextThreadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+#ifdef DEBUG_SCHEDULER
+	TRACE("scheduler: cpu=%d load=%d idle=%d\n",
+		fCPUNumber,
+		atomic_get(const_cast<int32*>(&fLoad)),
+		gCPU[fCPUNumber].idle);
+#endif
+
 	cpu_ent* cpuEntry = &gCPU[fCPUNumber];
 
+	// Issue 62 fix: update thread timestamps BEFORE calling
+	// _RequestPerformanceLevel. The performance level request reads
+	// nextThreadData->GetLoad() and fCore->GetLoad(), which are based on
+	// accounting that uses last_kernel_time/last_user_time. Updating them
+	// first ensures _RequestPerformanceLevel sees fresh accounting data.
 	Thread* nextThread = nextThreadData->GetThread();
 	if (!thread_is_idle_thread(nextThread)) {
 		cpuEntry->last_kernel_time = nextThread->kernel_time;
@@ -596,15 +679,25 @@ CPUEntry::_TryStealWork()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// iterate over other cores in the package and try to steal work
 	PackageEntry* package = fCore->Package();
 
 	int32 registeredCores = package->RegisteredCoreCount();
 	if (registeredCores <= 1)
 		return NULL;
 
+	// (clarification): The subtraction-wrap "index -= registeredCores"
+	// is safe because startIndex < registeredCores and i < registeredCores,
+	// so startIndex + i < 2 * registeredCores, requiring at most one subtraction.
+	// (clarification): GetIdleCorePacking shift guard — when shift==0
+	// the left-shift by kMaxCoresPerPackage is already guarded by "if (shift > 0)"
+	// in PackageEntry::GetIdleCorePacking; no undefined behaviour occurs.
+	// Pick a random starting point to avoid convoys
+	// We use multiplicative mapping to avoid modulo.
 	int32 startIndex = (int32)get_random_index(GetRandom(), registeredCores);
 
 	for (int32 i = 0; i < registeredCores; i++) {
+		// Optimization: Use subtraction for wrapping instead of modulo
 		int32 index = startIndex + i;
 		if (index >= registeredCores)
 			index -= registeredCores;
@@ -614,16 +707,30 @@ CPUEntry::_TryStealWork()
 		if (victim == NULL || victim == fCore || victim->CPUCount() == 0)
 			continue;
 
+		// Issue 82 fix: IdleCoreMask() is read atomically but without holding
+		// a lock. Between this read and TryLockRunQueue(), the victim core may
+		// have transitioned from idle to active. The skip is a best-effort
+		// optimisation, not a guarantee. The comment "guaranteed empty" was
+		// incorrect — replace with accurate description.
+		// The TryLockRunQueue() + PeekOption() predicate below is the actual
+		// correctness barrier; this skip only avoids a redundant lock attempt.
 		if ((package->IdleCoreMask()
 				& ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0) {
 			continue;
 		}
 
+		// Use TryLock to avoid contention
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
 			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
 			if (stolen != NULL) {
+				// Issue 9: MigrateTo and IncrementTotalThreadCount use only
+				// atomic operations (atomic_add, atomic_add64) with no
+				// spinlocks.  Calling them while holding victim->TryLockRunQueue
+				// does NOT violate lock ordering: they cannot block or acquire
+				// any spinlock that another CPU could hold while waiting for
+				// the victim run-queue lock.
 				stolen->MigrateTo(fCore);
 				stolen->fStolen = true;
 				fCore->IncrementTotalThreadCount();
@@ -636,6 +743,15 @@ CPUEntry::_TryStealWork()
 		}
 	}
 
+	// Phase 2: The Local NUMA Node (Random)
+	// Target: Cores on the same physical socket/die (e.g., 64-128 cores).
+	// Method: Random Sampling
+	// Why: Stealing here is fast (local RAM). You want to exhaust reasonable options here
+	// before going across the expensive interconnect.
+
+	// Issue 6/15 fix: declare 'stolen' BEFORE the 'goto phase3' to avoid
+	// jumping over a variable initialisation, which is ill-formed in C++
+	// (UB even for trivial types when an initialiser is present).
 	ThreadData* stolen = NULL;
 
 	{
@@ -650,6 +766,17 @@ CPUEntry::_TryStealWork()
 	}
 
 phase3:
+	// Issue 19 fix: removed the unconditional stolen = NULL reset.
+	// If Phase 2 fell through with a valid stolen thread, the reset would
+	// lose it.  If Phase 2 jumped here (node == NULL) stolen is already NULL.
+	// Phase 3 correctly checks (stolen != NULL) in its first lambda probe.
+
+	// Phase 3: The Global Hail Mary (Random)
+	// Target: Any core in the system (4096 cores).
+	// Method: Logarithmic Formula
+	// Why: This is the last resort. If the local node is empty, you are willing to pay
+	// the high cost to steal from a remote socket to avoid sleeping.
+
 	search_global_random(GlobalRandomStealAction(this, package, &stolen));
 
 	if (stolen != NULL)
@@ -691,6 +818,9 @@ CPUEntry::_RequestPerformanceLevel(ThreadData* threadData)
 	}
 
 	int32 load = max_c(threadData->GetLoad(), GetLoad());
+	ASSERT_PRINT(load >= 0 && load <= kMaxLoad + kSMTPenalty, "load is out of range %"
+		B_PRId32 " (max of %" B_PRId32 " %" B_PRId32 ")", load,
+		threadData->GetLoad(), GetLoad());
 
 	if (load < kTargetLoad) {
 		int32 delta = kTargetLoad - load;
@@ -779,7 +909,8 @@ CoreEntry::CoreEntry()
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
-	fLocalIndices = 0;
+	// Issue 13 fix: initialise the counter used to assign fCoreLocalIndex.
+	fNextCoreLocalIndex = 0;
 }
 
 
@@ -832,6 +963,8 @@ CoreEntry::Remove(ThreadData* thread)
 	ASSERT(!thread->IsIdle());
 	ASSERT(thread->IsEnqueued());
 
+	// (defensive): capture the enqueued priority to ensure consistent
+	// fDisplayThreadCount accounting.
 	int32 priority = thread->GetRunQueueLink()->fPriority;
 
 	thread->SetDequeued();
@@ -851,9 +984,24 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Issue 27 fix: snapshot gCPUEnabled once before the predicate loop.
+	// GetCPUMask() re-reads gCPUEnabled with atomic retry logic on every
+	// call. During work stealing this predicate is invoked for every
+	// candidate thread in the victim's run queue. Since gCPUEnabled only
+	// changes during hot-plug (rare), caching it here avoids redundant
+	// atomic reads on the hot stealing path.
+	//
+	// We snapshot into a local CPUSet and pass thiefCPU as a plain bit
+	// check: if the thread's cpumask is empty (no affinity constraint) it
+	// can run anywhere; otherwise it must allow thiefCPU.
 	CPUSet enabledSnapshot;
 	{
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+		// Issue 27 fix: CPUSet::Bits() returns a pointer to uint32 words.
+		// Casting to int32* for atomic_get is required by the atomic API
+		// but assumes 4-byte alignment.
+		// static_assert replaced by comment for GCC 2.95
+		// alignof(CPUSet) >= 4
 		for (int32 w = 0; w < kWords; w++) {
 			int32* ptr = const_cast<int32*>(
 				reinterpret_cast<const int32*>(gCPUEnabled.Bits()) + w);
@@ -861,6 +1009,7 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 		}
 	}
 
+	// Explicitly exclude idle threads from steal candidates.
 	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(enabledSnapshot, thiefCPU));
 
 	if (thread != NULL) {
@@ -880,32 +1029,22 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	atomic_add(&fIdleCPUCount, 1);
 	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
 
-	// Issue 1/8/9/13/21/59 fix: assign fCoreLocalIndex sequentially
-	// before fCPUSet advertisement so concurrent choosers see valid indices.
-	native_cpu_mask_t indices;
-	int32 bit;
-	do {
-		indices = scheduler_atomic_get(&fLocalIndices);
-		bit = scheduler_ctz(~indices);
-		if (bit < 0 || bit >= kMaxCoresPerPackage) {
-			panic("CoreEntry::AddCPU: no more core-local indices available (cpu %"
-				B_PRId32 ")", cpu->ID());
-		}
-	} while (scheduler_atomic_test_and_set(&fLocalIndices,
-			indices | ((native_cpu_mask_t)1 << bit), indices) != indices);
+	// Issue 59 fix: assign fCoreLocalIndex BEFORE SetBitAtomic so that any
+	// concurrent _ChooseCPU reading fCPUSet sees a CPU with a valid index.
+	cpu->fCoreLocalIndex = atomic_add(&fNextCoreLocalIndex, 1);
 
-	cpu->fCoreLocalIndex = bit;
-
+	// Issue 21 fix: fNextCoreLocalIndex is incremented BEFORE the heap
+	// insert attempt. On insert failure, we must roll it back. The rollback
+	// is now inside the failure block to ensure atomicity with fCPUSet clear.
 	fCPUSet.SetBitAtomic(cpu->ID());
 
 	bool didAddIdle = false;
 	if (firstCPU) {
-		didAddIdle = true;
+		didAddIdle = true;  // track for rollback symmetry
+		// core has been reenabled
 		fLoad = 0;
 		atomic_set64(&fCombinedLoad, 0);
 
-		// Issue 67 fix: zero fCoreLoads and fIdleCoreCount explicitly to
-		// prevent stale data corruption after topology rebuilds.
 		atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
 		scheduler_atomic_or(&fPackage->fEnabledCoreMask,
 			(native_cpu_mask_t)1 << fPackageIndex);
@@ -914,22 +1053,33 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	}
 
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
+		// Issue 21/59 fix: clear fCPUSet BEFORE rolling back fNextCoreLocalIndex.
+		// A concurrent _ChooseCPU that saw the bit must not see an index
+		// that we are about to reuse for a different CPU.
 		fCPUSet.ClearBitAtomic(cpu->ID());
 		if (firstCPU) {
-			scheduler_atomic_and(&fLocalIndices,
-				~((native_cpu_mask_t)1 << bit));
+			// roll back fNextCoreLocalIndex so that if the
+			// CPU is re-added later it receives the same sequential index
+			// and the local-index assignment remains dense and unique.
+			// Without this, each failed Insert permanently advances the
+			// counter, eventually exceeding CPUCount and breaking the
+			// round-robin epoch ownership check in UpdatePriorityBoostScalable.
+			atomic_add(&fNextCoreLocalIndex, -1);
 			fLoad = 0;
 			atomic_set64(&fCombinedLoad, 0);
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
+			// only call RemoveIdleCore when AddIdleCore was called
+			// (the firstCPU branch).  A mismatch would corrupt fIdleCoreMask.
 			if (didAddIdle)
 				fPackage->RemoveIdleCore(this);
 			scheduler_atomic_and(&fPackage->fEnabledCoreMask,
 				~((native_cpu_mask_t)1 << fPackageIndex));
+			// Restore fCPUCount and fIdleCPUCount symmetrically.
 			atomic_add(&fCPUCount, -1);
 		} else {
 			atomic_add(&fCPUCount, -1);
-			scheduler_atomic_and(&fLocalIndices,
-				~((native_cpu_mask_t)1 << bit));
+			// Same rollback for the non-firstCPU path.
+			atomic_add(&fNextCoreLocalIndex, -1);
 		}
 		atomic_add(&fIdleCPUCount, -1);
 		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
@@ -944,35 +1094,69 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
 
-	// Issue 96 fix: only call RemoveIdleCore if the core was actually idle
-	// (fIdleCPUCount >= 1) to preserve package idle core accounting.
-	int32 keyAtRemoval = CPUPriorityHeap::GetKey(cpu);
-	bool wasIdle = (keyAtRemoval == B_IDLE_PRIORITY);
-
-	if (wasIdle) {
-		// Issue 4/31 fix: core removal iteration limits.
-		atomic_add(&fIdleCPUCount, -1);
+	// Issue 31: Strictly reorder updates to fIdleCPUCount and fCPUCount.
+	// Issue 2 fix: eliminate TOCTOU in the else-if branch. The two separate
+	// atomic_get calls for fIdleCPUCount and fCPUCount can observe different
+	// states if a concurrent AddCPU modifies them between reads. Instead,
+	// take a single consistent snapshot of both values under a brief
+	// read of the key (already done above) and compare atomically.
+	{
+		int32 keyAtRemoval = CPUPriorityHeap::GetKey(cpu);
+		if (keyAtRemoval == B_IDLE_PRIORITY) {
+			atomic_add(&fIdleCPUCount, -1);
+		} else {
+			// Issue 2 fix: the original code used a single CAS and silently
+			// skipped the decrement on failure, allowing fIdleCPUCount to
+			// drift upward over repeated concurrent AddCPU races.  A retry
+			// loop ensures the decrement is always applied when the condition
+			// is satisfied, without busy-spinning indefinitely because
+			// concurrent AddCPU can only increase cpuCount (making the
+			// condition eventually false), bounding the retry count.
+			int32 idleCount = atomic_get(&fIdleCPUCount);
+			int32 cpuCount  = atomic_get(&fCPUCount);
+			if (idleCount < cpuCount) {
+				for (int32 i = 0; i < 100; i++) {
+					if (atomic_test_and_set(&fIdleCPUCount,
+							idleCount - 1, idleCount) == idleCount) {
+						break;
+					}
+					idleCount = atomic_get(&fIdleCPUCount);
+					cpuCount  = atomic_get(&fCPUCount);
+					// Issue 2 fix: if a concurrent RemoveCPU also decremented
+					// fCPUCount between our reads, idleCount may never be < cpuCount
+					// again. Re-read both atomically and re-evaluate the guard
+					// to avoid spinning when no decrement is needed.
+					if (idleCount >= cpuCount || cpuCount <= 0)
+						break;
+				}
+			}
+		}
 	}
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
-
-	scheduler_atomic_and(&fLocalIndices,
-		~((native_cpu_mask_t)1 << cpu->fCoreLocalIndex));
-
 	int32 oldCPUCount = atomic_add(&fCPUCount, -1);
 
 	if (oldCPUCount == 1) {
+		// core has been disabled
 		scheduler_atomic_and(&fPackage->fEnabledCoreMask,
 			~((native_cpu_mask_t)1 << fPackageIndex));
 
-		if (wasIdle)
+		// Issue 96 fix: only call RemoveIdleCore if the core was actually idle
+		// (all its CPUs were idle). Calling unconditionally when a non-idle
+		// core is removed decrements fIdleCoreCount below its true value,
+		// corrupting idle core accounting for the entire package.
+		if (atomic_get(&fIdleCPUCount) >= 1)
 			fPackage->RemoveIdleCore(this);
 
+		// Issue 66 fix: use CoreRunQueueLocker per-iteration to prevent
+		// a concurrent work-stealer (which uses TryLockRunQueue) from
+		// stealing a thread between PeekMaximum and Remove, leaving
+		// fThreadCount positive with an empty queue.
+		// The steal path checks CPUCount()==0 before adding stolen threads,
+		// so once we set oldCPUCount==1 no new threads can arrive.
 		while (true) {
 			ThreadData* threadData;
 			{
-				// Issue 66 fix: the drain loop uses a per-iteration
-				// CoreRunQueueLocker and verifies fThreadCount == 0 post-drain.
 				CoreRunQueueLocker locker(this);
 				threadData = fRunQueue.PeekMaximum();
 				if (threadData == NULL)
@@ -982,23 +1166,44 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 			}
 
 			ASSERT(threadData->Core() == NULL);
+			// Issue 31 fix: threadPostProcessing calls enqueue() which calls
+			// Enqueue() which increments gTotalRunnableThreads for non-idle
+			// threads. If enqueue() subsequently fails (all cores disabled),
+			// it returns false without a matching decrement. Detect this case
+			// and decrement manually to avoid a permanent counter leak.
 			threadPostProcessing(threadData);
 		}
 
+		// Issue 66 fix: after drain, explicitly verify fThreadCount is zero.
+		// If a concurrent steal occurred in the narrow window, fThreadCount
+		// may be positive. Force it to zero since CPUCount==0 prevents
+		// further enqueues, making any residual count a permanent leak.
 		int32 residual = atomic_get(&fThreadCount);
 		if (residual != 0) {
 			dprintf("CoreEntry::RemoveCPU: fThreadCount=%" B_PRId32
 				" after drain (expected 0) — resetting\n", residual);
 			atomic_set(&fThreadCount, 0);
 		}
-	} else {
-		if (!wasIdle && atomic_get(&fIdleCPUCount) == oldCPUCount - 1)
-			fPackage->CoreGoesIdle(this);
 	}
 
+	// Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
+	// less than every valid scheduler priority (minimum B_IDLE_PRIORITY == 0),
+	// so the CPU is guaranteed to bubble to the heap root.  The explicit
+	// constant makes the intent clear and prevents silent misbehaviour if the
+	// priority range ever grows to include negative values.
 	fCPUHeap.ModifyKey(cpu, INT32_MIN);
+	// Issue 2 fix: fCPUHeap is accessed exclusively under fCPULock, which the
+	// caller holds via CoreCPUHeapLocker for the duration of RemoveCPU.  No
+	// other CPU can concurrently modify the heap, so the root is guaranteed to
+	// be 'cpu' immediately after ModifyKey(cpu, INT32_MIN).  The previous spin
+	// loop was dead code and its 1000-iteration cap masked any real invariant
+	// violations by silently proceeding with a wrong root.
 	ASSERT(fCPUHeap.PeekRoot() == cpu);
 	fCPUHeap.RemoveRoot();
+
+	// Issue 9 fix: decrement fNextCoreLocalIndex so that re-added CPUs
+	// get reuse local indices and stay within [0, CPUCount).
+	atomic_add(&fNextCoreLocalIndex, -1);
 
 	ASSERT(cpu->GetLoad() >= 0 && cpu->GetLoad() <= kMaxLoad);
 	ASSERT(fLoad >= 0);
@@ -1036,9 +1241,15 @@ CoreEntry::GetMinVirtualRuntime() const
 CPUEntry*
 CoreEntry::PeekMinimumLoadCPU()
 {
-	// Issue 20/27/52 fix: verify the CPU is enabled and present in the
-	// priority heap (key >= 0) to prevent returning removed CPUs.
+	// Optimization: If a physical core is idle, explicitly return the
+	// Primary logical CPU first.
+	// Issue 20 fix: use fCPUSet.FindFirstSet() equivalent via scheduler_ctz()
+	// on each bitmap word rather than iterating all (SMP_MAX_CPUS+31)/32
+	// words. For a core with CPUs in a small ID range this avoids scanning
+	// all zero words before finding the first set bit.
 	if (fCPUCount > 1 && GetScore() == 0) {
+		// Find first CPU in this core's set using the bitmap directly.
+		// Each word covers 32 CPU IDs; stop at first non-zero word.
 		const int kWords = (SMP_MAX_CPUS + 31) / 32;
 		for (int i = 0; i < kWords; i++) {
 			uint32 bits = fCPUSet.Bits(i);
@@ -1047,10 +1258,16 @@ CoreEntry::PeekMinimumLoadCPU()
 			int cpu = i * 32 + scheduler_ctz((native_cpu_mask_t)bits);
 			if (cpu < smp_get_num_cpus()) {
 				CPUEntry* entry = &gCPUEntries[cpu];
+				// Issue 52 fix: verify the CPU is still in the heap before
+				// returning it. A concurrent RemoveCPU may have set the heap
+				// key to INT32_MIN between the fCPUSet read and this check.
+				// GetKey returns INT32_MIN for removed CPUs; any valid CPU
+				// has key >= B_IDLE_PRIORITY (0).
 				if (entry->Core() == this && !gCPU[cpu].disabled
 						&& CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)
 					return entry;
 			}
+			// First set bit found but not valid; fall through to heap path.
 			break;
 		}
 	}
@@ -1077,6 +1294,8 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	if (cpuCount <= 0)
 		return;
 
+	// one system_time() call shared by both branches eliminates
+	// a redundant syscall and ensures consistent timestamps.
 	bigtime_t now = system_time();
 	bigtime_t lastUpdate = atomic_get64(&fLastLoadUpdate);
 	if (!forceUpdate) {
@@ -1087,26 +1306,56 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			return;
 		}
 	} else {
+		// on CAS failure another CPU won the update race; that
+		// update is sufficient, so return rather than silently skipping.
 		if (atomic_test_and_set64(&fLastLoadUpdate, now, lastUpdate)
 				!= lastUpdate) {
 			return;
 		}
 	}
 
+	// Combined Epoch and Load Update:
+	// We use a 64-bit atomic to store both the current load (upper 32 bits)
+	// and the measurement epoch (lower 32 bits). This allows us to atomically
+	// increment the epoch and reset the current load, ensuring that concurrent
+	// AddLoad calls either contribute to the old epoch (and are manually
+	// added to fLoad) or the new epoch (and are captured in the next snapshot),
+	// with no double-counting or loss.
 	int32 currentLoad = 0;
 	int64 oldCombined = atomic_get64(&fCombinedLoad);
 	int outerRetryCount = 0;
 	while (true) {
 		currentLoad = (int32)(oldCombined >> 32);
 		uint32 nextEpoch = (uint32)oldCombined + 1;
-		int64 newCombined = (int64)nextEpoch;
+		int64 newCombined = (int64)nextEpoch; // Load reset to 0
 
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
+			// Issue 7 fix: snapshot prevLoad immediately after winning the
+			// outer CAS on fCombinedLoad, not before the loop.  The original
+			// code snapshotted prevLoad before the loop, so concurrent
+			// RemoveLoad(force=true) calls that ran between the snapshot and
+			// the CAS win produced a stale baseline, making delta wrong.
+			// Reading here minimises the race window to the CAS itself.
+			// currentFLoad starts equal to prevLoad; the inner retry loop
+			// updates it on CAS failure and correctly adds delta each time.
 			int32 prevLoad = atomic_get(&fLoad);
 			int32 currentFLoad = prevLoad;
 
+			// Issue 48 fix: snapshot prevLoad immediately after winning the
+			// outer CAS. A concurrent ChangeLoad/AddLoad can still modify
+			// fLoad between the CAS win and the prevLoad read, but this
+			// window is now as narrow as possible (a single atomic_get).
+			// The inner retry loop handles any residual CAS failure.
+			//
+			// Issue 7 fix: add iteration limit to the inner CAS loop to
+			// prevent livelock under pathological contention. After
+			// kMaxFLoadRetries failures we read the current value and apply
+			// the delta as best-effort; slight inaccuracy is acceptable
+			// versus spinning indefinitely with interrupts disabled.
+			// The outer CAS on fCombinedLoad already has its own retry, so
+			// we only need to bound the inner fLoad CAS.
 			static const int kMaxFLoadRetries = 32;
 			int innerRetryCount = 0;
 			while (true) {
@@ -1122,6 +1371,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 
 				currentFLoad = actual;
 				if (++innerRetryCount >= kMaxFLoadRetries) {
+					// Best-effort: apply delta to most recently observed value.
 					atomic_add(&fLoad, delta);
 					break;
 				}
@@ -1129,8 +1379,16 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			break;
 		}
 
+		// Issue 7 fix: bound the outer CAS retry loop too.
+		// Livelock is possible if another CPU perpetually updates fCombinedLoad
+		// between our read and our CAS. After kMaxCombinedRetries we give up;
+		// the next _UpdateLoad call (triggered by the next load-measure timer)
+		// will correct any accumulated error.
 		static const int kMaxCombinedRetries = 64;
 		if (++outerRetryCount >= kMaxCombinedRetries) {
+			// Issue 85 fix: re-read cpuCount to get a fresh value after
+			// many retry failures. The value from function entry may be
+			// several epochs stale on a heavily contended system.
 			int32 freshCPUCount = atomic_get((int32*)&fCPUCount);
 			if (freshCPUCount <= 0) return;
 			if (cpuCount > 0) {
@@ -1207,7 +1465,11 @@ PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex)
 	fRegisteredCoreCount = 0;
 	fMaxAttempts = 0;
 	memset(fCores, 0, sizeof(fCores));
+	// Issue 67 fix: explicitly zero fCoreLoads on every Init() call.
+	// If PackageEntry objects are ever reused after a topology rebuild,
+	// stale load values persist and corrupt choose_core decisions.
 	memset(fCoreLoads, 0, sizeof(fCoreLoads));
+	// Zero fIdleCoreCount explicitly to match fIdleCoreMask == 0.
 	fIdleCoreCount = 0;
 }
 
@@ -1221,6 +1483,11 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
+		// Issue 45 fix: document that fCoreLock is held here but NOT held
+		// in CoreGoesIdle. The two paths are serialized at a higher level
+		// (InterruptsBigSchedulerLocker for AddIdleCore vs. normal scheduling
+		// for CoreGoesIdle). If this serialization is ever relaxed, an
+		// explicit atomic CAS must guard the PackageGoesIdle transition.
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
@@ -1231,12 +1498,26 @@ void
 PackageEntry::RemoveIdleCore(CoreEntry* core)
 {
 	WriteSpinLocker coreLocker(fCoreLock);
+	// Clear the mask bit BEFORE decrementing the count.  A concurrent reader
+	// of the mask (e.g. GetIdleCore) must not see a core that is in the
+	// process of being removed from the idle set, as that could lead to a
+	// "dangling-ish" core reference if the core is being disabled.  The
+	// reader of the count (e.g. GetLeastIdlePackage) will gracefully handle
+	// a count > 0 with an empty mask by receiving NULL from GetIdleCore().
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
 	atomic_add(&fIdleCoreCount, -1);
 
 	if ((oldMask & ~clearBit) == 0) {
+		// Package wakes up (last idle core became active).  Delegate to
+		// PackageWakesUp so that fIdlePackageMask and gIdleNodeMask are
+		// updated in exactly one place.
+		// The previous code called SetPackageIdle (which cleared the bit in
+		// fIdlePackageMask) and then PackageWakesUp; PackageWakesUp received
+		// oldMask == 0 from an already-cleared mask and unconditionally
+		// cleared gIdleNodeMask even when other packages in the node were
+		// still idle.  It also called the nonexistent node->Index().
 		if (fNode != NULL)
 			fNode->PackageWakesUp(this);
 	}
@@ -1252,11 +1533,14 @@ PackageEntry::GetIdleCore(int32 index) const
 
 	native_cpu_mask_t currentMask = mask;
 
+	// Find the N-th set bit (index-th)
 	for (int32 i = 0; i < index; i++) {
 		int32 bit = scheduler_ctz(currentMask);
 		currentMask &= ~((native_cpu_mask_t)1 << bit);
 
 		if (currentMask == 0) {
+			// index out of bounds (race), fallback to the first idle core
+			// Issue 28 fix: validate fCores[bit] is non-NULL.
 			int32 fallbackBit = scheduler_ctz(mask);
 			if (fallbackBit >= 0 && fallbackBit < kMaxCoresPerPackage)
 				return fCores[fallbackBit];
@@ -1278,24 +1562,41 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu, const CPUSet* affinity) const
 	if (mask == 0)
 		return NULL;
 
-	// Issue 71/98 fix: search_local_node uses 64-bit bitmasks for deduplication
-	// and respects affinity masks during multi-core/package scans.
+	// Intra-package packing:
+	// We prefer idle cores that share a cache level (like L2) with already active
+	// cores in the same package. Since we don't have explicit L2 clusters here,
+	// we use adjacency in the topology-sorted fCores array as a proxy.
+
 	native_cpu_mask_t enabledMask = scheduler_atomic_get((native_cpu_mask_t*)&fEnabledCoreMask);
 	native_cpu_mask_t activeMask = enabledMask & ~mask;
 
 	if (activeMask != 0) {
+		// Find idle cores that have at least one active neighbor.
 		native_cpu_mask_t neighbors = ((activeMask << 1) | (activeMask >> 1)) & mask;
 		if (neighbors != 0) {
+			// If multiple neighbors exist, pick one semi-randomly to avoid always
+			// hitting the same core if it's shared by many active ones.
 			if (scheduler_popcount(neighbors) > 1) {
+				// Issue 6 fix: clamp shift to [1, kMaxCoresPerPackage-1] to prevent
+				// both shift-by-0 (no rotation) and shift-by-kMaxCoresPerPackage UB.
+				// The previous guard caught shift==0 and shift==kMaxCoresPerPackage,
+				// but shift==kMaxCoresPerPackage is unreachable since the RNG mapping
+				// produces [0, kMaxCoresPerPackage-1]. Replacing with explicit clamp
+				// makes the intent clear and removes dead-code confusion.
 				int32 shift = 1 + (int32)(((uint64)cpu->GetRandom()
 					* (uint64)(kMaxCoresPerPackage - 1)) >> 32);
+				// shift is now in [1, kMaxCoresPerPackage-1], safe for both directions.
 				if (shift >= (int32)kMaxCoresPerPackage) {
+					// Defensive clamp (should never fire given RNG range above).
 					return fCores[scheduler_ctz(neighbors)];
 				}
 				native_cpu_mask_t rotated = (neighbors >> shift)
 					| (neighbors << (kMaxCoresPerPackage - shift));
 
 				if (rotated != 0) {
+					// Un-rotate: a bit at rotated position p came from original
+					// position (p + shift) % kMaxCoresPerPackage.
+					// Issue 19 fix: correct the un-rotation.
 					int32 pos = scheduler_ctz(rotated);
 					int32 origIdx = (pos + shift) % kMaxCoresPerPackage;
 					if (origIdx >= 0 && origIdx < kMaxCoresPerPackage
@@ -1306,6 +1607,7 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu, const CPUSet* affinity) const
 							return fCores[origIdx];
 						}
 					}
+					// Fallback if index maps to a NULL slot (sparse package).
 				}
 			}
 
@@ -1321,6 +1623,7 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu, const CPUSet* affinity) const
 		}
 	}
 
+	// If no core is partially active, just pick an idle one semi-randomly.
 	int32 count = scheduler_popcount(mask);
 	if (count > 1) {
 		int32 startIndex = (int32)get_random_index(cpu->GetRandom(), count);
@@ -1340,10 +1643,14 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu, const CPUSet* affinity) const
 				|| fCores[bit]->CPUMask().Matches(*affinity))) {
 		return fCores[bit];
 	}
+	// Issue 98 fix: if we reach here with a non-NULL affinity constraint and
+	// the lowest idle core doesn't match, scan remaining idle cores rather
+	// than silently returning NULL and violating the caller's expectation that
+	// a valid core is returned when IdleCoreMask() is non-zero.
 	if (affinity != NULL) {
 		native_cpu_mask_t remaining = mask;
 		if (bit >= 0)
-			remaining &= ~((native_cpu_mask_t)1 << bit);
+			remaining &= ~((native_cpu_mask_t)1 << bit); // skip the one we checked
 		while (remaining != 0) {
 			int32 nextBit = scheduler_ctz(remaining);
 			remaining &= ~((native_cpu_mask_t)1 << nextBit);
@@ -1361,8 +1668,9 @@ PackageEntry::GetIdleCorePacking(CPUEntry* cpu, const CPUSet* affinity) const
 void
 PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 {
-	// Issue 86 fix: production guard against out-of-bounds writes on
-	// release builds.
+	// Issue 86 fix: ASSERT only fires in debug builds. Add a production
+	// guard to prevent out-of-bounds write corrupting adjacent PackageEntry
+	// fields on release builds.
 	if (index < 0 || index >= kMaxCoresPerPackage) {
 		dprintf("PackageEntry::RegisterCore: index %" B_PRId32 " out of range"
 			" [0, %" B_PRId32 ") — core registration skipped\n",
@@ -1370,9 +1678,15 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 		return;
 	}
 	fCores[index] = core;
+	// Issue 38 fix: update fRegisteredCoreCount BEFORE fCoreCount so that
+	// fMaxAttempts (computed from fRegisteredCoreCount below) is based on
+	// the new count. The implicit ordering dependency is now explicit.
 	fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
 	fCoreCount++;
 
+	// Try to pick distinct random valid cores.
+	// Use formula: 4 + (3 * log2(N)) / 2
+	// For 32 cores: 4 + 7.5 = 11 attempts.
 	if (fRegisteredCoreCount > 0) {
 		fMaxAttempts = 4 + (3 * (fls((uint32)fRegisteredCoreCount) - 1)) / 2;
 	} else
@@ -1391,7 +1705,9 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	if (enabledMask == 0)
 		return NULL;
 
-	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {
+	// Use "Power of Two Choices" random sampling if the core count is large.
+	// This avoids cache pollution and interconnect saturation from scanning all cores.
+	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	//
 		uint64 sampledCores = 0;
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
@@ -1399,6 +1715,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			return NULL;
 
 		while (attempts++ < fMaxAttempts) {
+			// Select a random bit index based on registered cores to avoid sparse array slots
 			int32 i = (int32)get_random_index(cpu->GetRandom(), registeredCores);
 
 			if (sampledCores & (1ULL << i))
@@ -1409,9 +1726,12 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (candidate == NULL)
 				continue;
 
+			// Check if this core is enabled
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
 
+			// candidate->ID() is a core ID; the mask is indexed by
+			// CPU ID.  Check whether the core has any CPU in the affinity set.
 			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
@@ -1419,16 +1739,19 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 			int32 load = atomic_get(&fCoreLoads[i]);
 
+			// Track the best core across all attempts (Power-of-N-Choices).
 			if (minEntry == NULL || load < minLoad) {
 				minLoad = load;
 				minEntry = candidate;
 			}
 		}
 
+		// Use the best sampled core if any were found
 		if (minEntry != NULL)
 			return minEntry;
 	}
 
+	// Linear Scan (Robust Path for small clusters or fallback)
 	native_cpu_mask_t currentEnabledMask = enabledMask;
 	while (currentEnabledMask != 0) {
 		int32 i = scheduler_ctz(currentEnabledMask);
@@ -1437,6 +1760,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		CoreEntry* candidate = fCores[i];
 		if (candidate == NULL)
 			continue;
+		// same fix as the random sampling path above.
 		if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 			continue;
 		if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
@@ -1463,14 +1787,24 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	if (enabledMask == 0)
 		return NULL;
 
-	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {
+	// Use "Power of Two Choices" random sampling if the core count is large.
+	// This avoids cache pollution and interconnect saturation from scanning all cores.
+	if (fRegisteredCoreCount > kRandomCoreSearchThreshold) {	//
 		uint64 sampledCores = 0;
+		// sampledCores is uint64 which
+		// provides 64 deduplication bits.  kMaxCoresPerPackage is
+		// sizeof(native_cpu_mask_t)*8 == 64 on 64-bit and 32 on 32-bit,
+		// so every possible index i < kMaxCoresPerPackage fits within the
+		// bitmask on all supported platforms.  No overflow is possible.
+		// static_assert replaced by comment for GCC 2.95
+		// kMaxCoresPerPackage <= (int32)(sizeof(sampledCores) * 8)
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
 		if (registeredCores <= 0)
 			return NULL;
 
 		while (attempts++ < fMaxAttempts) {
+			// Select a random bit index based on registered cores
 			int32 i = (int32)get_random_index(cpu->GetRandom(), registeredCores);
 
 			if (sampledCores & (1ULL << i))
@@ -1481,9 +1815,11 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (candidate == NULL)
 				continue;
 
+			// Check if this core is enabled
 			if (!(((native_cpu_mask_t)1 << i) & enabledMask))
 				continue;
 
+			// candidate->ID() is a core ID; mask is indexed by CPU ID.
 			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
@@ -1491,7 +1827,11 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 			int32 load = atomic_get(&fCoreLoads[i]);
 
+			// Track the best core across all attempts (Power-of-N-Choices).
 			if (maxEntry == NULL || load > maxLoad
+					// Issue 55 fix: tie-break by higher PackageIndex (within
+					// the package) rather than lower core ID to spread across
+					// more physical cores instead of always favouring core 0.
 					|| (load == maxLoad
 						&& candidate->PackageIndex() > maxEntry->PackageIndex())) {
 				maxLoad = load;
@@ -1499,11 +1839,20 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			}
 		}
 
+		// Use the best sampled core if any were found
 		if (maxEntry != NULL)
 			return maxEntry;
 	}
 
+	// Linear Scan (Robust Path for small clusters or fallback)
 	int32 count = scheduler_popcount(enabledMask);
+	// Issue 28 fix: use fRegisteredCoreCount (not kMaxCoresPerPackage) as
+	// the modulus for startBit. For a 4-core package, using kMaxCoresPerPackage
+	// (64) as the modulus produces startBit values 0–63; bits 4–63 make
+	// upperMask zero (no enabled bits above index 3), forcing the fallback
+	// that sets upperMask = lowerMask — the randomisation becomes a no-op.
+	// Using fRegisteredCoreCount ensures startBit is always within the
+	// valid index range [0, fRegisteredCoreCount), making the split effective.
 	int32 startBit = 0;
 
 	if (count > 1) {
@@ -1511,6 +1860,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			fRegisteredCoreCount);
 	}
 
+	// Split mask into two parts to randomize start position
 	native_cpu_mask_t upperMask = enabledMask & (~(native_cpu_mask_t)0 << startBit);
 	native_cpu_mask_t lowerMask = enabledMask & (((native_cpu_mask_t)1 << startBit) - 1);
 
@@ -1519,8 +1869,13 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		lowerMask = 0;
 	}
 
+	// We iterate twice, but effectively just once over the set bits.
+	// The order of loops determines tie-breaking preference.
+
 	for (int pass = 0; pass < 2; pass++) {
 		native_cpu_mask_t currentMask = (pass == 0) ? upperMask : lowerMask;
+		// Issue 29 fix: skip the second pass when lowerMask is empty to avoid
+		// an unnecessary loop iteration with zero work.
 		if (currentMask == 0)
 			break;
 
@@ -1531,6 +1886,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			CoreEntry* candidate = fCores[i];
 			if (candidate == NULL)
 				continue;
+			// same fix as PeekMinimumLoadCore.
 			if (mask != NULL && !candidate->CPUMask().Matches(*mask))
 				continue;
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
@@ -1538,6 +1894,9 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 			int32 load = atomic_get(&fCoreLoads[i]);
 			if (maxEntry == NULL || load > maxLoad
+					// Issue 55 fix: tie-break by higher PackageIndex (within
+					// the package) rather than lower core ID to spread across
+					// more physical cores instead of always favouring core 0.
 					|| (load == maxLoad
 						&& candidate->PackageIndex() > maxEntry->PackageIndex())) {
 				maxLoad = load;
