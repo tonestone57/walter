@@ -140,7 +140,7 @@ private:
 			Element*	fHeads[MaxPriority + 1] __attribute__((aligned(8)));
 			Element*	fTails[MaxPriority + 1] __attribute__((aligned(8)));
 
-	mutable	Element* volatile fBest __attribute__((aligned(8)));
+	mutable	Element* fBest __attribute__((aligned(8)));
 
 			int32		fTotalCount;
 

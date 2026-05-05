@@ -83,7 +83,7 @@ private:
 			FunctionData*	fSortBuffer;
 
 			static const uint32 kHashTableSize = 2048;
-			FunctionData* volatile fHashTable[kHashTableSize];
+			FunctionData* fHashTable[kHashTableSize];
 			uint32			fNextFunctionSlot;
 
 			spinlock		fFunctionLock;
