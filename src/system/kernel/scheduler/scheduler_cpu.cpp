@@ -679,6 +679,11 @@ CPUEntry::_TryStealWork()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// 3-Phase Work Stealing Strategy:
+	// Phase 1: Local Sibling (L2/L3 Domain) - high cache locality.
+	// Phase 2: Local NUMA Node - random packages within the socket.
+	// Phase 3: Global Random - last resort from any package.
+
 	// iterate over other cores in the package and try to steal work
 	PackageEntry* package = fCore->Package();
 
@@ -983,6 +988,10 @@ ThreadData*
 CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	// Work Stealing Logic: find the best thread available for the thief CPU.
+	// We scan multiple priority levels to find a thread that respects
+	// CPU affinity.
 
 	// Issue 27 fix: snapshot gCPUEnabled once before the predicate loop.
 	// GetCPUMask() re-reads gCPUEnabled with atomic retry logic on every

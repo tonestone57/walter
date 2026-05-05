@@ -86,6 +86,10 @@ choose_core(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Core Selection Logic (Spread Strategy):
+	// Prefers idle cores to maximize throughput and minimize latency.
+	// Respects cache affinity, thread coloring (heterogeneous), and NUMA domains.
+
 	// useMask must be computed before Stage 0 so the
 	// hot-idle fast path can honour CPU affinity constraints.
 	CPUSet mask = threadData->GetCPUMask();
@@ -529,6 +533,9 @@ static CoreEntry*
 rebalance(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	// Load Rebalancing: finds the least loaded core and decides whether
+	// migration is beneficial based on thresholds and affinity rules.
 
 	// Real-time threads bypass rebalancing to ensure zero jitter
 	if (threadData->IsRealTime())

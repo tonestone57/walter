@@ -510,6 +510,10 @@ choose_core(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Core Selection Logic (Pack Strategy):
+	// Prefers active cores to allow deeper sleep states for idle packages.
+	// Uses small-task packing and heterogeneous preferences.
+
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* core = NULL;
 
@@ -743,6 +747,8 @@ static CoreEntry*
 rebalance(const ThreadData* threadData)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	// Load Rebalancing: finds suitable consolidation candidates.
 
 	ASSERT(!gSingleCore);
 

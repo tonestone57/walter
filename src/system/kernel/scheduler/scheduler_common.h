@@ -2,6 +2,8 @@
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Copyright 2011, Ingo Weinhold, ingo_weinhold@gmx.de.
  * Distributed under the terms of the MIT License.
+ *
+ * Audit and portability fixes (2025).
  */
 #ifndef KERNEL_SCHEDULER_COMMON_H
 #define KERNEL_SCHEDULER_COMMON_H
@@ -14,6 +16,7 @@
 #include <thread.h>
 #include <user_debugger.h>
 #include <util/atomic.h>
+#include <util/BitUtils.h>
 #include <util/MinMaxHeap.h>
 
 #include "RunQueue.h"
@@ -152,6 +155,7 @@ scheduler_ffs64(uint64 value)
 }
 
 // scheduler_ctz: portable Count Trailing Zeros for GCC 2.95.
+// Returns the index of the first set bit (0-31/63) or -1 if no bits set.
 static inline int
 scheduler_ctz(native_cpu_mask_t value)
 {
@@ -167,6 +171,7 @@ scheduler_ctz(native_cpu_mask_t value)
 
 // atomic_pointer_get: architecture-independent atomic pointer read.
 // Necessary for GCC 2.95 compatibility and 32/64-bit portability.
+// We use const volatile signature to match Haiku's atomic API and ensure visibility.
 template<typename T>
 static inline T*
 atomic_pointer_get(T* const volatile* pointer)
