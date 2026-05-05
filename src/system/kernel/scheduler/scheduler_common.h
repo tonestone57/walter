@@ -14,6 +14,7 @@
 #include <thread.h>
 #include <user_debugger.h>
 #include <util/atomic.h>
+#include <util/BitUtils.h>
 #include <util/MinMaxHeap.h>
 
 #include "RunQueue.h"
@@ -83,9 +84,9 @@ static inline native_cpu_mask_t
 scheduler_atomic_or(native_cpu_mask_t* value, native_cpu_mask_t orValue)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_or64((int64*)value, (int64)orValue);
+	return (native_cpu_mask_t)atomic_or64((int64 volatile*)value, (int64)orValue);
 #else
-	return (native_cpu_mask_t)atomic_or((int32*)value, (int32)orValue);
+	return (native_cpu_mask_t)atomic_or((int32 volatile*)value, (int32)orValue);
 #endif
 }
 
@@ -94,9 +95,9 @@ static inline native_cpu_mask_t
 scheduler_atomic_and(native_cpu_mask_t* value, native_cpu_mask_t andValue)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_and64((int64*)value, (int64)andValue);
+	return (native_cpu_mask_t)atomic_and64((int64 volatile*)value, (int64)andValue);
 #else
-	return (native_cpu_mask_t)atomic_and((int32*)value, (int32)andValue);
+	return (native_cpu_mask_t)atomic_and((int32 volatile*)value, (int32)andValue);
 #endif
 }
 
@@ -105,9 +106,22 @@ static inline native_cpu_mask_t
 scheduler_atomic_get(native_cpu_mask_t* value)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_get64((int64*)value);
+	return (native_cpu_mask_t)atomic_get64((int64 volatile*)value);
 #else
-	return (native_cpu_mask_t)atomic_get((int32*)value);
+	return (native_cpu_mask_t)atomic_get((int32 volatile*)value);
+#endif
+}
+
+static inline native_cpu_mask_t
+scheduler_atomic_test_and_set(native_cpu_mask_t* value, native_cpu_mask_t newValue,
+	native_cpu_mask_t expectedValue)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	return (native_cpu_mask_t)atomic_test_and_set64((int64 volatile*)value,
+		(int64)newValue, (int64)expectedValue);
+#else
+	return (native_cpu_mask_t)atomic_test_and_set((int32 volatile*)value,
+		(int32)newValue, (int32)expectedValue);
 #endif
 }
 
@@ -148,16 +162,42 @@ scheduler_ctz(native_cpu_mask_t value)
 }
 
 
-// atomic_pointer_get: architecture-independent atomic pointer read.
+// atomic_pointer: architecture-independent atomic pointer operations.
 // Necessary for GCC 2.95 compatibility and 32/64-bit portability.
 template<typename T>
 static inline T*
 atomic_pointer_get(T* volatile* pointer)
 {
-#if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
-	return (T*)atomic_get64((int64*)pointer);
+#if SCHEDULER_MASK_IS_64_BIT
+	return (T*)atomic_get64((int64 volatile*)pointer);
 #else
-	return (T*)atomic_get((int32*)pointer);
+	return (T*)atomic_get((int32 volatile*)pointer);
+#endif
+}
+
+
+template<typename T>
+static inline void
+atomic_pointer_set(T* volatile* pointer, T* value)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	atomic_set64((int64 volatile*)pointer, (int64)value);
+#else
+	atomic_set((int32 volatile*)pointer, (int32)value);
+#endif
+}
+
+
+template<typename T>
+static inline T*
+atomic_pointer_test_and_set(T* volatile* pointer, T* newValue, T* expectedValue)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	return (T*)atomic_test_and_set64((int64 volatile*)pointer, (int64)newValue,
+		(int64)expectedValue);
+#else
+	return (T*)atomic_test_and_set((int32 volatile*)pointer, (int32)newValue,
+		(int32)expectedValue);
 #endif
 }
 

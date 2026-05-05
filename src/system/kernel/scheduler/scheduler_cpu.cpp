@@ -905,12 +905,11 @@ CoreEntry::CoreEntry()
 	fLoad(0),
 	fCombinedLoad(0),
 	fLastLoadUpdate(0),
-	fScoreFactor(1 << 16)
+	fScoreFactor(1 << 16),
+	fLocalIndices(0)
 {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
-	// Issue 13 fix: initialise the counter used to assign fCoreLocalIndex.
-	fNextCoreLocalIndex = 0;
 }
 
 
@@ -1029,19 +1028,29 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	atomic_add(&fIdleCPUCount, 1);
 	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
 
-	// Issue 59 fix: assign fCoreLocalIndex BEFORE SetBitAtomic so that any
-	// concurrent _ChooseCPU reading fCPUSet sees a CPU with a valid index.
-	cpu->fCoreLocalIndex = atomic_add(&fNextCoreLocalIndex, 1);
+	// Find the first available local index using a CAS loop.
+	// This ensures unique index assignment even after arbitrary CPU hot-unplugging.
+	int32 localIndex = -1;
+	while (true) {
+		native_cpu_mask_t mask = scheduler_atomic_get(&fLocalIndices);
+		localIndex = scheduler_ctz(~mask);
+		if (localIndex < 0 || localIndex >= kMaxCoresPerPackage) {
+			panic("CoreEntry::AddCPU: no available local index for core %" B_PRId32,
+				fCoreID);
+		}
 
-	// Issue 21 fix: fNextCoreLocalIndex is incremented BEFORE the heap
-	// insert attempt. On insert failure, we must roll it back. The rollback
-	// is now inside the failure block to ensure atomicity with fCPUSet clear.
+		if (scheduler_atomic_test_and_set(&fLocalIndices,
+				mask | ((native_cpu_mask_t)1 << localIndex), mask) == mask) {
+			break;
+		}
+	}
+	cpu->fCoreLocalIndex = localIndex;
+
 	fCPUSet.SetBitAtomic(cpu->ID());
 
 	bool didAddIdle = false;
 	if (firstCPU) {
-		didAddIdle = true;  // track for rollback symmetry
-		// core has been reenabled
+		didAddIdle = true;
 		fLoad = 0;
 		atomic_set64(&fCombinedLoad, 0);
 
@@ -1053,33 +1062,21 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	}
 
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
-		// Issue 21/59 fix: clear fCPUSet BEFORE rolling back fNextCoreLocalIndex.
-		// A concurrent _ChooseCPU that saw the bit must not see an index
-		// that we are about to reuse for a different CPU.
 		fCPUSet.ClearBitAtomic(cpu->ID());
+		// Roll back the local index on failure.
+		scheduler_atomic_and(&fLocalIndices,
+			~((native_cpu_mask_t)1 << localIndex));
 		if (firstCPU) {
-			// roll back fNextCoreLocalIndex so that if the
-			// CPU is re-added later it receives the same sequential index
-			// and the local-index assignment remains dense and unique.
-			// Without this, each failed Insert permanently advances the
-			// counter, eventually exceeding CPUCount and breaking the
-			// round-robin epoch ownership check in UpdatePriorityBoostScalable.
-			atomic_add(&fNextCoreLocalIndex, -1);
 			fLoad = 0;
 			atomic_set64(&fCombinedLoad, 0);
 			atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
-			// only call RemoveIdleCore when AddIdleCore was called
-			// (the firstCPU branch).  A mismatch would corrupt fIdleCoreMask.
 			if (didAddIdle)
 				fPackage->RemoveIdleCore(this);
 			scheduler_atomic_and(&fPackage->fEnabledCoreMask,
 				~((native_cpu_mask_t)1 << fPackageIndex));
-			// Restore fCPUCount and fIdleCPUCount symmetrically.
 			atomic_add(&fCPUCount, -1);
 		} else {
 			atomic_add(&fCPUCount, -1);
-			// Same rollback for the non-firstCPU path.
-			atomic_add(&fNextCoreLocalIndex, -1);
 		}
 		atomic_add(&fIdleCPUCount, -1);
 		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
@@ -1201,9 +1198,9 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUHeap.PeekRoot() == cpu);
 	fCPUHeap.RemoveRoot();
 
-	// Issue 9 fix: decrement fNextCoreLocalIndex so that re-added CPUs
-	// get reuse local indices and stay within [0, CPUCount).
-	atomic_add(&fNextCoreLocalIndex, -1);
+	// Atomically clear the bit in fLocalIndices.
+	scheduler_atomic_and(&fLocalIndices,
+		~((native_cpu_mask_t)1 << cpu->fCoreLocalIndex));
 
 	ASSERT(cpu->GetLoad() >= 0 && cpu->GetLoad() <= kMaxLoad);
 	ASSERT(fLoad >= 0);
