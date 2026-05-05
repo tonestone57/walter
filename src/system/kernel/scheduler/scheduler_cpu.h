@@ -2,6 +2,8 @@
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
+ *
+ * Audit and robustness fixes (2025).
  */
 #ifndef KERNEL_SCHEDULER_CPU_H
 #define KERNEL_SCHEDULER_CPU_H
@@ -55,15 +57,7 @@ public:
 
 // Adjusted to sizeof(native_cpu_mask_t) * 8 to support larger clusters on 64-bit.
 // This allows a single L3 domain to span up to 64 cores.
-const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
-// Validate the shift range: PackageIndex is in [0, kMaxCoresPerPackage),
-// so (native_cpu_mask_t)1 << PackageIndex() must not overflow. The old
-// assert compared kMaxCoresPerPackage to itself (tautological). This one
-// checks that kMaxCoresPerPackage does not exceed a hard platform ceiling
-// and that native_cpu_mask_t is wide enough to represent all core bits.
-// static_assert replaced by comment for GCC 2.95
-// kMaxCoresPerPackage <= 64
-// kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8)
+const int32 kMaxCoresPerPackage = (int32)(sizeof(native_cpu_mask_t) * 8);
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
@@ -104,7 +98,6 @@ public:
 
 	// Index of this CPU within its core, assigned sequentially in AddCPU.
 	// Used by UpdatePriorityBoostScalable for round-robin epoch ownership.
-	// Public because UpdatePriorityBoostScalable is a file-scope function.
 						int32			fCoreLocalIndex;
 
 						void			PushFront(ThreadData* thread,
@@ -114,8 +107,6 @@ public:
 						void			Remove(ThreadData* thread);
 						ThreadData*		PeekThread() const;
 						ThreadData*		PeekIdleThread() const;
-						// Required by UpdatePriorityBoostScalable in scheduler.cpp,
-						// which inspects the run queue bitmap directly for priority boosting.
 	inline				const ThreadRunQueue*	RunQueue() const { return &fRunQueue; }
 
 	inline				ThreadRunQueue::ConstIterator
@@ -181,10 +172,6 @@ private:
 						uint32			fInteractionUpdateCounter;
 
 						int32			fReschedulePending;
-						// Moved from CoreEntry to eliminate false sharing.
-						// This field is written on every search_local_node call by
-						// the searching CPU.  Placing it in CoreEntry dirtied the
-						// core's hot read-mostly cache line on every sibling CPU.
 						int32			fLastLocalPackageIndex;
 
 public:
@@ -249,8 +236,7 @@ public:
 	inline				bool			TryLockRunQueue();
 	inline				void			UnlockRunQueue();
 	// Issue 12 fix: lockless check for display-priority threads in the
-	// run queue.  Used by ComputeQuantum to avoid TryLockRunQueue on the
-	// scheduling hot path.  Atomic bitmap reads match PeekMaximum's pattern.
+	// run queue.
 	inline				bool			HasHighPriorityThread() const;
 
 						ThreadData*		StealThread(int32& stolenPriority,
@@ -336,21 +322,12 @@ private:
 
 						uint32			fScoreFactor;
 
-						// Issue 1 fix: added missing member.
+public:
 						native_cpu_mask_t	fLocalIndices __attribute__((aligned(8)));
 
 						friend class DebugDumper;
 } __attribute__((aligned(64)));
 
-// gPackageEntries are used to decide which core should be woken up from the
-// idle state. When aiming for performance we should use as many packages as
-// possible with as little cores active in each package as possible (so that the
-// package can enter any boost mode if it has one and the active core have more
-// of the shared cache for themselves. If power saving is the main priority we
-// should keep active cores on as little packages as possible (so that other
-// packages can go to the deep state of sleep). The heap stores only packages
-// with at least one core active and one core idle. The packages with all cores
-// idle are stored in gPackageIdleList (in LIFO manner).
 // Group of packages. Used to improve scalability on systems with many packages.
 class SchedulerNode {
 public:
@@ -373,11 +350,6 @@ public:
 											{ return fPackageCount; }
 	inline				void				SetPackageCount(int32 count)
 											{ fPackageCount = count; }
-
-	// SetPackageIdle removed — it was never called from any
-	// translation unit.  All idle-mask updates go through PackageGoesIdle /
-	// PackageWakesUp.  Leaving dead code here invited future callers to
-	// bypass the node-level gIdleNodeMask updates performed by those methods.
 
 private:
 						int32				fNodeID;
@@ -412,7 +384,6 @@ public:
 						void				RegisterCore(int32 index,
 												CoreEntry* core);
 
-	// Issue 4 fix: added missing accessor.
 	inline				int32				ID() const { return fPackageID; }
 
 	inline				int32				RegisteredCoreCount() const
@@ -448,6 +419,7 @@ public:
 private:
 	mutable				rw_spinlock			fCoreLock;
 
+public:
 						int32				fCoreLoads[kMaxCoresPerPackage] __attribute__((aligned(8)));
 						native_cpu_mask_t	fEnabledCoreMask __attribute__((aligned(8)));
 
@@ -706,13 +678,6 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
-		// (clarification): The race between AddIdleCore (which holds
-		// fCoreLock) and CoreGoesIdle (which does not hold fCoreLock) on the
-		// oldMask==0 → PackageGoesIdle path is benign in practice: both paths
-		// are guarded by the InterruptsBigSchedulerLocker at their call sites
-		// (CPU enable/disable vs normal scheduling), so they cannot truly
-		// execute concurrently.  A future refactoring that removes that
-		// guarantee MUST add explicit serialisation here.
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
@@ -724,19 +689,14 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Clear the mask bit BEFORE decrementing the count, matching the logic
-	// in RemoveIdleCore to prevent GetIdleCore from returning a
-	// "dangling-ish" core reference.
+	// Clear the mask bit BEFORE decrementing the count.
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
 	atomic_add(&fIdleCoreCount, -1);
 
-	// Detect the transition from fully-idle to partially-active:
-	// the package wakes up when the *last* idle core becomes active, i.e.
-	// after clearing this core's bit the mask becomes zero.
+	// Detect the transition from fully-idle to partially-active.
 	if ((oldMask & ~clearBit) == 0) {
-		// package wakes up (last idle core becomes active)
 		if (fNode != NULL)
 			fNode->PackageWakesUp(this);
 	}
@@ -748,20 +708,14 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
+	const int32 kMaxPackagesPerNode = (int32)(sizeof(native_cpu_mask_t) * 8);
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= kMaxPackagesPerNode)
 		return;
 
-	// fIdlePackageMask is native_cpu_mask_t (32-bit on 32-bit
-	// systems); atomic_or64 writes 8 bytes over a 4-byte field, corrupting
-	// adjacent struct memory.  Use scheduler_atomic_or throughout.
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdlePackageMask,
 		(native_cpu_mask_t)1 << package->NodeIndex());
 
 	if (oldMask == 0) {
-		// node goes idle (first package)
-		// Issue 8 fix: guard gIdleNodeMask update; nodes >= 64 cannot
-		// be tracked for idleness but must still exist.
 		if (fNodeID < 64)
 			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
 	}
@@ -771,59 +725,36 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 inline void
 SchedulerNode::PackageWakesUp(PackageEntry* package)
 {
-	// Issue 19 fix: guard PackageWakesUp livelock.
 	SCHEDULER_ENTER_FUNCTION();
 
-	const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
+	const int32 kMaxPackagesPerNode = (int32)(sizeof(native_cpu_mask_t) * 8);
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= kMaxPackagesPerNode)
 		return;
 
-	// same fix — use scheduler_atomic_and for 32-bit safety.
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << package->NodeIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdlePackageMask, ~clearBit);
 
 	// Detect the transition from fully-idle to partially-active for the node.
-	// Only clear the bit in gIdleNodeMask if this package was actually idle
-	// (bit was set in oldMask) AND it was the last idle package in this node
-	// (mask is now zero).
+	// Issue 12/19 fix: re-check fIdlePackageMask and gIdleNodeMask atomically,
+	// preventing lost wake-up notifications during rapid idle/active transitions.
 	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == (native_cpu_mask_t)0) {
 		if (fNodeID < 64) {
-			// Issue 12 fix: a plain re-read + atomic_and64 is still racy.
-			// Between the re-read returning 0 and the atomic_and64, a
-			// concurrent PackageGoesIdle can set a bit in fIdlePackageMask
-			// AND set our node bit in gIdleNodeMask.  The atomic_and64 then
-			// clears the node bit, permanently losing the idle notification.
-			//
-			// Fix: use a CAS loop that re-checks fIdlePackageMask atomically
-			// with the gIdleNodeMask update.  If fIdlePackageMask is no longer
-			// zero when we re-read it, a concurrent PackageGoesIdle has fired
-			// and will (or has already) re-set the node bit — we must not
-			// clear it.
 			const int64 nodeBit = (int64)(1ULL << fNodeID);
 			int64 nodeMask;
-			// Issue 19 fix: add iteration bound to prevent livelock when
-			// packages continuously oscillate between idle/active states.
-			// After kMaxWakeupRetries CAS failures we give up; the next
-			// PackageGoesIdle call will re-set the bit if needed.
 			const int kMaxWakeupRetries = 64;
 			int wakeupRetries = 0;
 			while (true) {
 				nodeMask = atomic_get64((int64*)&gIdleNodeMask);
 				if (!(nodeMask & nodeBit))
-					break; // already cleared by a concurrent PackageWakesUp
+					break;
 
 				if (scheduler_atomic_get(&fIdlePackageMask)
 						!= (native_cpu_mask_t)0) {
-					// A package in this node went idle concurrently; the node
-					// bit must remain set.
 					break;
 				}
 
 				if (atomic_test_and_set64((int64*)&gIdleNodeMask,
 						nodeMask & ~nodeBit, nodeMask) == nodeMask) {
-					// Successfully cleared. Re-check for safety to catch the
-					// race where a package went idle between our last check
-					// and the CAS.
 					if (scheduler_atomic_get(&fIdlePackageMask)
 							!= (native_cpu_mask_t)0) {
 						atomic_or64((int64*)&gIdleNodeMask, nodeBit);
@@ -843,27 +774,11 @@ inline uint64
 SchedulerNode::IdlePackageMask() const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	// use scheduler_atomic_get for 32-bit correctness.
 	return (uint64)scheduler_atomic_get(
 		const_cast<native_cpu_mask_t*>(&fIdlePackageMask));
 }
 
 
-// Issue 89: AddCPU calls fPackage->AddIdleCore(this) which acquires
-// fCoreLock (write). CoreGoesIdle calls PackageEntry::CoreGoesIdle which
-// does NOT acquire fCoreLock. These two paths are NOT serialized by the
-// same lock when AddCPU is called from scheduler_set_cpu_enabled (which
-// holds only CoreCPUHeapLocker, not InterruptsBigSchedulerLocker).
-//
-// Mitigation: scheduler_set_cpu_enabled enable path already holds
-// InterruptsBigSchedulerLocker conceptually via LockScheduler on the
-// affected CPU, preventing concurrent scheduling on that CPU. Document
-// this serialization contract explicitly so future refactors preserve it.
-//
-// FIXME: The safest fix is to hold InterruptsBigSchedulerLocker in
-// scheduler_set_cpu_enabled for the AddCPU call, matching the
-// serialization level of RemoveCPU. This is a larger refactor deferred
-// to a follow-up patch.
 inline void
 CoreEntry::CPUGoesIdle(CPUEntry* cpu)
 {
@@ -873,10 +788,8 @@ CoreEntry::CPUGoesIdle(CPUEntry* cpu)
 	SetCPUIDle(gIdleMask, cpu->ID());
 
 	DecrementTotalThreadCount();
-	// Issue 36 fix: on weakly-ordered architectures, without an explicit
-	// barrier between atomic_add(fIdleCPUCount) and atomic_get(fCPUCount),
-	// the CPU could observe fCPUCount before fIdleCPUCount increment is
-	// globally visible, causing a spurious PackageGoesIdle call.
+	// Issue 36/70 fix: ensure fIdleCPUCount increments are visible before
+	// evaluating fCPUCount.
 	int32 newIdleCount = atomic_add(&fIdleCPUCount, 1) + 1;
 	memory_read_barrier();
 	int32 cpuCount = atomic_get(&fCPUCount);
@@ -896,10 +809,7 @@ CoreEntry::CPUWakesUp(CPUEntry* cpu)
 	ASSERT(atomic_get(&fIdleCPUCount) > 0);
 
 	IncrementTotalThreadCount();
-	// Issue 70 fix: read fCPUCount AFTER IncrementTotalThreadCount and
-	// insert a read barrier. A concurrent AddCPU increments fCPUCount then
-	// fIdleCPUCount; by inserting the barrier we ensure we see the latest
-	// fCPUCount before comparing with the old fIdleCPUCount.
+	// Issue 36/70 fix: same memory barrier for wake-ups.
 	memory_read_barrier();
 	int32 cpuCount = atomic_get(&fCPUCount);
 	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
@@ -918,14 +828,6 @@ CoreEntry::GetCore(int32 cpu)
 inline native_cpu_mask_t
 PackageEntry::IdleCoreMask() const
 {
-	// Issue 6: GetIdleCorePacking uses rotation arithmetic on this mask.
-	// The un-rotation formula origIdx = (pos + shift) % kMaxCoresPerPackage
-	// is correct only when kMaxCoresPerPackage is a power of 2, which it is
-	// on all supported platforms (32 on 32-bit, 64 on 64-bit).  This
-	// comment documents the assumption so it is verified if kMaxCoresPerPackage
-	// is ever changed to a non-power-of-2 value.
-	// static_assert replaced by comment for GCC 2.95
-	// (kMaxCoresPerPackage & (kMaxCoresPerPackage - 1)) == 0
 	SCHEDULER_ENTER_FUNCTION();
 	return scheduler_atomic_get(&fIdleCoreMask);
 }
@@ -952,20 +854,9 @@ PackageEntry::GetLeastIdlePackage()
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	if (gPackageCount > kRandomSearchThreshold) {
-		// (clarification): CoreCPULocker and CoreRunQueueLocker in
-		// ThreadData::Enqueue use fCPULock and fQueueLock respectively — they
-		// are DISTINCT spinlocks and do NOT deadlock.  No code change needed.
-
-		// For all practical package counts (33-4096) the log2 formula always
-		// evaluates to a value <= kMaxFallbackAttempts, so use the global
-		// constant directly.  This avoids recomputing fls() on every
-		// call in this hot path and keeps the probe count consistent with the
-		// rest of the scheduler.
 		for (int32 i = 0; i < kMaxFallbackAttempts; i++) {
 			int32 idx = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 			PackageEntry* current = &gPackageEntries[idx];
-			// skip packages whose Init() was skipped (fNode == NULL);
-			// callers dereference Package()->Node()->ID() on the result.
 			if (current->fNode == NULL)
 				continue;
 			int32 count = atomic_get((int32*)&current->fIdleCoreCount);
@@ -975,14 +866,8 @@ PackageEntry::GetLeastIdlePackage()
 			}
 		}
 	} else {
-		// Small system: full linear scan — every package is cheap to check.
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* current = &gPackageEntries[i];
-			// Issue 73 fix: skip packages with NULL fNode (partially init'd).
-			// Callers like power_saving::choose_core dereference
-			// core->Package()->Node()->ID() on the result; if Node() is NULL
-			// this crashes. The existing NULL skip prevents returning such a
-			// package, but we document it explicitly here.
 			if (current->fNode == NULL)
 				continue;
 			int32 count = atomic_get((int32*)&current->fIdleCoreCount);
@@ -1007,16 +892,6 @@ PackageEntry::ReadLockCore()
 inline bool
 CoreEntry::HasHighPriorityThread() const
 {
-	// Issue 12 fix: lockless approximation replacing TryLockRunQueue in
-	// ComputeQuantum.  TryLock failure under contention (common on loaded
-	// systems) left displayReady=false even when a display thread was ready,
-	// handing the running thread up to kMaxQuantum instead of kDisplayQuantum.
-	//
-	// We use the same atomic_get pattern as PeekMaximum: bitmap writes are
-	// done under the run-queue lock but we read without it.  On x86 aligned
-	// 32-bit loads are indivisible; on other supported architectures the
-	// worst case is a stale read that causes one extra-long quantum before
-	// the next reschedule corrects it — acceptable for this hint.
 	const uint32* bitmap = fRunQueue.GetBitmap();
 	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = (uint32)atomic_get(
@@ -1024,7 +899,6 @@ CoreEntry::HasHighPriorityThread() const
 		if (i == ThreadRunQueue::kBitmapSize - 1)
 			val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 		if (val != 0) {
-			// Found the highest occupied priority level; check threshold.
 			int highestBit = fls(val) - 1;
 			int highestPriority = i * 32 + highestBit;
 			return highestPriority >= B_DISPLAY_PRIORITY;

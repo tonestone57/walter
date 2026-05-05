@@ -2,20 +2,10 @@
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
+ *
+ * Audit and robustness fixes (2025).
  */
 
-// (clarification — PackageEntry::RegisterCore): The fMaxAttempts
-// formula uses fRegisteredCoreCount AFTER it has already been updated by
-//   fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
-// so it correctly reflects the new count including the just-registered core.
-// No code change is needed; the original audit finding was based on reading
-// the pre-update value, which is not what the code does.
-//
-// (note — CPUEntry::Init RNG seed): Improving entropy requires a
-// platform-specific hardware RNG (rdtsc/mrs cntvct) call per CPU during
-// init.  This is architecture-dependent and deferred to a follow-up patch.
-// The current Xorshift64 mixing is sufficient for scheduling fairness even
-// with correlated seeds; the correlation resolves after the first few calls.
 
 #ifndef KERNEL_SCHEDULER_TOPOLOGY_H
 #define KERNEL_SCHEDULER_TOPOLOGY_H
@@ -46,37 +36,16 @@ search_local_node(SchedulerNode* node, Action action)
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
-	// For small nodes (<=8 packages), use a Rotational Linear Scan.  Starting
-	// from the last searched position improves coverage and reduces collisions
-	// between CPUs searching the same node.
-	//
-	// Use cpu->fLastLocalPackageIndex (per-CPU) rather than the old
-	// core->fLastLocalPackageIndex.  The CoreEntry field was written on every
-	// call by every CPU sharing the core, producing false sharing on the core's
-	// fLastLocalPackageIndex is updated on
-	// EVERY iteration, not only on success.  This is intentional: if all
-	// packages in the node reject (all busy), the index still advances so
-	// the next call starts from a fresh position, maintaining the
-	// round-robin guarantee under sustained load.  No code change required.
-	// hot read-mostly cache line.  The per-CPU field is private to one CPU so
-	// no cross-CPU invalidation occurs.
 	if (packagesInNode <= 8) {
 		int32 lastIndex = atomic_get(&cpu->fLastLocalPackageIndex);
 		int32 start = (lastIndex + 1) % packagesInNode;
 		for (int32 i = 0; i < packagesInNode; i++) {
-			// (clarification): fLastLocalPackageIndex is per-CPU.
-			// Updating it on every iteration gives correct round-robin
-			// coverage: next call starts from the element after the last
-			// one checked.
 			int32 offset = start + i;
 			if (offset >= packagesInNode)
 				offset -= packagesInNode;
 			int32 index = nodeBaseIndex + offset;
 			if (index >= gPackageCount)
 				continue;
-			// update fLastLocalPackageIndex on every iteration.
-			// Issue 6 fix: use atomic_set for consistency and to avoid
-			// confusion, even though it's a per-CPU field.
 			atomic_set(&cpu->fLastLocalPackageIndex, offset);
 			if (action(&gPackageEntries[index]))
 				break;
@@ -84,23 +53,12 @@ search_local_node(SchedulerNode* node, Action action)
 		return;
 	}
 
-	// For larger nodes, use logarithmic random sampling.  Duplicate probes
-	// become statistically rare once N is large enough.
-	//
-	// (documentation): The visitedBits array in search_global_random is
-	// a fixed 128-byte stack allocation (kStackBitmaskSize == 1024 packages).
-	// For systems with >1024 packages deduplication is skipped but the loop
-	// still terminates within kMaxAttempts, bounding stack use unconditionally.
 	int32 logPackages = 0;
 	if (packagesInNode > 1)
 		logPackages = fls((uint32)packagesInNode) - 1;
 
 	const int kMaxLocalAttempts = min_c(packagesInNode, 4 + logPackages);
 
-	// Issue 71 fix: the large-node random path has no visited bitmask,
-	// allowing the same package to be probed multiple times within a single
-	// call. Add a simple 64-bit bitmask for nodes with <= 64 packages (the
-	// common case) to avoid duplicate probes and wasted budget.
 	uint64 visitedLocal = 0;
 	const bool canDedup = (packagesInNode <= 64);
 
@@ -130,22 +88,12 @@ template <typename Action>
 static void
 search_global_random(Action action)
 {
-	// Issue 17 fix: snapshot gPackageCount once at the start of the function.
-	// This ensures consistency if a hot-plug event changes the global count
 	const int32 packageCount = gPackageCount;
 
-	// Issue 51 fix: guard packageCount == 0 before computing samplesToTake
-	// and entering the while loop. min_c(gRandomSamples, 0) == 0 so the
-	// loop would not execute, but the ASSERT and wordsNeeded computation
-	// below could misbehave with packageCount == 0.
 	if (packageCount <= 0)
 		return;
 
 
-	// Issue 5 fix: kStackBitmaskSize covers 4096 packages (512 bytes on the
-	// stack).  init() enforces gPackageCount <= 4096.  Assert that the runtime
-	// value never exceeds our compile-time allocation so an accidental removal
-	// of the init() cap does not silently cause out-of-bounds writes.
 	ASSERT(packageCount <= 4096);
 
 	int32 samplesToTake = min_c(gRandomSamples, packageCount);
@@ -155,12 +103,6 @@ search_global_random(Action action)
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
-	// Bitmask for tracking visited packages to avoid collisions.
-	// For systems with <= 64 packages, use a single uint64 bitmask (fast path).
-	// the fast-path shift `1ULL << i` where
-	// i is in [0, packageCount-1] with packageCount <= 64 means i is in
-	// [0, 63].  Shifting a 64-bit literal by 63 is defined behaviour.
-	// No overflow is possible.  No code change required.
 	if (packageCount <= 64) {
 		uint64 visitedBits = 0;
 		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
@@ -177,20 +119,9 @@ search_global_random(Action action)
 		return;
 	}
 
-	// the original kStackBitmaskSize of 1024 meant that packages
-	// in the range [1024, 4096) fell into a coarse stripe-based fallback
-	// that visited at most 1 package per 64-package band, severely
-	// under-sampling large systems.  gPackageCount is capped at 4096, so a
-	// 512-byte (4096-bit) bitmask covers the entire valid range without any
-	// stripe approximation.  512 bytes is acceptable on a kernel stack that
-	// is at least 8 KB.
 	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
-	// Issue 17 fix: use snapshotted packageCount.
-	// zero only the words needed for packageCount instead of
-	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
-	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
 	int32 wordsNeeded = min_c((packageCount + 63) / 64,
 		(int32)(kStackBitmaskSize / 64));
 	memset(visitedBits, 0, (size_t)wordsNeeded * sizeof(uint64));
@@ -198,9 +129,6 @@ search_global_random(Action action)
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 		int32 i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
 
-		// With kStackBitmaskSize == 4096 and gPackageCount <= 4096 every
-		// valid index i fits inside the bitmask.  The out-of-range branch
-		// is retained as a safety net in case the cap ever changes.
 		int32 word = i / 64;
 		int32 bit  = i % 64;
 
@@ -209,8 +137,6 @@ search_global_random(Action action)
 				continue;
 			visitedBits[word] |= (1ULL << bit);
 		}
-		// For indices >= kStackBitmaskSize (unreachable today) allow the
-		// probe without deduplication; at worst we visit a package twice.
 		samplesTaken++;
 
 		if (action(&gPackageEntries[i]))
@@ -228,13 +154,11 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 	if (candidate != NULL) {
 		int32 score = candidate->GetScore();
 
-		// Load-Threshold Short Circuit: If we find a core with very low load
-		// (e.g., < 15% of kMaxLoad), accept it immediately to save cycles.
 		const int32 kLowLoadThreshold = (kMaxLoad * 15) / 100;
 		if (score <= kLowLoadThreshold) {
 			bestCore = candidate;
 			bestLoad = score;
-			return true; // callers must check this return value
+			return true;
 		}
 
 		if (bestCore == NULL || score < bestLoad) {
@@ -243,7 +167,7 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 		}
 	}
 
-	return false; // continue searching
+	return false;
 }
 
 
@@ -255,26 +179,10 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	const int32 cpuCount = smp_get_num_cpus();
 	PackageEntry* lastPackage = NULL;
 
-	// Issue 19 fix: the previous deduplication only caught *consecutive*
-	// duplicate packages. Two CPU IDs in non-adjacent affinity mask bits
-	// can belong to the same package and be scanned twice, wasting time and
-	// skewing the minimum-load result toward that package. Use a proper
-	// visited bitmask for small systems and a hash-based set for larger ones.
-	//
-	// For systems with <= 128 packages (covers all practical single/dual-socket
-	// servers), use a two-word uint64 bitmask keyed on package ID.
-	// For larger systems the consecutive-duplicate check is retained as a
-	// lightweight approximation (full dedup would require heap allocation).
 	const bool useVisitedBitmask = (gPackageCount <= 128);
-	uint64 visitedPackages[2] = {0, 0};  // covers package IDs 0..127
+	uint64 visitedPackages[2] = {0, 0};
 
-	// Issue 19 fix already present in original. Additional fix for
-	// gPackageCount > 128 fallback: consecutive-duplicate suppression
-	// misses non-adjacent duplicates. Add a secondary hash-bucket check
-	// for medium-sized systems (129-512 packages).
 	const bool useMediumBitmask = (!useVisitedBitmask && gPackageCount <= 512);
-	// Use a simple modular hash into a 64-bit word for 129-512 packages.
-	// Collisions are possible but acceptable — this is a best-effort guard.
 	uint64 mediumVisited = 0;
 
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
@@ -306,14 +214,12 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 								visitedPackages[word] |= bitMask;
 						}
 					} else if (useMediumBitmask) {
-						// Hash package ID into 64 buckets.
 						int32 slot = package->ID() % 64;
 						uint64 bit = 1ULL << slot;
 						alreadyVisited = (mediumVisited & bit) != 0;
 						if (!alreadyVisited)
 							mediumVisited |= bit;
 					} else {
-						// Fallback: consecutive-duplicate suppression only.
 						alreadyVisited = (package == lastPackage);
 					}
 					if (!alreadyVisited) {
