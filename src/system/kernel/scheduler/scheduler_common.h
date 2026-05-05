@@ -124,8 +124,6 @@ scheduler_popcount(native_cpu_mask_t value)
 static inline int
 scheduler_ffs64(uint64 value)
 {
-	if (value == 0)
-		return 0;
 	uint32 low = (uint32)value;
 	if (low != 0)
 		return ffs((int)low);
@@ -141,7 +139,7 @@ static inline int
 scheduler_ctz(native_cpu_mask_t value)
 {
 	if (value == 0)
-		return 0;
+		return -1;
 #if SCHEDULER_MASK_IS_64_BIT
 	return scheduler_ffs64((uint64)value) - 1;
 #else
