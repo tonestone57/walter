@@ -607,10 +607,10 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	// Issue 11 fix: PeekBest uses its own lookahead logic; PeekOption's
 	// shared budget fix does not apply here.
 	const int kDeadlineLookaheadLevels = 3;
-	int numLevelsSearched = 0;
+	int levelsSearched = 0;
 	Element* globalBest = NULL;
 
-	for (int i = kBitmapSize - 1; i >= 0 && numLevelsSearched < kDeadlineLookaheadLevels; i--) {
+	for (int i = kBitmapSize - 1; i >= 0 && levelsSearched < kDeadlineLookaheadLevels; i--) {
 		uint32 val = fBitmap[i];
 		if (val != 0) {
 			if (i == kBitmapSize - 1)
@@ -619,7 +619,7 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 			if (val == 0)
 				continue;
 
-			while (val != 0 && numLevelsSearched < kDeadlineLookaheadLevels) {
+			while (val != 0 && levelsSearched < kDeadlineLookaheadLevels) {
 				int bit = fls(val) - 1;
 				val &= ~(1UL << bit);
 				unsigned int priority = i * 32 + bit;
@@ -642,7 +642,7 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 				if (globalBest == NULL || sCompare(best, globalBest))
 					globalBest = best;
 
-				numLevelsSearched++;
+				levelsSearched++;
 			}
 		}
 	}
@@ -740,14 +740,14 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 	const int kNumCPUs = smp_get_num_cpus();
 	const int kMaxSearchPerLevel = 16 + (kNumCPUs >> 3);
 
-	// Issue 11 fix: Increase searchBudget to allow searching more priority
+	// Issue 11 fix: Increase totalBudget to allow searching more priority
 	// levels before giving up.  kMaxSearchPerLevel * 8 allows up to 8
 	// full levels or many partially-occupied levels.
-	int searchBudget = kMaxSearchPerLevel * 8;
+	int totalBudget = kMaxSearchPerLevel * 8;
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		// Issue 5 fix: check budget before scanning a new priority word.
-		if (searchBudget <= 0)
+		if (totalBudget <= 0)
 			return NULL;
 
 		uint32 val = fBitmap[i];
@@ -768,7 +768,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			// at every level, causing the second priority band to receive only
 			// half as many probes as the first.  This under-served lower-
 			// priority stealable threads and made work-stealing incomplete.
-			int searchLimit = min_c(kMaxSearchPerLevel, searchBudget);
+			int searchLimit = min_c(kMaxSearchPerLevel, totalBudget);
 			while (current != NULL && count++ < searchLimit) {
 				if (predicate(current))
 					return current;
@@ -777,13 +777,13 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 				// Issue 22 fix: decrement budget here, paired with element
 				// visitation, so the per-level cap and budget cap are both
 				// correctly accounted for in the same decrement.
-				searchBudget--;
+				totalBudget--;
 			}
 
 			// 'break' only exits the inner while(val!=0) loop.
 			// Return NULL to terminate the outer for-loop immediately when
 			// the budget is exhausted — remaining bitmap words are skipped.
-			if (searchBudget <= 0)
+			if (totalBudget <= 0)
 				return NULL;
 		}
 	}

@@ -176,7 +176,7 @@ ThreadData::Init()
 		do {
 			homeA = atomic_get(const_cast<int32*>(&currentThreadData->fHomePackage));
 			memory_read_barrier();
-			vrtSnapshot = atomic_get64((int64*)&currentThreadData->fVirtualRuntime);
+			vrt = atomic_get64((int64*)&currentThreadData->fVirtualRuntime);
 			memory_read_barrier();
 			homeB = atomic_get(const_cast<int32*>(&currentThreadData->fHomePackage));
 		} while (homeA != homeB && ++retries < 8);
@@ -459,9 +459,9 @@ ThreadData::ComputeQuantum() const
 	// apply min_c/max_c, a corrupted value above 1000 would make the
 	// multiplier (1500 - score) go negative, producing a negative quantum
 	// that bypasses the floor clamp (signed comparison).
-	int32 interactivityScore = fInteractivityScore;
-	if (interactivity < 0) interactivityScore = 0;
-	if (interactivity > 1000) interactivityScore = 1000;
+	int32 interactivity = fInteractivityScore;
+	if (interactivity < 0) interactivity = 0;
+	if (interactivity > 1000) interactivity = 1000;
 
 	quantum = (int64)quantum * (int64)(1500 - interactivity) * 1049 >> 20;
 
@@ -625,9 +625,9 @@ ThreadData::_UpdateDeadline()
 	// Fast integer approximation of / 1000
 	// Ensure 64-bit arithmetic to prevent overflow.
 	// Use clamped interactivity to prevent negative slice.
-	int32 interactivityScore = fInteractivityScore;
-	if (interactivity < 0) interactivityScore = 0;
-	if (interactivity > 1000) interactivityScore = 1000;
+	int32 interactivity = fInteractivityScore;
+	if (interactivity < 0) interactivity = 0;
+	if (interactivity > 1000) interactivity = 1000;
 	slice = ((int64)slice * (1500 - interactivity) * 1049) >> 20;
 
 	// prevent the interactivity multiplier from shrinking

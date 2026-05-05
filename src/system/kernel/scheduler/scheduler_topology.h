@@ -91,11 +91,11 @@ search_local_node(SchedulerNode* node, Action action)
 	// a fixed 128-byte stack allocation (kStackBitmaskSize == 1024 packages).
 	// For systems with >1024 packages deduplication is skipped but the loop
 	// still terminates within kMaxAttempts, bounding stack use unconditionally.
-	int32 log2Packages = 0;
+	int32 logPackages = 0;
 	if (packagesInNode > 1)
-		log2Packages = fls((uint32)packagesInNode) - 1;
+		logPackages = fls((uint32)packagesInNode) - 1;
 
-	const int kMaxLocalAttempts = min_c(packagesInNode, 4 + log2Packages);
+	const int kMaxLocalAttempts = min_c(packagesInNode, 4 + logPackages);
 
 	// Issue 71 fix: the large-node random path has no visited bitmask,
 	// allowing the same package to be probed multiple times within a single
@@ -134,7 +134,7 @@ search_global_random(Action action)
 	// This ensures consistency if a hot-plug event changes the global count
 	const int32 packageCount = gPackageCount;
 
-	// Issue 51 fix: guard packageCount == 0 before computing totalSamplesToTake
+	// Issue 51 fix: guard packageCount == 0 before computing samplesToTake
 	// and entering the while loop. min_c(gRandomSamples, 0) == 0 so the
 	// loop would not execute, but the ASSERT and wordsNeeded computation
 	// below could misbehave with packageCount == 0.
@@ -148,10 +148,10 @@ search_global_random(Action action)
 	// of the init() cap does not silently cause out-of-bounds writes.
 	ASSERT(packageCount <= 4096);
 
-	int32 totalSamplesToTake = min_c(gRandomSamples, packageCount);
+	int32 samplesToTake = min_c(gRandomSamples, packageCount);
 	int32 samplesTaken = 0;
 	int32 attempts = 0;
-	const int32 kMaxAttempts = totalSamplesToTake * 8;
+	const int32 kMaxAttempts = samplesToTake * 8;
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
@@ -163,7 +163,7 @@ search_global_random(Action action)
 	// No overflow is possible.  No code change required.
 	if (packageCount <= 64) {
 		uint64 visitedBits = 0;
-		while (samplesTaken < totalSamplesToTake && attempts++ < kMaxAttempts) {
+		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 			int32 i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
 
 			if ((visitedBits & (1ULL << i)) != 0)
@@ -195,7 +195,7 @@ search_global_random(Action action)
 		(int32)(kStackBitmaskSize / 64));
 	memset(visitedBits, 0, (size_t)wordsNeeded * sizeof(uint64));
 
-	while (samplesTaken < totalSamplesToTake && attempts++ < kMaxAttempts) {
+	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 		int32 i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
 
 		// With kStackBitmaskSize == 4096 and gPackageCount <= 4096 every
