@@ -1033,10 +1033,18 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	int32 localIndex = -1;
 	while (true) {
 		native_cpu_mask_t mask = scheduler_atomic_get(&fLocalIndices);
-		localIndex = scheduler_ctz(~mask);
-		if (localIndex < 0 || localIndex >= kMaxCoresPerPackage) {
+
+		// Explicitly check for full mask before calling ctz to avoid
+		// architecture-dependent undefined behavior on ctz(0).
+		if (mask == (native_cpu_mask_t)-1) {
 			panic("CoreEntry::AddCPU: no available local index for core %" B_PRId32,
 				fCoreID);
+		}
+
+		localIndex = scheduler_ctz(~mask);
+		if (localIndex < 0 || localIndex >= kMaxCoresPerPackage) {
+			panic("CoreEntry::AddCPU: local index %" B_PRId32 " out of range "
+				"for core %" B_PRId32, localIndex, fCoreID);
 		}
 
 		if (scheduler_atomic_test_and_set(&fLocalIndices,

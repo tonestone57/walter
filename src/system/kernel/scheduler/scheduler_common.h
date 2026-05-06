@@ -66,7 +66,7 @@ struct ThreadDataVRuntimeCompare {
 // These wrappers ensure atomic operations and bit manipulation work correctly
 // on both 32-bit and 64-bit systems.
 
-#if defined(__x86_64__) || defined(__aarch64__) || defined(__riscv64__)
+#if B_HAIKU_64_BIT
 	// 64-bit systems: supports up to 64 L3 domains per node
 	typedef uint64 native_cpu_mask_t;
 	#define SCHEDULER_MASK_IS_64_BIT 1
@@ -129,10 +129,22 @@ static inline int
 scheduler_popcount(native_cpu_mask_t value)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return count_set_bits((uint32)value) + count_set_bits((uint32)(value >> 32));
+	return (int)(count_set_bits((uint32)value)
+		+ count_set_bits((uint32)(value >> 32)));
 #else
-	return count_set_bits((uint32)value);
+	return (int)count_set_bits((uint32)value);
 #endif
+}
+
+// scheduler_ffs: portable Find First Set bit for GCC 2.95.
+// Returns 1-based index of the first bit set, or 0 if value is 0.
+static inline int
+scheduler_ffs(uint32 value)
+{
+	if (value == 0)
+		return 0;
+	// fls(x & -x) is correct for isolating and finding the lowest bit.
+	return (int)fls(value & (uint32)-(int32)value);
 }
 
 static inline int
@@ -140,9 +152,9 @@ scheduler_ffs64(uint64 value)
 {
 	uint32 low = (uint32)value;
 	if (low != 0)
-		return ffs((int)low);
+		return scheduler_ffs(low);
 	uint32 high = (uint32)(value >> 32);
-	int bit = ffs((int)high);
+	int bit = scheduler_ffs(high);
 	if (bit == 0)
 		return 0;
 	return bit + 32;
@@ -157,7 +169,7 @@ scheduler_ctz(native_cpu_mask_t value)
 #if SCHEDULER_MASK_IS_64_BIT
 	return scheduler_ffs64((uint64)value) - 1;
 #else
-	return ffs((int)value) - 1;
+	return scheduler_ffs((uint32)value) - 1;
 #endif
 }
 
