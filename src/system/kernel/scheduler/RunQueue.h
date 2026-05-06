@@ -416,18 +416,18 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	// caller holds here), 'best' cannot be freed within this critical section,
 	// but we must still validate the bucket to catch stale priority caches.
 	{
-		Element* best = (Element*)atomic_pointer_get<void>((void**)&fBest);
+		Element* best = atomic_pointer_get<Element>(&fBest);
 		if (best != NULL) {
 			unsigned int bestPriority = sGetLink(best)->fPriority;
 			// Validate the bucket is non-empty before trusting bestPriority.
 			if (fHeads[bestPriority] == NULL)
-				atomic_pointer_set<void>((void**)&fBest, element); // stale, replace
+				atomic_pointer_set<Element>(&fBest, element); // stale, replace
 			else if (priority > bestPriority)
-				atomic_pointer_set<void>((void**)&fBest, element);
+				atomic_pointer_set<Element>(&fBest, element);
 			else if (priority == bestPriority && sCompare(element, best))
-				atomic_pointer_set<void>((void**)&fBest, element);
+				atomic_pointer_set<Element>(&fBest, element);
 		} else if (isEmpty || PeekMaximum() == element) {
-			atomic_pointer_set<void>((void**)&fBest, element);
+			atomic_pointer_set<Element>(&fBest, element);
 		}
 	}
 }
@@ -478,17 +478,17 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 
 	// Issue 46 fix: same snapshot-based fBest update as PushFront.
 	{
-		Element* best = (Element*)atomic_pointer_get<void>((void**)&fBest);
+		Element* best = atomic_pointer_get<Element>(&fBest);
 		if (best != NULL) {
 			unsigned int bestPriority = sGetLink(best)->fPriority;
 			if (fHeads[bestPriority] == NULL)
-				atomic_pointer_set<void>((void**)&fBest, element);
+				atomic_pointer_set<Element>(&fBest, element);
 			else if (priority > bestPriority)
-				atomic_pointer_set<void>((void**)&fBest, element);
+				atomic_pointer_set<Element>(&fBest, element);
 			else if (priority == bestPriority && sCompare(element, best))
-				atomic_pointer_set<void>((void**)&fBest, element);
+				atomic_pointer_set<Element>(&fBest, element);
 		} else if (isEmpty || PeekMaximum() == element) {
-			atomic_pointer_set<void>((void**)&fBest, element);
+			atomic_pointer_set<Element>(&fBest, element);
 		}
 	}
 }
@@ -539,15 +539,18 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	// Single-read + immediate use is safe because the object cannot be
 	// freed while we hold the lock (object-cache reclaim requires the lock).
 	{
-		Element* best = (Element*)atomic_pointer_get<void>((void**)&fBest);
+		Element* best = atomic_pointer_get<Element>(&fBest);
 		if (best == element) {
-			atomic_pointer_test_and_set<void>((void**)&fBest, (Element*)NULL, element);
+			atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
+				element);
 		} else if (best != NULL) {
 			// Use the single snapshot: safe because best != element so it
 			// cannot be the element we just unlinked.
 			unsigned int bestPrio = sGetLink(best)->fPriority;
-			if (fHeads[bestPrio] == NULL)
-				atomic_pointer_test_and_set<void>((void**)&fBest, (Element*)NULL, best);
+			if (fHeads[bestPrio] == NULL) {
+				atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
+					best);
+			}
 		}
 	}
 }
@@ -584,7 +587,7 @@ RUN_QUEUE_TEMPLATE_LIST
 Element*
 RUN_QUEUE_CLASS_NAME::PeekBest() const
 {
-	Element* bestCandidate = (Element*)atomic_pointer_get<void>((void**)&fBest);
+	Element* bestCandidate = atomic_pointer_get<Element>(&fBest);
 	if (bestCandidate != NULL)
 	// Issue 1 fix: validate that fBest is still actually in a non-empty
 	// priority bucket before trusting it. A priority change followed by a
@@ -595,9 +598,10 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 		unsigned int bestPrio = bestLink->fPriority;
 		// If the bucket is empty the pointer is stale; fall through to rescan.
 		if (fHeads[bestPrio] != NULL)
-		return bestCandidate;
+			return bestCandidate;
 		// Invalidate stale cache and rescan.
-		atomic_pointer_test_and_set<void>((void**)&fBest, (Element*)NULL, bestCandidate);
+		atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
+			bestCandidate);
 	}
 
 	// search up to kDeadlineLookaheadLevels non-empty priority
@@ -670,9 +674,9 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	// Issue 1 fix: use atomic_pointer_test_and_set to avoid regressing quality
 	// if a concurrent PushFront has already set a better fBest.
 	if (globalBest != NULL) {
-		Element* best = (Element*)atomic_pointer_get<void>((void**)&fBest);
+		Element* best = atomic_pointer_get<Element>(&fBest);
 		while (best == NULL || sCompare(globalBest, best)) {
-			Element* was = (Element*)atomic_pointer_test_and_set<void>((void**)&fBest,
+			Element* was = atomic_pointer_test_and_set<Element>(&fBest,
 				globalBest, best);
 			if (was == best)
 				break;

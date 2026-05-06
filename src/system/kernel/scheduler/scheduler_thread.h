@@ -137,6 +137,7 @@ public:
 	}
 
 	SCHEDULER_INLINE	bool		IsEnqueued() const	{ return fEnqueued; }
+	SCHEDULER_INLINE	bool		IsReady() const		{ return fReady; }
 	SCHEDULER_INLINE	void		SetDequeued()
 	{
 		fEnqueued = false;
@@ -621,13 +622,6 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 	updateInteraction = false;
 
 	bool wasReady = fReady;
-	if (!fReady) {
-		// Issue 41 fix: AddLoad moved to after CPUCount guard (see below).
-		// Only set fReady and thread state here.
-		fReady = true;
-	}
-
-	fThread->state = B_THREAD_READY;
 
 	const int32 priority = GetEffectivePriority();
 	bool pinned = fThread->pinned_to_cpu > 0;
@@ -650,6 +644,9 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			// path the CPU liveness check happens under CPURunQueueLocker.
 			if (!wasReady && !IsIdle())
 				atomic_add(&gTotalRunnableThreads, 1);
+
+			fReady = true;
+			fThread->state = B_THREAD_READY;
 
 			ASSERT(!fEnqueued);
 			fEnqueued = true;
@@ -733,6 +730,9 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		// CPUCount guard in the non-pinned path.
 		if (!wasReady && !IsIdle())
 			atomic_add(&gTotalRunnableThreads, 1);
+
+		fReady = true;
+		fThread->state = B_THREAD_READY;
 
 		ASSERT(!fEnqueued);
 		fEnqueued = true;

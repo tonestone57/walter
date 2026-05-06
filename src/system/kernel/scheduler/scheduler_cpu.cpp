@@ -1097,46 +1097,11 @@ void
 CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 {
 	ASSERT(fCPUCount > 0);
-	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
+	ASSERT(atomic_get(&fIdleCPUCount) >= 1);
 
-	// Issue 31: Strictly reorder updates to fIdleCPUCount and fCPUCount.
-	// Issue 2 fix: eliminate TOCTOU in the else-if branch. The two separate
-	// atomic_get calls for fIdleCPUCount and fCPUCount can observe different
-	// states if a concurrent AddCPU modifies them between reads. Instead,
-	// take a single consistent snapshot of both values under a brief
-	// read of the key (already done above) and compare atomically.
-	{
-		int32 keyAtRemoval = CPUPriorityHeap::GetKey(cpu);
-		if (keyAtRemoval == B_IDLE_PRIORITY) {
-			atomic_add(&fIdleCPUCount, -1);
-		} else {
-			// Issue 2 fix: the original code used a single CAS and silently
-			// skipped the decrement on failure, allowing fIdleCPUCount to
-			// drift upward over repeated concurrent AddCPU races.  A retry
-			// loop ensures the decrement is always applied when the condition
-			// is satisfied, without busy-spinning indefinitely because
-			// concurrent AddCPU can only increase cpuCount (making the
-			// condition eventually false), bounding the retry count.
-			int32 idleCount = atomic_get(&fIdleCPUCount);
-			int32 cpuCount  = atomic_get(&fCPUCount);
-			if (idleCount < cpuCount) {
-				for (int32 i = 0; i < 100; i++) {
-					if (atomic_test_and_set(&fIdleCPUCount,
-							idleCount - 1, idleCount) == idleCount) {
-						break;
-					}
-					idleCount = atomic_get(&fIdleCPUCount);
-					cpuCount  = atomic_get(&fCPUCount);
-					// Issue 2 fix: if a concurrent RemoveCPU also decremented
-					// fCPUCount between our reads, idleCount may never be < cpuCount
-					// again. Re-read both atomically and re-evaluate the guard
-					// to avoid spinning when no decrement is needed.
-					if (idleCount >= cpuCount || cpuCount <= 0)
-						break;
-				}
-			}
-		}
-	}
+	// The CPU is guaranteed to be idle and accounted for in fIdleCPUCount
+	// before RemoveCPU is called (set by scheduler_set_cpu_enabled).
+	atomic_add(&fIdleCPUCount, -1);
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	int32 oldCPUCount = atomic_add(&fCPUCount, -1);

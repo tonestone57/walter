@@ -509,9 +509,6 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 				dprintf("scheduler: enqueue giving up after %d attempts "
 					"for thread %" B_PRId32 "\n", enqueueAttempts, thread->id);
 
-				if (!threadData->IsIdle())
-					atomic_add(&gTotalRunnableThreads, -1);
-
 				return false;
 			}
 		} else {
