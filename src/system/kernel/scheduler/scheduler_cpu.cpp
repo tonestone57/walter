@@ -1334,12 +1334,12 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 				if (newFLoad < 0)
 					newFLoad = 0;
 
-				int32 actual = atomic_test_and_set(&fLoad, newFLoad,
+				int32 actualLoad = atomic_test_and_set(&fLoad, newFLoad,
 					currentFLoad);
-				if (actual == currentFLoad)
+				if (actualLoad == currentFLoad)
 					break;
 
-				currentFLoad = actual;
+				currentFLoad = actualLoad;
 				if (++innerRetryCount >= kMaxFLoadRetries) {
 					// Best-effort: apply delta to most recently observed value.
 					atomic_add(&fLoad, delta);

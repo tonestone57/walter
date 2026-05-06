@@ -355,11 +355,7 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 			unsigned int priority = i * 32 + bit;
 
 			ASSERT(priority <= MaxPriority);
-#if B_HAIKU_64_BIT
-			Element* head = (Element*)atomic_get64((int64*)&fHeads[priority]);
-#else
-			Element* head = (Element*)atomic_get((int32*)&fHeads[priority]);
-#endif
+			Element* head = atomic_pointer_get<Element>(&fHeads[priority]);
 			ASSERT(head != NULL);
 			return head;
 		}
@@ -566,7 +562,8 @@ RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(priority <= MaxPriority);
-	return fHeads[priority];
+	return atomic_pointer_get<Element>(
+		const_cast<Element* volatile*>(&fHeads[priority]));
 }
 
 
@@ -591,18 +588,19 @@ Element*
 RUN_QUEUE_CLASS_NAME::PeekBest() const
 {
 	Element* bestCandidate = atomic_pointer_get<Element>(&fBest);
-	if (bestCandidate != NULL)
-	// Issue 1 fix: validate that fBest is still actually in a non-empty
-	// priority bucket before trusting it. A priority change followed by a
-	// Remove can leave fBest pointing to an element whose bucket is empty,
-	// causing PeekBest to return a stale/dangling entry.
-	{
+	if (bestCandidate != NULL) {
+		// Issue 1 fix: validate that fBest is still actually in a non-empty
+		// priority bucket before trusting it. A priority change followed by a
+		// Remove can leave fBest pointing to an element whose bucket is empty,
+		// causing PeekBest to return a stale/dangling entry.
 		RunQueueLink<Element>* bestLink = sGetLink(bestCandidate);
 		unsigned int bestPrio = bestLink->fPriority;
 		// If the bucket is empty the pointer is stale; fall through to rescan.
 		// Issue 28 fix: validate bestPrio is within bounds.
-		if (bestPrio <= MaxPriority && fHeads[bestPrio] != NULL)
+		if (bestPrio <= MaxPriority
+				&& atomic_pointer_get<Element>(&fHeads[bestPrio]) != NULL) {
 			return bestCandidate;
+		}
 		// Invalidate stale cache and rescan.
 		atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
 			bestCandidate);
@@ -636,7 +634,7 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 				int bit = fls(val) - 1;
 				val &= ~(1UL << bit);
 				unsigned int priority = i * 32 + bit;
-				Element* current = fHeads[priority];
+				Element* current = atomic_pointer_get<Element>(&fHeads[priority]);
 				if (current == NULL)
 					continue;
 
@@ -671,7 +669,7 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 			if (val == 0) continue;
 			int bit = fls(val) - 1;
-			globalBest = fHeads[i * 32 + bit];
+			globalBest = atomic_pointer_get<Element>(&fHeads[i * 32 + bit]);
 			if (globalBest != NULL) break;
 		}
 	}
@@ -723,7 +721,7 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare, const Predicate& predica
 				val &= ~(1UL << bit);
 
 				unsigned int priority = i * 32 + bit;
-				Element* current = fHeads[priority];
+				Element* current = atomic_pointer_get<Element>(&fHeads[priority]);
 
 				const int kSearchDepth = 32;
 				Element* best = NULL;
@@ -783,7 +781,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			val &= ~(1UL << bit);
 
 			unsigned int priority = i * 32 + bit;
-			Element* current = fHeads[priority];
+			Element* current = atomic_pointer_get<Element>(&fHeads[priority]);
 			int count = 0;
 
 			// Give each priority level a fair, equal share of the
