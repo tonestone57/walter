@@ -544,9 +544,10 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 			// Issue 84 fix: this IPI dispatch was unreachable before; now
 			// correctly wakes the target CPU when a thread is enqueued.
 			bigtime_t now = system_time();
-			if (ShouldReschedule(now, targetCPU->lastReschedule, kRescheduleCooldown)) {
+			if (ShouldReschedule(now, atomic_get64(&targetCPU->lastReschedule),
+					kRescheduleCooldown)) {
 				if (targetCPU->SetReschedulePending()) {
-					targetCPU->lastReschedule = now;
+					atomic_set64(&targetCPU->lastReschedule, now);
 					smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
 						NULL, SMP_MSG_FLAG_ASYNC);
 				}

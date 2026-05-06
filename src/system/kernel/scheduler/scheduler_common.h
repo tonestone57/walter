@@ -62,6 +62,16 @@ struct ThreadDataVRuntimeCompare {
 	}
 };
 
+
+struct ThreadDataOptimal {
+	template<typename ThreadData>
+	bool operator()(const ThreadData* /*thread*/) const
+	{
+		return true;
+	}
+};
+
+
 // Portability helpers for GCC 2.95 and architecture independence.
 // These wrappers ensure atomic operations and bit manipulation work correctly
 // on both 32-bit and 64-bit systems.

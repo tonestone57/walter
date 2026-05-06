@@ -419,8 +419,9 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		Element* best = atomic_pointer_get<Element>(&fBest);
 		if (best != NULL) {
 			unsigned int bestPriority = sGetLink(best)->fPriority;
+			// Issue 28 fix: validate bestPriority is within bounds.
 			// Validate the bucket is non-empty before trusting bestPriority.
-			if (fHeads[bestPriority] == NULL)
+			if (bestPriority > MaxPriority || fHeads[bestPriority] == NULL)
 				atomic_pointer_set<Element>(&fBest, element); // stale, replace
 			else if (priority > bestPriority)
 				atomic_pointer_set<Element>(&fBest, element);
@@ -481,7 +482,8 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		Element* best = atomic_pointer_get<Element>(&fBest);
 		if (best != NULL) {
 			unsigned int bestPriority = sGetLink(best)->fPriority;
-			if (fHeads[bestPriority] == NULL)
+			// Issue 28 fix: validate bestPriority is within bounds.
+			if (bestPriority > MaxPriority || fHeads[bestPriority] == NULL)
 				atomic_pointer_set<Element>(&fBest, element);
 			else if (priority > bestPriority)
 				atomic_pointer_set<Element>(&fBest, element);
@@ -547,7 +549,8 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 			// Use the single snapshot: safe because best != element so it
 			// cannot be the element we just unlinked.
 			unsigned int bestPrio = sGetLink(best)->fPriority;
-			if (fHeads[bestPrio] == NULL) {
+			// Issue 28 fix: validate bestPrio is within bounds.
+			if (bestPrio > MaxPriority || fHeads[bestPrio] == NULL) {
 				atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
 					best);
 			}
@@ -597,7 +600,8 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 		RunQueueLink<Element>* bestLink = sGetLink(bestCandidate);
 		unsigned int bestPrio = bestLink->fPriority;
 		// If the bucket is empty the pointer is stale; fall through to rescan.
-		if (fHeads[bestPrio] != NULL)
+		// Issue 28 fix: validate bestPrio is within bounds.
+		if (bestPrio <= MaxPriority && fHeads[bestPrio] != NULL)
 			return bestCandidate;
 		// Invalidate stale cache and rescan.
 		atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
@@ -615,10 +619,15 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	Element* globalBest = NULL;
 
 	for (int i = kBitmapSize - 1; i >= 0 && levelsSearched < kDeadlineLookaheadLevels; i--) {
-		uint32 val = fBitmap[i];
+		uint32 val = atomic_get((int32*)&fBitmap[i]);
 		if (val != 0) {
-			if (i == kBitmapSize - 1)
-				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+			if (i == kBitmapSize - 1) {
+				// Issue 61 fix: guard MaxPriority % 32 == 31.
+				if ((MaxPriority % 32) == 31)
+					; // all bits valid, no mask needed
+				else
+					val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+			}
 
 			if (val == 0)
 				continue;
@@ -655,9 +664,9 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	// levels without finding anything (shouldn't happen in practice but
 	// possible when kDeadlineLookaheadLevels < total occupied levels),
 	// do a full scan to guarantee a non-NULL result from a non-empty queue.
-	if (globalBest == NULL && fTotalCount > 0) {
+	if (globalBest == NULL && atomic_get(&fTotalCount) > 0) {
 		for (int i = kBitmapSize - 1; i >= 0; i--) {
-			uint32 val = fBitmap[i];
+			uint32 val = atomic_get((int32*)&fBitmap[i]);
 			if (i == kBitmapSize - 1 && (MaxPriority % 32) != 31)
 				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 			if (val == 0) continue;
@@ -696,10 +705,15 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare, const Predicate& predica
 	SCHEDULER_ENTER_FUNCTION();
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = fBitmap[i];
+		uint32 val = atomic_get((int32*)&fBitmap[i]);
 		if (val != 0) {
-			if (i == kBitmapSize - 1)
-				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+			if (i == kBitmapSize - 1) {
+				// Issue 61 fix: guard MaxPriority % 32 == 31.
+				if ((MaxPriority % 32) == 31)
+					; // all bits valid, no mask needed
+				else
+					val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+			}
 
 			if (val == 0)
 				continue;
@@ -754,10 +768,15 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 		if (totalBudget <= 0)
 			return NULL;
 
-		uint32 val = fBitmap[i];
+		uint32 val = atomic_get((int32*)&fBitmap[i]);
 
-		if (i == kBitmapSize - 1)
-			val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+		if (i == kBitmapSize - 1) {
+			// Issue 61 fix: guard MaxPriority % 32 == 31.
+			if ((MaxPriority % 32) == 31)
+				; // all bits valid, no mask needed
+			else
+				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
+		}
 
 		while (val != 0) {
 			int bit = fls(val) - 1;
