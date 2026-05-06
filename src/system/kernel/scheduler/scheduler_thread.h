@@ -69,6 +69,7 @@ public:
 			do {
 				w = gCPUEnabled.Bits(i);
 				// Ensure word-boundary consistency during concurrent updates.
+				memory_read_barrier();
 				if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
 					break;
 				cpu_pause();

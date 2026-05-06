@@ -75,9 +75,8 @@ struct LocalNodeStealAction {
 			*stolen = victim->StealThread(stolenPriority, cpu->ID());
 
 			if (*stolen != NULL) {
-				// Re-verify affinity under the lock if it's not unconstrained
-				if ((*stolen)->GetThread()->cpumask.IsEmpty()
-						|| (*stolen)->GetThread()->cpumask.GetBit(cpu->ID())) {
+				// Re-verify affinity under the lock.
+				if ((*stolen)->GetCPUMask().GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core());
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
@@ -134,9 +133,8 @@ struct GlobalRandomStealAction {
 			*stolen = victim->StealThread(stolenPriority, cpu->ID());
 
 			if (*stolen != NULL) {
-				// Re-verify affinity under the lock if it's not unconstrained
-				if ((*stolen)->GetThread()->cpumask.IsEmpty()
-						|| (*stolen)->GetThread()->cpumask.GetBit(cpu->ID())) {
+				// Re-verify affinity under the lock.
+				if ((*stolen)->GetCPUMask().GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core());
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
@@ -158,22 +156,16 @@ struct GlobalRandomStealAction {
 };
 
 struct StealThreadPredicate {
-	const CPUSet& enabledSnapshot;
 	int32 thiefCPU;
 
-	StealThreadPredicate(const CPUSet& e, int32 t)
-		: enabledSnapshot(e), thiefCPU(t) {}
+	StealThreadPredicate(int32 t)
+		: thiefCPU(t) {}
 
 	bool operator()(ThreadData* td) const {
 		if (td->IsIdle())
 			return false;
 
-		const CPUSet& cpumask = td->GetThread()->cpumask;
-		if (cpumask.IsEmpty()) {
-			return enabledSnapshot.GetBit(thiefCPU);
-		}
-		return cpumask.GetBit(thiefCPU)
-			&& enabledSnapshot.GetBit(thiefCPU);
+		return td->GetCPUMask().GetBit(thiefCPU);
 	}
 };
 
@@ -713,13 +705,13 @@ CPUEntry::_TryStealWork()
 
 	// Optimization: Treat "all enabled" mask as no mask to enable fast sampling
 	CPUSet enabledSnapshot;
-	{
-		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-		for (int32 w = 0; w < kWords; w++) {
-			int32* ptr = const_cast<int32*>(
-				reinterpret_cast<const int32*>(gCPUEnabled.Bits()) + w);
-			enabledSnapshot.SetWord(w, (uint32)atomic_get(ptr));
-		}
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int32 w = 0; w < kWords; w++) {
+		uint32 bits = gCPUEnabled.Bits(w);
+		// Ensure word-boundary consistency during concurrent updates.
+		if (bits != gCPUEnabled.Bits(w))
+			bits = gCPUEnabled.Bits(w);
+		enabledSnapshot.SetWord(w, bits);
 	}
 
 	// Pick a random starting point to avoid convoys
@@ -755,10 +747,8 @@ CPUEntry::_TryStealWork()
 			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
 			if (stolen != NULL) {
-				// Re-verify affinity under the lock
-				if (stolen->GetThread()->cpumask.IsEmpty()
-						|| (stolen->GetThread()->cpumask.GetBit(fCPUNumber)
-							&& enabledSnapshot.GetBit(fCPUNumber))) {
+				// Re-verify affinity under the lock.
+				if (stolen->GetCPUMask().GetBit(fCPUNumber)) {
 					stolen->MigrateTo(fCore);
 					stolen->fStolen = true;
 					fCore->IncrementTotalThreadCount();
@@ -1017,33 +1007,23 @@ CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Issue 27 fix: snapshot gCPUEnabled once before the predicate loop.
-	// GetCPUMask() re-reads gCPUEnabled with atomic retry logic on every
-	// call. During work stealing this predicate is invoked for every
-	// candidate thread in the victim's run queue. Since gCPUEnabled only
-	// changes during hot-plug (rare), caching it here avoids redundant
-	// atomic reads on the hot stealing path.
-	//
-	// We snapshot into a local CPUSet and pass thiefCPU as a plain bit
-	// check: if the thread's cpumask is empty (no affinity constraint) it
-	// can run anywhere; otherwise it must allow thiefCPU.
 	CPUSet enabledSnapshot;
-	{
-		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-		// Issue 27 fix: CPUSet::Bits() returns a pointer to uint32 words.
-		// Casting to int32* for atomic_get is required by the atomic API
-		// but assumes 4-byte alignment.
-		// static_assert replaced by comment for GCC 2.95
-		// alignof(CPUSet) >= 4
-		for (int32 w = 0; w < kWords; w++) {
-			int32* ptr = const_cast<int32*>(
-				reinterpret_cast<const int32*>(gCPUEnabled.Bits()) + w);
-			enabledSnapshot.SetWord(w, (uint32)atomic_get(ptr));
-		}
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int32 i = 0; i < kWords; i++) {
+		uint32 w;
+		int retry = 0;
+		do {
+			w = gCPUEnabled.Bits(i);
+			memory_read_barrier();
+			if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
+				break;
+			cpu_pause();
+		} while (true);
+		enabledSnapshot.SetWord(i, w);
 	}
 
 	// Explicitly exclude idle threads from steal candidates.
-	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(enabledSnapshot, thiefCPU));
+	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(thiefCPU));
 
 	if (thread != NULL) {
 		stolenPriority = thread->GetEffectivePriority();

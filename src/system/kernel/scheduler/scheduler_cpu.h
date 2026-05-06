@@ -838,12 +838,12 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 }
 
 
-inline uint64
+inline native_cpu_mask_t
 SchedulerNode::IdlePackageMask() const
 {
 	SCHEDULER_ENTER_FUNCTION();
 	// use scheduler_atomic_get for 32-bit correctness.
-	return (uint64)scheduler_atomic_get(
+	return scheduler_atomic_get(
 		const_cast<native_cpu_mask_t*>(&fIdlePackageMask));
 }
 
@@ -1018,8 +1018,7 @@ CoreEntry::HasHighPriorityThread() const
 	// the next reschedule corrects it — acceptable for this hint.
 	const uint32* bitmap = fRunQueue.GetBitmap();
 	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = (uint32)atomic_get(
-			const_cast<int32*>(reinterpret_cast<const int32*>(bitmap + i)));
+		uint32 val = (uint32)atomic_get((int32*)&bitmap[i]);
 		if (i == ThreadRunQueue::kBitmapSize - 1)
 			val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 		if (val != 0) {
