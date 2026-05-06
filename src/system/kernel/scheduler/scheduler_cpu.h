@@ -82,7 +82,10 @@ public:
 						void			Init(int32 id, CoreEntry* core);
 
 	inline				int32			ID() const	{ return fCPUNumber; }
-	inline				CoreEntry*		Core() const	{ return fCore; }
+	inline				CoreEntry*		Core() const
+	{
+		return atomic_pointer_get<CoreEntry>(const_cast<CoreEntry**>(&fCore));
+	}
 
 	inline				int32			PerformanceScale() const
 											{ return fPerformanceScale; }
@@ -536,9 +539,10 @@ CPUEntry::GetLoad() const
 	int32 load = atomic_get(const_cast<int32*>(&fLoad));
 
 	// Penalize SMT siblings to prefer physical cores
-	if (fCore != NULL && fCore->CPUCount() > 1) {
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(const_cast<CoreEntry**>(&fCore));
+	if (core != NULL && core->CPUCount() > 1) {
 		// If at least one other thread is running on this core
-		if (fCore->ThreadCount() > 1)
+		if (core->ThreadCount() > 1)
 			load += kSMTPenalty;
 	}
 

@@ -257,7 +257,7 @@ void
 CPUEntry::Init(int32 id, CoreEntry* core)
 {
 	fCPUNumber = id;
-	fCore = core;
+	atomic_pointer_set<CoreEntry>(&fCore, core);
 	// Issue 23 fix: improve per-CPU RNG seed entropy. On boot, system_time()
 	// returns small values with low entropy; successive CPUs initialized
 	// microseconds apart get highly correlated seeds. Fold in the address of
@@ -445,12 +445,14 @@ CPUEntry::UpdatePriority(int32 priority)
 	int32 oldPriority = CPUPriorityHeap::GetKey(this);
 	if (oldPriority == priority)
 		return;
-	fCore->CPUHeap()->ModifyKey(this, priority);
+
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(const_cast<CoreEntry**>(&fCore));
+	core->CPUHeap()->ModifyKey(this, priority);
 
 	if (oldPriority == B_IDLE_PRIORITY)
-		fCore->CPUWakesUp(this);
+		core->CPUWakesUp(this);
 	else if (priority == B_IDLE_PRIORITY)
-		fCore->CPUGoesIdle(this);
+		core->CPUGoesIdle(this);
 }
 
 
@@ -500,9 +502,10 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	if (pinnedThread != NULL)
 		pinnedPriority = pinnedThread->GetEffectivePriority();
 
-	CoreRunQueueLocker coreLocker(fCore);
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(const_cast<CoreEntry**>(&fCore));
+	CoreRunQueueLocker coreLocker(core);
 
-	ThreadData* sharedThread = fCore->PeekThread();
+	ThreadData* sharedThread = core->PeekThread();
 	if (sharedThread == NULL && pinnedThread == NULL) {
 		// try to steal work from other cores in the same package
 		sharedThread = _TryStealWork();
@@ -554,12 +557,13 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	}
 
 	if (sharedPriority > pinnedPriority) {
+		CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 		if (sharedThread->fStolen) {
-			fCore->DecrementTotalThreadCount();
+			core->DecrementTotalThreadCount();
 			sharedThread->fStolen = false;
 		}
-		if (sharedThread->Core() == fCore && !sharedThreadIsFloating)
-			fCore->Remove(sharedThread);
+		if (sharedThread->Core() == core && !sharedThreadIsFloating)
+			core->Remove(sharedThread);
 		return sharedThread;
 	}
 
@@ -632,7 +636,7 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
 		locker.Unlock();
 
 		fMeasureActiveTime += active;
-		fCore->IncreaseActiveTime(active);
+		atomic_pointer_get<CoreEntry>(const_cast<CoreEntry**>(&fCore))->IncreaseActiveTime(active);
 
 		// Compute system_time() once and pass it to UpdateActivity so
 		// the virtual-runtime ceiling uses the same timestamp as the rest of
@@ -658,7 +662,7 @@ CPUEntry::TrackLoad(ThreadData* nextThreadData)
 
 	// Issue 62 fix: update thread timestamps BEFORE calling
 	// _RequestPerformanceLevel. The performance level request reads
-	// nextThreadData->GetLoad() and fCore->GetLoad(), which are based on
+	// nextThreadData->GetLoad() and Core()->GetLoad(), which are based on
 	// accounting that uses last_kernel_time/last_user_time. Updating them
 	// first ensures _RequestPerformanceLevel sees fresh accounting data.
 	Thread* nextThread = nextThreadData->GetThread();
@@ -701,7 +705,8 @@ CPUEntry::_TryStealWork()
 	SCHEDULER_ENTER_FUNCTION();
 
 	// iterate over other cores in the package and try to steal work
-	PackageEntry* package = fCore->Package();
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	PackageEntry* package = core->Package();
 
 	int32 registeredCores = package->RegisteredCoreCount();
 	if (registeredCores <= 1)
@@ -767,9 +772,10 @@ CPUEntry::_TryStealWork()
 				const CPUSet& threadMask = stolen->GetThread()->cpumask;
 				if ((threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber))
 						&& enabled.GetBit(fCPUNumber)) {
-					stolen->MigrateTo(fCore);
+					CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+					stolen->MigrateTo(core);
 					stolen->fStolen = true;
-					fCore->IncrementTotalThreadCount();
+					core->IncrementTotalThreadCount();
 				} else {
 					// Victim no longer matches thief after lock acquisition.
 					// Push it back and abort this victim.

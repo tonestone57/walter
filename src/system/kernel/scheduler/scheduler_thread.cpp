@@ -160,7 +160,7 @@ void
 ThreadData::Init()
 {
 	_InitBase();
-	fCore = NULL;
+	atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
 
 	Thread* currentThread = thread_get_current_thread();
 	ThreadData* currentThreadData = currentThread->scheduler_data;
@@ -199,7 +199,7 @@ ThreadData::Init(CoreEntry* core)
 {
 	_InitBase();
 
-	fCore = core;
+	atomic_pointer_set<CoreEntry>(&fCore, core);
 	fHomePackage = core->Package()->ID();
 	fReady = true;
 	fNeededLoad = 0;
@@ -221,9 +221,11 @@ ThreadData::Dump() const
 	kprintf("\twent_sleep:\t\t%" B_PRId64 "\n", fWentSleep);
 	kprintf("\twent_sleep_active:\t%" B_PRId64 "\n", fWentSleepActive);
 	kprintf("\tinteractivity_score:\t%" B_PRId32 "\n", fInteractivityScore);
+
+	CoreEntry* core = Core();
 	kprintf("\tcore:\t\t\t%" B_PRId32 "\n",
-		fCore != NULL ? fCore->ID() : -1);
-	if (fCore != NULL && HasCacheExpired())
+		core != NULL ? core->ID() : -1);
+	if (core != NULL && HasCacheExpired())
 		kprintf("\tcache affinity has expired\n");
 	if (fQuickStartCredit)
 		kprintf("\tquick start credit is set\n");
@@ -285,7 +287,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 					// race). Let the retry loop handle it.
 					continue;
 				}
-				if (fCore != targetCore)
+				if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
 					MigrateTo(targetCore);
 				return false;
 			}
@@ -312,7 +314,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 		if (fHomePackage == -1)
 			fHomePackage = targetCore->Package()->ID();
 
-		if (fCore != targetCore)
+		if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
 			MigrateTo(targetCore);
 		return rescheduleNeeded;
 	}
@@ -338,7 +340,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 		}
 	}
 
-	if (fCore != targetCore)
+	if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
 		MigrateTo(targetCore);
 	return false;
 }
@@ -372,7 +374,7 @@ ThreadData::ComputeQuantum() const
 	// fCore between the three calls below, mixing data from two different
 	// CoreEntry objects. The reads are still individually approximate (no
 	// run-queue lock is held), but they now all refer to the same object.
-	CoreEntry* const core = fCore;
+	CoreEntry* const core = atomic_pointer_get<CoreEntry>(&fCore);
 
 	// Defensive null guard: fCore can be transiently NULL during a race
 	// between UnassignCore() and the subsequent MigrateTo() (e.g. rapid CPU
@@ -483,11 +485,11 @@ ThreadData::UnassignCore(bool running)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	ASSERT(fCore != NULL);
+	ASSERT(atomic_pointer_get<CoreEntry>(&fCore) != NULL);
 	if (running || fThread->state == B_THREAD_READY)
 		fReady = false;
 	if (!fReady)
-		fCore = NULL;
+		atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
 }
 
 
@@ -587,7 +589,9 @@ ThreadData::_ComputeNeededLoad()
 	if (oldLoad == fNeededLoad)
 		return; // no change
 
-	fCore->ChangeLoad(fNeededLoad - oldLoad);
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	if (core != NULL)
+		core->ChangeLoad(fNeededLoad - oldLoad);
 }
 
 
@@ -763,7 +767,7 @@ ThreadData::MigrateTo(CoreEntry* targetCore)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (fCore == targetCore)
+	if (atomic_pointer_get<CoreEntry>(&fCore) == targetCore)
 		return;
 
 	// Issue 77 fix: document the intentional unsigned underflow when epoch==0.
@@ -779,13 +783,14 @@ ThreadData::MigrateTo(CoreEntry* targetCore)
 
 	if (fReady) {
 		if (gTrackCoreLoad) {
-			if (fCore != NULL)
-				fCore->RemoveLoad(fNeededLoad, true);
+			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+			if (core != NULL)
+				core->RemoveLoad(fNeededLoad, true);
 			targetCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, true);
 		}
 	}
 
-	fCore = targetCore;
+	atomic_pointer_set<CoreEntry>(&fCore, targetCore);
 }
 
 

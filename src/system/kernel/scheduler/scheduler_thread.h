@@ -161,7 +161,10 @@ public:
 		fIsForeground = foreground;
 	}
 
-	SCHEDULER_INLINE	CoreEntry*	Core() const	{ return fCore; }
+	SCHEDULER_INLINE	CoreEntry*	Core() const
+	{
+		return atomic_pointer_get<CoreEntry>(&fCore);
+	}
 			void		UnassignCore(bool running = false);
 			void		MigrateTo(CoreEntry* targetCore);
 
@@ -317,11 +320,11 @@ ThreadData::_UpdatePriorityBoost()
 			//
 			// Strategy: take a snapshot, acquire the lock on that snapshot,
 			// then re-validate under the lock before proceeding.
-			CoreEntry* core = fCore;
+			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 			if (core != NULL) {
 				CoreRunQueueLocker coreLocker(core);
 				// Re-validate: fCore may have changed while we waited.
-				if (fCore != core) {
+				if (atomic_pointer_get<CoreEntry>(&fCore) != core) {
 					// Migration occurred; abandon and let the new core handle it.
 					return;
 				}
@@ -612,12 +615,13 @@ ThreadData::PutBack()
 		cpu->PushFront(this, priority);
 	} else {
 	enqueue_core:
-		CoreRunQueueLocker _(fCore);
+		CoreEntry* core = Core();
+		CoreRunQueueLocker _(core);
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
 		fEnqueuedInCPURunQueue = false;
 
-		fCore->PushFront(this, priority);
+		core->PushFront(this, priority);
 	}
 }
 
@@ -682,18 +686,21 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		// Both CoreCPULocker and CoreRunQueueLocker dereference their argument
 		// in the constructor; a NULL fCore here causes a null-dereference panic
 		// before we even reach the existing null check below.
-		if (fCore == NULL)
+		// both reach the existing null check below.
+		CoreEntry* coreSnapshot = atomic_pointer_get<CoreEntry>(&fCore);
+		if (coreSnapshot == NULL)
 			return false;
 
-		CoreCPULocker cpuLocker(fCore);
-		CoreRunQueueLocker locker(fCore);
+		CoreCPULocker cpuLocker(coreSnapshot);
+		CoreRunQueueLocker locker(coreSnapshot);
 
 		// Issue 1 fix: re-check under the lock — fCore may have been set to
-		// NULL between the guard above and lock acquisition.  The explicit
-		// Unlock() calls were redundant: AutoLocker's destructor checks
-		// fLocked and will not double-unlock.  RAII handles cleanup correctly.
-		if (fCore == NULL)
+		// NULL (or migrated to another core) between the guard above and
+		// lock acquisition. If so, return false to trigger a retry.
+		if (atomic_pointer_get<CoreEntry>(&fCore) != coreSnapshot)
 			return false;
+
+		CoreEntry* core = coreSnapshot;
 
 		// move the fStolen decrement AFTER the CPUCount guard so
 		// that a return-false path never leaves TotalThreadCount decremented
@@ -702,8 +709,8 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		// the CPUCount guard, leaving load permanently inflated when
 		// CPUCount==0 caused return false. Move AddLoad AFTER all guards.
 		if (fStolen) {
-			if (fCore->CPUCount() == 0) {
-				fCore->DecrementTotalThreadCount();
+			if (core->CPUCount() == 0) {
+				core->DecrementTotalThreadCount();
 				fStolen = false;
 				return false;
 			}
@@ -711,21 +718,21 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			if (gTrackCoreLoad && !wasReady) {
 				bigtime_t timeSlept = system_time() - fWentSleep;
 				bool updateLoad = timeSlept > 0;
-				fCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
+				core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
 				if (updateLoad) {
 					fMeasureAvailableTime += timeSlept;
 					_ComputeNeededLoad();
 				}
 			}
-			fCore->DecrementTotalThreadCount();
+			core->DecrementTotalThreadCount();
 			fStolen = false;
-		} else if (fCore->CPUCount() == 0) {
+		} else if (core->CPUCount() == 0) {
 			return false;
 		} else if (!wasReady && gTrackCoreLoad) {
 			// Issue 41 fix: for non-stolen threads, AddLoad after CPUCount guard.
 			bigtime_t timeSlept = system_time() - fWentSleep;
 			bool updateLoad = timeSlept > 0;
-			fCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
+			core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
 			if (updateLoad) {
 				fMeasureAvailableTime += timeSlept;
 				_ComputeNeededLoad();
@@ -747,18 +754,18 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		fEnqueued = true;
 		fEnqueuedInCPURunQueue = false;
 
-		ThreadData* top = fCore->PeekThread();
+		ThreadData* top = core->PeekThread();
 		wasRunQueueEmpty = (top == NULL || top->IsIdle());
 
 		bool isForeground = fIsForeground;
 
 		if (fQuickStartCredit || isForeground) {
-			fCore->PushFront(this, priority);
+			core->PushFront(this, priority);
 			requestPreemption = true;
 			if (isForeground)
 				updateInteraction = true;
 		} else
-			fCore->PushBack(this, priority);
+			core->PushBack(this, priority);
 	}
 	// Issue 3: gTotalRunnableThreads is incremented AFTER the CPUCount == 0
 	// guards in both the pinned and non-pinned paths.  There is no return-false
@@ -789,11 +796,12 @@ ThreadData::Dequeue()
 		return true;
 	}
 
-	CoreRunQueueLocker _(fCore);
+		CoreEntry* core = Core();
+		CoreRunQueueLocker _(core);
 	if (!fEnqueued)
 		return false;
 
-	fCore->Remove(this);
+	core->Remove(this);
 	ASSERT(!fEnqueued);
 	return true;
 }
