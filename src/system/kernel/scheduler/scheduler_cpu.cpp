@@ -84,6 +84,8 @@ struct LocalNodeStealAction {
 					victim->UnlockRunQueue();
 					return true;
 				} else {
+					// Victim no longer matches thief after lock acquisition.
+					// Push it back and abort this victim.
 					victim->PushBack(*stolen, (*stolen)->GetRunQueueLink()->fPriority);
 					*stolen = NULL;
 				}
@@ -141,6 +143,8 @@ struct GlobalRandomStealAction {
 					victim->UnlockRunQueue();
 					return true;
 				} else {
+					// Victim no longer matches thief after lock acquisition.
+					// Push it back and abort this victim.
 					victim->PushBack(*stolen, (*stolen)->GetRunQueueLink()->fPriority);
 					*stolen = NULL;
 				}

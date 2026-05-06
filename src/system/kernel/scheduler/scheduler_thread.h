@@ -65,13 +65,11 @@ public:
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 		for (int32 i = 0; i < kWords; i++) {
 			uint32 w;
-			int32* ptr = const_cast<int32*>((const int32*)gCPUEnabled.Bits() + i);
 			int retry = 0;
 			do {
-				w = (uint32)atomic_get(ptr);
-				// Issue 12 fix: retry threshold was 4 (retry reaches 4),
-				// should be 3.
-				if (w == (uint32)atomic_get(ptr) || ++retry >= 3)
+				w = gCPUEnabled.Bits(i);
+				// Ensure word-boundary consistency during concurrent updates.
+				if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
 					break;
 				cpu_pause();
 			} while (true);
@@ -824,21 +822,19 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		// Use a monotonic base to prevent clock skew from causing starvation.
 		const bigtime_t maxLatency = atomic_get64(&sMaxLatency);
 		const bigtime_t kLookahead = maxLatency * 1000LL;
-		if (now == 0)
+
+		if (now == 0) {
 			now = system_time();
+			if (now == 0) {
+				// Issue 58 fix: when system_time()==0 (very early boot), skip
+				// fVirtualRuntime update entirely rather than accumulating uncapped.
+				// During this phase fairness is not critical and fVirtualRuntime==0
+				// for all threads is a better starting state than skewed values.
+				goto track_core_load;
+			}
+		}
 
 		// Issue 58 fix: the goto below is inside the if (!IsRealTime()) block.
-		// However, the goto target (track_core_load:) is OUTSIDE this block,
-		// and the fVirtualRuntime += delta line executes before the goto.
-		// For real-time threads, IsRealTime() is true so they never enter
-		// this block.
-		if (now == 0) {
-			// Issue 58 fix: when system_time()==0 (very early boot), skip
-			// fVirtualRuntime update entirely rather than accumulating uncapped.
-			// During this phase fairness is not critical and fVirtualRuntime==0
-			// for all threads is a better starting state than skewed values.
-			goto track_core_load;
-		}
 
 		bigtime_t ceiling;
 		if (now > B_INT64_MAX - kLookahead)
