@@ -103,7 +103,7 @@ public:
 
 	inline	status_t	GetInitStatus();
 
-	inline	Element*	PeekMaximum() const;
+	Element*			PeekMaximum() const;
 
 	inline	void		PushFront(Element* element, unsigned int priority);
 	inline	void		PushBack(Element* element, unsigned int priority);
@@ -348,16 +348,19 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 					val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 			}
 
-			if (val == 0)
-				continue;
+			// (lockless): iterate bits because fHeads may be NULL if Remove
+			// is concurrent and has cleared fHeads but not yet fBitmap.
+			while (val != 0) {
+				int bit = fls(val) - 1;
+				unsigned int priority = i * 32 + bit;
 
-			int bit = fls(val) - 1;
-			unsigned int priority = i * 32 + bit;
+				ASSERT(priority <= MaxPriority);
+				Element* head = atomic_pointer_get<Element>(&fHeads[priority]);
+				if (head != NULL)
+					return head;
 
-			ASSERT(priority <= MaxPriority);
-			Element* head = atomic_pointer_get<Element>(&fHeads[priority]);
-			ASSERT(head != NULL);
-			return head;
+				val &= ~(1UL << bit);
+			}
 		}
 	}
 

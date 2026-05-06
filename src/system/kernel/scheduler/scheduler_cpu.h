@@ -254,7 +254,8 @@ public:
 	inline				bool			HasHighPriorityThread() const;
 
 						ThreadData*		StealThread(int32& stolenPriority,
-											int32 thiefCPU);
+											int32 thiefCPU,
+											const CPUSet& enabled);
 
 						void			PushFront(ThreadData* thread,
 											int32 priority);

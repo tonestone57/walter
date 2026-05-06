@@ -502,8 +502,6 @@ choose_core(const ThreadData* threadData)
 	if (core == NULL)
 		return NULL;
 
-	ASSERT(core != NULL);
-
 	// If the selected core is not much better than previousCore, prefer
 	// previousCore for cache locality.
 	// We use the cached cacheExpired result instead of re-reading
@@ -544,7 +542,6 @@ rebalance(const ThreadData* threadData)
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* core = threadData->Core();
-	ASSERT(core != NULL);
 
 	// Get the least loaded core.
 	CPUSet mask = threadData->GetCPUMask();

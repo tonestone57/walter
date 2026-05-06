@@ -46,9 +46,11 @@ struct LocalNodeStealAction {
 	CPUEntry* cpu;
 	PackageEntry* package;
 	ThreadData** stolen;
+	const CPUSet& enabled;
 
-	LocalNodeStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s)
-		: cpu(c), package(p), stolen(s) {}
+	LocalNodeStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s,
+		const CPUSet& e)
+		: cpu(c), package(p), stolen(s), enabled(e) {}
 
 	bool operator()(PackageEntry* entry) const {
 		if (*stolen != NULL)
@@ -72,11 +74,13 @@ struct LocalNodeStealAction {
 
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
-			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+			*stolen = victim->StealThread(stolenPriority, cpu->ID(), enabled);
 
 			if (*stolen != NULL) {
 				// Re-verify affinity under the lock.
-				if ((*stolen)->GetCPUMask().GetBit(cpu->ID())) {
+				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
+				if ((threadMask.IsEmpty() || threadMask.GetBit(cpu->ID()))
+						&& enabled.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core());
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
@@ -101,9 +105,11 @@ struct GlobalRandomStealAction {
 	CPUEntry* cpu;
 	PackageEntry* package;
 	ThreadData** stolen;
+	const CPUSet& enabled;
 
-	GlobalRandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s)
-		: cpu(c), package(p), stolen(s) {}
+	GlobalRandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s,
+		const CPUSet& e)
+		: cpu(c), package(p), stolen(s), enabled(e) {}
 
 	bool operator()(PackageEntry* entry) const {
 		if (*stolen != NULL)
@@ -130,11 +136,13 @@ struct GlobalRandomStealAction {
 
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
-			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+			*stolen = victim->StealThread(stolenPriority, cpu->ID(), enabled);
 
 			if (*stolen != NULL) {
 				// Re-verify affinity under the lock.
-				if ((*stolen)->GetCPUMask().GetBit(cpu->ID())) {
+				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
+				if ((threadMask.IsEmpty() || threadMask.GetBit(cpu->ID()))
+						&& enabled.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core());
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
@@ -156,16 +164,19 @@ struct GlobalRandomStealAction {
 };
 
 struct StealThreadPredicate {
+	const CPUSet& enabled;
 	int32 thiefCPU;
 
-	StealThreadPredicate(int32 t)
-		: thiefCPU(t) {}
+	StealThreadPredicate(const CPUSet& e, int32 t)
+		: enabled(e), thiefCPU(t) {}
 
 	bool operator()(ThreadData* td) const {
 		if (td->IsIdle())
 			return false;
 
-		return td->GetCPUMask().GetBit(thiefCPU);
+		const CPUSet& threadMask = td->GetThread()->cpumask;
+		return (threadMask.IsEmpty() || threadMask.GetBit(thiefCPU))
+			&& enabled.GetBit(thiefCPU);
 	}
 };
 
@@ -703,15 +714,19 @@ CPUEntry::_TryStealWork()
 	// the left-shift by kMaxCoresPerPackage is already guarded by "if (shift > 0)"
 	// in PackageEntry::GetIdleCorePacking; no undefined behaviour occurs.
 
-	// Optimization: Treat "all enabled" mask as no mask to enable fast sampling
-	CPUSet enabledSnapshot;
+	CPUSet enabled;
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-	for (int32 w = 0; w < kWords; w++) {
-		uint32 bits = gCPUEnabled.Bits(w);
-		// Ensure word-boundary consistency during concurrent updates.
-		if (bits != gCPUEnabled.Bits(w))
-			bits = gCPUEnabled.Bits(w);
-		enabledSnapshot.SetWord(w, bits);
+	for (int32 i = 0; i < kWords; i++) {
+		uint32 w;
+		int retry = 0;
+		do {
+			w = gCPUEnabled.Bits(i);
+			memory_read_barrier();
+			if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
+				break;
+			cpu_pause();
+		} while (true);
+		enabled.SetWord(i, w);
 	}
 
 	// Pick a random starting point to avoid convoys
@@ -744,11 +759,14 @@ CPUEntry::_TryStealWork()
 		// Use TryLock to avoid contention
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
-			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
+			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber,
+				enabled);
 
 			if (stolen != NULL) {
 				// Re-verify affinity under the lock.
-				if (stolen->GetCPUMask().GetBit(fCPUNumber)) {
+				const CPUSet& threadMask = stolen->GetThread()->cpumask;
+				if ((threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber))
+						&& enabled.GetBit(fCPUNumber)) {
 					stolen->MigrateTo(fCore);
 					stolen->fStolen = true;
 					fCore->IncrementTotalThreadCount();
@@ -783,7 +801,8 @@ CPUEntry::_TryStealWork()
 	if (node == NULL)
 		goto phase3;
 
-	search_local_node(node, LocalNodeStealAction(this, package, &stolen));
+	search_local_node(node, LocalNodeStealAction(this, package, &stolen,
+		enabled));
 
 	if (stolen != NULL)
 		return stolen;
@@ -801,7 +820,8 @@ phase3:
 	// Why: This is the last resort. If the local node is empty, you are willing to pay
 	// the high cost to steal from a remote socket to avoid sleeping.
 
-	search_global_random(GlobalRandomStealAction(this, package, &stolen));
+	search_global_random(GlobalRandomStealAction(this, package, &stolen,
+		enabled));
 
 	if (stolen != NULL)
 		return stolen;
@@ -1003,27 +1023,14 @@ CoreEntry::Remove(ThreadData* thread)
 
 
 ThreadData*
-CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
+CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU,
+	const CPUSet& enabled)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	CPUSet enabledSnapshot;
-	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-	for (int32 i = 0; i < kWords; i++) {
-		uint32 w;
-		int retry = 0;
-		do {
-			w = gCPUEnabled.Bits(i);
-			memory_read_barrier();
-			if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
-				break;
-			cpu_pause();
-		} while (true);
-		enabledSnapshot.SetWord(i, w);
-	}
-
 	// Explicitly exclude idle threads from steal candidates.
-	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(thiefCPU));
+	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(enabled,
+		thiefCPU));
 
 	if (thread != NULL) {
 		stolenPriority = thread->GetEffectivePriority();
