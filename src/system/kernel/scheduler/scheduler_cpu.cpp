@@ -75,11 +75,18 @@ struct LocalNodeStealAction {
 			*stolen = victim->StealThread(stolenPriority, cpu->ID());
 
 			if (*stolen != NULL) {
-				(*stolen)->MigrateTo(cpu->Core());
-				(*stolen)->fStolen = true;
-				cpu->Core()->IncrementTotalThreadCount();
-				victim->UnlockRunQueue();
-				return true;
+				// Re-verify affinity under the lock if it's not unconstrained
+				if ((*stolen)->GetThread()->cpumask.IsEmpty()
+						|| (*stolen)->GetThread()->cpumask.GetBit(cpu->ID())) {
+					(*stolen)->MigrateTo(cpu->Core());
+					(*stolen)->fStolen = true;
+					cpu->Core()->IncrementTotalThreadCount();
+					victim->UnlockRunQueue();
+					return true;
+				} else {
+					victim->PushBack(*stolen, (*stolen)->GetRunQueueLink()->fPriority);
+					*stolen = NULL;
+				}
 			}
 
 			victim->UnlockRunQueue();
@@ -125,11 +132,18 @@ struct GlobalRandomStealAction {
 			*stolen = victim->StealThread(stolenPriority, cpu->ID());
 
 			if (*stolen != NULL) {
-				(*stolen)->MigrateTo(cpu->Core());
-				(*stolen)->fStolen = true;
-				cpu->Core()->IncrementTotalThreadCount();
-				victim->UnlockRunQueue();
-				return true;
+				// Re-verify affinity under the lock if it's not unconstrained
+				if ((*stolen)->GetThread()->cpumask.IsEmpty()
+						|| (*stolen)->GetThread()->cpumask.GetBit(cpu->ID())) {
+					(*stolen)->MigrateTo(cpu->Core());
+					(*stolen)->fStolen = true;
+					cpu->Core()->IncrementTotalThreadCount();
+					victim->UnlockRunQueue();
+					return true;
+				} else {
+					victim->PushBack(*stolen, (*stolen)->GetRunQueueLink()->fPriority);
+					*stolen = NULL;
+				}
 			}
 
 			victim->UnlockRunQueue();
@@ -692,6 +706,18 @@ CPUEntry::_TryStealWork()
 	// (clarification): GetIdleCorePacking shift guard — when shift==0
 	// the left-shift by kMaxCoresPerPackage is already guarded by "if (shift > 0)"
 	// in PackageEntry::GetIdleCorePacking; no undefined behaviour occurs.
+
+	// Optimization: Treat "all enabled" mask as no mask to enable fast sampling
+	CPUSet enabledSnapshot;
+	{
+		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+		for (int32 w = 0; w < kWords; w++) {
+			int32* ptr = const_cast<int32*>(
+				reinterpret_cast<const int32*>(gCPUEnabled.Bits()) + w);
+			enabledSnapshot.SetWord(w, (uint32)atomic_get(ptr));
+		}
+	}
+
 	// Pick a random starting point to avoid convoys
 	// We use multiplicative mapping to avoid modulo.
 	int32 startIndex = (int32)get_random_index(GetRandom(), registeredCores);
@@ -725,15 +751,19 @@ CPUEntry::_TryStealWork()
 			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
 			if (stolen != NULL) {
-				// Issue 9: MigrateTo and IncrementTotalThreadCount use only
-				// atomic operations (atomic_add, atomic_add64) with no
-				// spinlocks.  Calling them while holding victim->TryLockRunQueue
-				// does NOT violate lock ordering: they cannot block or acquire
-				// any spinlock that another CPU could hold while waiting for
-				// the victim run-queue lock.
-				stolen->MigrateTo(fCore);
-				stolen->fStolen = true;
-				fCore->IncrementTotalThreadCount();
+				// Re-verify affinity under the lock
+				if (stolen->GetThread()->cpumask.IsEmpty()
+						|| (stolen->GetThread()->cpumask.GetBit(fCPUNumber)
+							&& enabledSnapshot.GetBit(fCPUNumber))) {
+					stolen->MigrateTo(fCore);
+					stolen->fStolen = true;
+					fCore->IncrementTotalThreadCount();
+				} else {
+					// Victim no longer matches thief after lock acquisition.
+					// Push it back and abort this victim.
+					victim->PushBack(stolen, stolen->GetRunQueueLink()->fPriority);
+					stolen = NULL;
+				}
 			}
 
 			victim->UnlockRunQueue();
@@ -1407,7 +1437,7 @@ void
 SchedulerNode::Init(int32 id)
 {
 	fNodeID = id;
-	fIdlePackageMask = 0;
+	scheduler_atomic_set(&fIdlePackageMask, 0);
 	fPackageStartIndex = 0;
 	fPackageCount = 0;
 }
@@ -1429,8 +1459,8 @@ PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex)
 	fPackageID = id;
 	fNode = node;
 	fNodeIndex = nodeIndex;
-	fIdleCoreMask = 0;
-	fEnabledCoreMask = 0;
+	scheduler_atomic_set(&fIdleCoreMask, 0);
+	scheduler_atomic_set(&fEnabledCoreMask, 0);
 	fCoreCount = 0;
 	fRegisteredCoreCount = 0;
 	fMaxAttempts = 0;

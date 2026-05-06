@@ -122,6 +122,16 @@ scheduler_atomic_get(native_cpu_mask_t* value)
 #endif
 }
 
+static inline void
+scheduler_atomic_set(native_cpu_mask_t* value, native_cpu_mask_t newValue)
+{
+#if SCHEDULER_MASK_IS_64_BIT
+	atomic_set64((int64 volatile*)value, (int64)newValue);
+#else
+	atomic_set((int32 volatile*)value, (int32)newValue);
+#endif
+}
+
 static inline native_cpu_mask_t
 scheduler_atomic_test_and_set(native_cpu_mask_t* value, native_cpu_mask_t newValue,
 	native_cpu_mask_t expectedValue)

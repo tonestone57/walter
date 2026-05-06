@@ -386,6 +386,17 @@ choose_core(const ThreadData* threadData)
 				CoreEntry* candidate = package->GetCore(bitIdx);
 				if (candidate != NULL
 						&& (!useMask || candidate->CPUMask().Matches(mask))) {
+					// enforce thread-coloring type preference on the
+					// idle-core result.
+					if (preferMax && candidate->Type() != gMaxCoreType
+							&& gMinCoreType != gMaxCoreType) {
+						continue;
+					}
+					if (preferMin && candidate->Type() != gMinCoreType
+							&& gMinCoreType != gMaxCoreType) {
+						continue;
+					}
+
 					// Issue 65 fix: only accept the candidate if it truly
 					// matches. Do not set core and then break only to have the
 					// outer loop reset it — test the full condition here so
@@ -488,6 +499,9 @@ choose_core(const ThreadData* threadData)
 		}
 	}
 
+	if (core == NULL)
+		return NULL;
+
 	ASSERT(core != NULL);
 
 	// If the selected core is not much better than previousCore, prefer
@@ -505,12 +519,6 @@ choose_core(const ThreadData* threadData)
 					typeOk = false;
 				else if (preferMin && previousCore->Type() != gMinCoreType)
 					typeOk = false;
-
-				// Issue 87 fix: core can be NULL here if all searches failed.
-				// core->GetScore() would dereference NULL and crash.
-				// Fall through to the NULL-return path instead.
-				if (core == NULL)
-					return previousCore;
 
 				if (typeOk &&
 					core->GetScore() + kLoadDifference >= previousCore->GetScore())

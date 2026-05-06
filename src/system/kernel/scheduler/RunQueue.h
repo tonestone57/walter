@@ -397,13 +397,16 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 
 	elementLink->fPriority = priority;
 	elementLink->fNext = fHeads[priority];
-	if (fHeads[priority] != NULL)
+	if (fHeads[priority] != NULL) {
 		sGetLink(fHeads[priority])->fPrevious = element;
-	else {
+		memory_write_barrier();
+		atomic_pointer_set<Element>(&fHeads[priority], element);
+	} else {
 		fTails[priority] = element;
-		fBitmap[priority / 32] |= (1UL << (priority % 32));
+		atomic_pointer_set<Element>(&fHeads[priority], element);
+		memory_write_barrier();
+		atomic_or((int32*)&fBitmap[priority / 32], (1UL << (priority % 32)));
 	}
-	fHeads[priority] = element;
 
 	// Issue 46 fix: read fBest once and validate its bucket before reading
 	// sGetLink(best)->fPriority, which is racy if 'best' was concurrently
@@ -465,13 +468,16 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 
 	elementLink->fPriority = priority;
 	elementLink->fPrevious = fTails[priority];
-	if (fTails[priority] != NULL)
+	if (fTails[priority] != NULL) {
 		sGetLink(fTails[priority])->fNext = element;
-	else {
-		fHeads[priority] = element;
-		fBitmap[priority / 32] |= (1UL << (priority % 32));
+		memory_write_barrier();
+		fTails[priority] = element;
+	} else {
+		atomic_pointer_set<Element>(&fHeads[priority], element);
+		fTails[priority] = element;
+		memory_write_barrier();
+		atomic_or((int32*)&fBitmap[priority / 32], (1UL << (priority % 32)));
 	}
-	fTails[priority] = element;
 
 	// Issue 46 fix: same snapshot-based fBest update as PushFront.
 	{
@@ -504,20 +510,26 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	ASSERT(elementLink->fPrevious != NULL || fHeads[priority] == element);
 	ASSERT(elementLink->fNext != NULL || fTails[priority] == element);
 
-	if (elementLink->fPrevious != NULL)
+	if (elementLink->fPrevious != NULL) {
 		sGetLink(elementLink->fPrevious)->fNext = elementLink->fNext;
-	else
-		fHeads[priority] = elementLink->fNext;
-	if (elementLink->fNext != NULL)
+		memory_write_barrier();
+	} else
+		atomic_pointer_set<Element>(&fHeads[priority], elementLink->fNext);
+
+	if (elementLink->fNext != NULL) {
 		sGetLink(elementLink->fNext)->fPrevious = elementLink->fPrevious;
-	else
+		memory_write_barrier();
+	} else
 		fTails[priority] = elementLink->fPrevious;
 
-	ASSERT((fHeads[priority] == NULL && fTails[priority] == NULL)
-		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
+	ASSERT((atomic_pointer_get<Element>(&fHeads[priority]) == NULL
+			&& fTails[priority] == NULL)
+		|| (atomic_pointer_get<Element>(&fHeads[priority]) != NULL
+			&& fTails[priority] != NULL));
 
-	if (fHeads[priority] == NULL) {
-		fBitmap[priority / 32] &= ~(1UL << (priority % 32));
+	if (atomic_pointer_get<Element>(&fHeads[priority]) == NULL) {
+		atomic_and((int32*)&fBitmap[priority / 32], ~(1UL << (priority % 32)));
+		memory_write_barrier();
 	}
 
 	atomic_add(&fTotalCount, -1);
