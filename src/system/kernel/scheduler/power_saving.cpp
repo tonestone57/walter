@@ -108,7 +108,7 @@ struct PackagePackingAction {
 // --- Scheduler tuning (power saving mode improvements) ---
 static const int kConsolidationThreshold = 2;
 static const int kMaxCPUsToScan = 8;
-static const bigtime_t kIdleConsolidationCooldown = 2000;
+static const bigtime_t kIdleConsolidationCooldown __attribute__((aligned(8))) = 2000;
 
 
 static CoreEntry** sSmallTaskCore;

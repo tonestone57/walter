@@ -40,7 +40,7 @@ struct MinimumLoadAction {
 
 // --- Scheduler tuning (low latency mode improvements) ---
 static const int kMigrationThreshold = 2;
-static const bigtime_t kMigrationCooldown = 1000;
+static const bigtime_t kMigrationCooldown __attribute__((aligned(8))) = 1000;
 static const int kMaxCPUsToScan = 8;
 
 

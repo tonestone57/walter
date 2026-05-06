@@ -56,9 +56,9 @@ private:
 	struct FunctionEntry {
 			FunctionData*	fFunction;
 
-			nanotime_t		fEntryTime;
-			nanotime_t		fOthersTime;
-			nanotime_t		fProfilerTime;
+			nanotime_t		fEntryTime __attribute__((aligned(8)));
+			nanotime_t		fOthersTime __attribute__((aligned(8)));
+			nanotime_t		fProfilerTime __attribute__((aligned(8)));
 	};
 
 			uint32			_FunctionCount() const;

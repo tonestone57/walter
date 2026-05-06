@@ -1381,13 +1381,13 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 			// many retry failures. The value from function entry may be
 			// several epochs stale on a heavily contended system.
 			int32 freshCPUCount = atomic_get((int32*)&fCPUCount);
-			if (freshCPUCount <= 0) return;
-			if (cpuCount > 0) {
-				int32 load = (int32)(oldCombined >> 32) / freshCPUCount;
-				load = ((int64)load * fScoreFactor) >> 16;
-				atomic_set(&fPackage->fCoreLoads[fPackageIndex],
-					min_c(load, (int32)kMaxLoad));
-			}
+			if (freshCPUCount <= 0)
+				return;
+
+			int32 load = (int32)(oldCombined >> 32) / freshCPUCount;
+			load = ((int64)load * fScoreFactor) >> 16;
+			atomic_set(&fPackage->fCoreLoads[fPackageIndex],
+				min_c(load, (int32)kMaxLoad));
 			return;
 		}
 		oldCombined = actual;
