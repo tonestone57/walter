@@ -53,8 +53,9 @@ ThreadData::_InitBase()
 	fHomePackage = -1;
 
 	fEffectivePriority = GetPriority();
-	fBaseQuantum = sQuantumLengths[min_c(GetEffectivePriority(),
-		THREAD_MAX_SET_PRIORITY)];
+	atomic_set64((int64*)&fBaseQuantum,
+		atomic_get64(&sQuantumLengths[min_c(GetEffectivePriority(),
+			THREAD_MAX_SET_PRIORITY)]));
 
 	fTimeUsed = 0;
 
@@ -349,7 +350,7 @@ ThreadData::ComputeQuantum() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (IsRealTime())
-		return fBaseQuantum;
+		return atomic_get64((int64*)&fBaseQuantum);
 
 	// Issue 11 fix: ComputeQuantum is only called while the caller holds
 	// SchedulerModeLocker (a read lock on CPUEntry::fSchedulerModeLock).
@@ -670,7 +671,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 	// ComputeQuantumLengths() sets gDeadlineBucketSize to a positive value.
 	if (bucketSize <= 0) {
 		fEffectivePriority = GetPriority();
-		fBaseQuantum = Scheduler::MinimalQuantum();
+		atomic_set64((int64*)&fBaseQuantum, Scheduler::MinimalQuantum());
 		return;
 	}
 
@@ -734,7 +735,8 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		fEffectivePriority = (int32)urgency;
 	}
 
-	fBaseQuantum = atomic_get64(&sQuantumLengths[GetEffectivePriority()]);
+	atomic_set64((int64*)&fBaseQuantum,
+		atomic_get64(&sQuantumLengths[GetEffectivePriority()]));
 }
 
 

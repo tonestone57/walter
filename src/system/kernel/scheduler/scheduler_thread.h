@@ -112,8 +112,15 @@ public:
 	SCHEDULER_INLINE	void		GoesAway();
 	SCHEDULER_INLINE	void		Dies();
 
-	SCHEDULER_INLINE	bigtime_t	WentSleep() const	{ return fWentSleep; }
-	SCHEDULER_INLINE	bigtime_t	WentSleepActive() const	{ return fWentSleepActive; }
+	SCHEDULER_INLINE	bigtime_t	WentSleep() const
+	{
+		return atomic_get64((int64*)&fWentSleep);
+	}
+
+	SCHEDULER_INLINE	bigtime_t	WentSleepActive() const
+	{
+		return atomic_get64((int64*)&fWentSleepActive);
+	}
 
 	SCHEDULER_INLINE	void		PutBack();
 	SCHEDULER_INLINE	bool		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
@@ -129,11 +136,14 @@ public:
 
 	static	bigtime_t	sMaxLatency __attribute__((aligned(8)));
 
-	SCHEDULER_INLINE	bigtime_t	GetVirtualRuntime() const { return fVirtualRuntime; }
+	SCHEDULER_INLINE	bigtime_t	GetVirtualRuntime() const
+	{
+		return atomic_get64((int64*)&fVirtualRuntime);
+	}
 
 	SCHEDULER_INLINE	void		SetQuantum(bigtime_t quantum)
 	{
-		fBaseQuantum = quantum;
+		atomic_set64((int64*)&fBaseQuantum, quantum);
 	}
 
 	SCHEDULER_INLINE	bool		IsEnqueued() const	{ return fEnqueued; }
