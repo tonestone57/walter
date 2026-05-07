@@ -383,7 +383,7 @@ ThreadData::SetStolenInterruptTime(bigtime_t interruptTime)
 	// Otherwise fLastInterruptTime stays at a "future" value permanently
 	// suppressing all stolen-time accounting for this thread.
 	if (delta > 0) {
-		fStolenTime += delta;
+		atomic_add64((int64*)&fStolenTime, delta);
 	} else if (delta < 0) {
 		// Clock went backward; reset baseline to avoid permanent suppression.
 		// Do not add the negative delta — the time is simply unaccountable.
@@ -401,10 +401,13 @@ ThreadData::GetQuantumLeft()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	bigtime_t stolenTime = fStolenTime;
-	fStolenTime = 0;
+	bigtime_t stolenTime;
+	do {
+		stolenTime = atomic_get64((int64*)&fStolenTime);
+	} while (atomic_test_and_set64((int64*)&fStolenTime, 0, stolenTime)
+			!= stolenTime);
 
-	bigtime_t quantum = ComputeQuantum() - fTimeUsed;
+	bigtime_t quantum = ComputeQuantum() - atomic_get64((int64*)&fTimeUsed);
 	quantum += stolenTime;
 	quantum = max_c(quantum, Scheduler::MinimalQuantum());
 	if (quantum > Scheduler::MaximumLatency())
@@ -434,25 +437,27 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	// quantum-end check fires. When that happens, quantum - fTimeUsed
 	// underflows to a large positive, granting an unintended stolen-time
 	// bonus. Cap at 2 * MaximumLatency() as a generous but safe upper bound.
-	fTimeUsed += timeUsed;
+	bigtime_t timeUsedTotal = atomic_add64((int64*)&fTimeUsed, timeUsed)
+		+ timeUsed;
+
+	// Issue 68 fix: cap fTimeUsed accumulation.
 	const bigtime_t kMaxTimeUsed = Scheduler::MaximumLatency() * 2;
-	if (fTimeUsed > kMaxTimeUsed)
-		fTimeUsed = kMaxTimeUsed;
+	if (timeUsedTotal > kMaxTimeUsed) {
+		timeUsedTotal = kMaxTimeUsed;
+		atomic_set64((int64*)&fTimeUsed, kMaxTimeUsed);
+	}
 
 	bigtime_t quantum = ComputeQuantum();
 
 	// if the quantum shrank (e.g. core load increased since the
 	// last scheduling decision) fTimeUsed may already exceed the new quantum.
-	// Without this guard 'timeLeft' goes negative, bypasses the skipTime
-	// check below, and the thread runs a full extra quantum before the
-	// negative value eventually wraps the interactivity score.
-	if (fTimeUsed >= quantum) {
-		fTimeUsed = 0;
+	if (timeUsedTotal >= quantum) {
+		atomic_set64((int64*)&fTimeUsed, 0);
 		_UpdateDeadline();
 		return true;
 	}
 
-	bigtime_t timeLeft = quantum - fTimeUsed;
+	bigtime_t timeLeft = quantum - timeUsedTotal;
 	timeLeft = max_c(bigtime_t(0), timeLeft);
 
 	// too little time left, it's better make the next quantum a bit longer
@@ -461,7 +466,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 		timeLeft = 0;
 		fInteractivityScore = min_c(fInteractivityScore + 20, 1000);
 	} else if (wasPreempted || timeLeft <= skipTime) {
-		fStolenTime += timeLeft;
+		atomic_add64((int64*)&fStolenTime, timeLeft);
 		timeLeft = 0;
 
 		if (!wasPreempted) {
@@ -471,7 +476,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	}
 
 	if (timeLeft == 0) {
-		fTimeUsed = 0;
+		atomic_set64((int64*)&fTimeUsed, 0);
 		_UpdateDeadline();
 		return true;
 	}
@@ -852,10 +857,11 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		else
 			ceiling = now + kLookahead;
 
-		if (fVirtualRuntime < ceiling - delta)
-			fVirtualRuntime += delta;
-		else if (fVirtualRuntime < ceiling)
-			fVirtualRuntime = ceiling;
+		bigtime_t vRuntime = atomic_get64((int64*)&fVirtualRuntime);
+		if (vRuntime < ceiling - delta)
+			atomic_add64((int64*)&fVirtualRuntime, delta);
+		else if (vRuntime < ceiling)
+			atomic_set64((int64*)&fVirtualRuntime, ceiling);
 		// If fVirtualRuntime is already at or above ceiling (e.g. ceiling moved
 		// backward due to clock skew), leave it unchanged rather than reducing
 		// it, which would spuriously boost the thread's scheduling priority.
@@ -865,8 +871,8 @@ track_core_load:
 	if (!gTrackCoreLoad)
 		return;
 
-	fMeasureAvailableTime += active;
-	fMeasureAvailableActiveTime += active;
+	atomic_add64((int64*)&fMeasureAvailableTime, active);
+	atomic_add64((int64*)&fMeasureAvailableActiveTime, active);
 }
 
 

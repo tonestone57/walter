@@ -201,10 +201,12 @@ static inline T*
 atomic_pointer_get(T* volatile* pointer)
 {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (T*)atomic_get64((int64 volatile*)pointer);
+	T* value = (T*)atomic_get64((int64 volatile*)pointer);
 #else
-	return (T*)atomic_get((int32 volatile*)pointer);
+	T* value = (T*)atomic_get((int32 volatile*)pointer);
 #endif
+	memory_read_barrier();
+	return value;
 }
 
 
@@ -212,6 +214,7 @@ template<typename T>
 static inline void
 atomic_pointer_set(T* volatile* pointer, T* value)
 {
+	memory_write_barrier();
 #if SCHEDULER_MASK_IS_64_BIT
 	atomic_set64((int64 volatile*)pointer, (int64)value);
 #else
@@ -360,7 +363,7 @@ IsCPUIDle(const uint64& mask, int cpu)
 
 struct SchedulerSnapshot {
 	int32 totalRunnable;
-	uint64 idleMask;
+	uint64 idleMask __attribute__((aligned(8)));
 };
 
 

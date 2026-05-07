@@ -38,12 +38,12 @@ bigtime_t ThreadData::sMaxLatency __attribute__((aligned(8)));
 void
 ThreadData::_InitBase()
 {
-	fStolenTime = 0;
-	fQuantumStart = 0;
-	fLastInterruptTime = 0;
+	atomic_set64((int64*)&fStolenTime, 0);
+	atomic_set64((int64*)&fQuantumStart, 0);
+	atomic_set64((int64*)&fLastInterruptTime, 0);
 
-	fWentSleep = 0;
-	fWentSleepActive = 0;
+	atomic_set64((int64*)&fWentSleep, 0);
+	atomic_set64((int64*)&fWentSleepActive, 0);
 
 	fEnqueued = false;
 	fEnqueuedInCPURunQueue = false;
@@ -57,14 +57,14 @@ ThreadData::_InitBase()
 		atomic_get64(&sQuantumLengths[min_c(GetEffectivePriority(),
 			THREAD_MAX_SET_PRIORITY)]));
 
-	fTimeUsed = 0;
+	atomic_set64((int64*)&fTimeUsed, 0);
 
 	fMeasureAvailableActiveTime = 0;
 	fLastMeasureAvailableTime = 0;
 	fMeasureAvailableTime = 0;
 
 	fVirtualRuntime = 0;
-	fVirtualDeadline = 0;
+	atomic_set64((int64*)&fVirtualDeadline, 0);
 
 	fInteractivityScore = 500;
 
@@ -181,11 +181,11 @@ ThreadData::Init()
 			memory_read_barrier();
 			homeB = atomic_get(&currentThreadData->fHomePackage);
 		} while (homeA != homeB && ++retries < 8);
-		fVirtualRuntime = vrt;
-		fHomePackage = homeB;
+		atomic_set64((int64*)&fVirtualRuntime, vrt);
+		atomic_set(&fHomePackage, homeB);
 	} else {
 		fNeededLoad = 0;
-		fVirtualRuntime = 0;
+		atomic_set64((int64*)&fVirtualRuntime, 0);
 		fHomePackage = -1;
 	}
 
@@ -542,10 +542,10 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 	bigtime_t now = system_time();
 	bigtime_t timeUsed = now - fQuantumStart;
 	ASSERT(timeUsed >= 0);
-	fTimeUsed += timeUsed;
+	atomic_add64((int64*)&fTimeUsed, timeUsed);
 
 	bigtime_t quantum = ComputeQuantum();
-	bigtime_t timeLeft = quantum - fTimeUsed;
+	bigtime_t timeLeft = quantum - atomic_get64((int64*)&fTimeUsed);
 	if (timeLeft > 0) {
 		// Donate remaining slice to the beneficiary.
 		// Callers MUST NOT hold any run-queue spinlock when invoking this
@@ -559,13 +559,13 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 		// are already disabled by the caller's contract.
 		ASSERT(!are_interrupts_enabled());
 		SpinLocker locker(beneficiary->scheduler_lock);
-		beneficiaryData->fStolenTime += timeLeft;
+		atomic_add64((int64*)&beneficiaryData->fStolenTime, timeLeft);
 	}
 
 	// Exhaust donor slice: we expect the donor to yield or be descheduled
 	// immediately after this call to prevent double-dipping.
 	fQuantumStart = now;
-	fTimeUsed = quantum;
+	atomic_set64((int64*)&fTimeUsed, quantum);
 }
 
 

@@ -1128,7 +1128,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 
 	// The CPU is guaranteed to be idle and accounted for in fIdleCPUCount
 	// before RemoveCPU is called (set by scheduler_set_cpu_enabled).
-	atomic_add(&fIdleCPUCount, -1);
+	int32 oldIdleCount = atomic_add(&fIdleCPUCount, -1);
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	int32 oldCPUCount = atomic_add(&fCPUCount, -1);
@@ -1142,7 +1142,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// (all its CPUs were idle). Calling unconditionally when a non-idle
 		// core is removed decrements fIdleCoreCount below its true value,
 		// corrupting idle core accounting for the entire package.
-		if (atomic_get(&fIdleCPUCount) >= 1)
+		if (oldIdleCount >= 1)
 			fPackage->RemoveIdleCore(this);
 
 		// Issue 66 fix: use CoreRunQueueLocker per-iteration to prevent
