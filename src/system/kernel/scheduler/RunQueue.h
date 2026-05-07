@@ -356,10 +356,8 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 
 				ASSERT(priority <= MaxPriority);
 				Element* head = atomic_pointer_get<Element>(&fHeads[priority]);
-				if (head != NULL) {
-					memory_read_barrier();
+				if (head != NULL)
 					return head;
-				}
 
 				val &= ~(1UL << bit);
 			}

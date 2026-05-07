@@ -59,11 +59,11 @@ ThreadData::_InitBase()
 
 	atomic_set64((int64*)&fTimeUsed, 0);
 
-	fMeasureAvailableActiveTime = 0;
-	fLastMeasureAvailableTime = 0;
-	fMeasureAvailableTime = 0;
+	atomic_set64((int64*)&fMeasureAvailableActiveTime, 0);
+	atomic_set64((int64*)&fLastMeasureAvailableTime, 0);
+	atomic_set64((int64*)&fMeasureAvailableTime, 0);
 
-	fVirtualRuntime = 0;
+	atomic_set64((int64*)&fVirtualRuntime, 0);
 	atomic_set64((int64*)&fVirtualDeadline, 0);
 
 	fInteractivityScore = 500;
@@ -214,7 +214,7 @@ ThreadData::Dump() const
 	kprintf("\teffective_priority:\t%" B_PRId32 "\n", GetEffectivePriority());
 
 	kprintf("\ttime_used:\t\t%" B_PRId64 " us (quantum: %" B_PRId64 " us)\n",
-		fTimeUsed, ComputeQuantum());
+		atomic_get64((int64*)&fTimeUsed), ComputeQuantum());
 	kprintf("\tstolen_time:\t\t%" B_PRId64 " us\n", fStolenTime);
 	kprintf("\tquantum_start:\t\t%" B_PRId64 " us\n", fQuantumStart);
 	kprintf("\tneeded_load:\t\t%" B_PRId32 "%%\n", fNeededLoad / 10);
@@ -540,7 +540,7 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 		return;
 
 	bigtime_t now = system_time();
-	bigtime_t timeUsed = now - fQuantumStart;
+	bigtime_t timeUsed = now - atomic_get64((int64*)&fQuantumStart);
 	ASSERT(timeUsed >= 0);
 	atomic_add64((int64*)&fTimeUsed, timeUsed);
 
@@ -564,7 +564,7 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 
 	// Exhaust donor slice: we expect the donor to yield or be descheduled
 	// immediately after this call to prevent double-dipping.
-	fQuantumStart = now;
+	atomic_set64((int64*)&fQuantumStart, now);
 	atomic_set64((int64*)&fTimeUsed, quantum);
 }
 
@@ -653,7 +653,7 @@ ThreadData::_UpdateDeadline()
 			slice = kMinSlice;
 	}
 
-	fVirtualDeadline = now + slice;
+	atomic_set64((int64*)&fVirtualDeadline, now + slice);
 
 	_ComputeEffectivePriority(now);
 }
@@ -687,7 +687,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		// If Deadline is Now (or passed), Urgency is Max.
 		// If Deadline is far, Urgency is 0.
 
-		bigtime_t diff = fVirtualDeadline - now;
+		bigtime_t diff = atomic_get64((int64*)&fVirtualDeadline) - now;
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
 		bigtime_t urgencyBoost = (fInteractivityScore * bucketSize) / 1000;

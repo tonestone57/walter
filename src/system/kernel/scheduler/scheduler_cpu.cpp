@@ -294,8 +294,8 @@ CPUEntry::Start()
 {
 	fThreadCount = 0;
 	fLoad = 0;
-	fMeasureTime = system_time();
-	fMeasureActiveTime = 0;
+	atomic_set64((int64*)&fMeasureTime, system_time());
+	atomic_set64((int64*)&fMeasureActiveTime, 0);
 }
 
 
@@ -466,7 +466,7 @@ CPUEntry::ComputeLoad()
 	ASSERT(fCPUNumber == smp_get_current_cpu());
 
 	int32 currentLoad = atomic_get(&fLoad);
-	int oldLoad = compute_load(fMeasureTime, fMeasureActiveTime, currentLoad,
+	int oldLoad = compute_load(atomic_get64((int64*)&fMeasureTime), atomic_get64((int64*)&fMeasureActiveTime), currentLoad,
 			system_time());
 	if (oldLoad < 0)
 		return;
@@ -635,7 +635,7 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
 		cpuEntry->active_time += active;
 		locker.Unlock();
 
-		fMeasureActiveTime += active;
+		atomic_add64((int64*)&fMeasureActiveTime, active);
 		atomic_pointer_get<CoreEntry>(&fCore)->IncreaseActiveTime(active);
 
 		// Compute system_time() once and pass it to UpdateActivity so
@@ -1113,7 +1113,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 		} else {
 			atomic_add(&fCPUCount, -1);
 		}
-		atomic_add(&fIdleCPUCount, -1);
+		int32 oldIdleCount = atomic_add(&fIdleCPUCount, -1);
 		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
 			cpu->ID());
 	}
@@ -1142,7 +1142,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// (all its CPUs were idle). Calling unconditionally when a non-idle
 		// core is removed decrements fIdleCoreCount below its true value,
 		// corrupting idle core accounting for the entire package.
-		if (oldIdleCount >= 1)
+		if (oldIdleCount == 1)
 			fPackage->RemoveIdleCore(this);
 
 		// Issue 66 fix: use CoreRunQueueLocker per-iteration to prevent

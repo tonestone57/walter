@@ -98,7 +98,7 @@ public:
 							CPUEntry*& targetCPU);
 
 	SCHEDULER_INLINE	void		SetLastInterruptTime(bigtime_t interruptTime)
-							{ fLastInterruptTime = interruptTime; }
+							{ atomic_set64((int64*)&fLastInterruptTime, interruptTime); }
 	SCHEDULER_INLINE	void		SetStolenInterruptTime(bigtime_t interruptTime);
 
 			bigtime_t	ComputeQuantum() const;
@@ -404,8 +404,7 @@ ThreadData::GetQuantumLeft()
 	bigtime_t stolenTime;
 	do {
 		stolenTime = atomic_get64((int64*)&fStolenTime);
-	} while (atomic_test_and_set64((int64*)&fStolenTime, 0, stolenTime)
-			!= stolenTime);
+	} while (atomic_test_and_set64((int64*)&fStolenTime, 0, stolenTime) != stolenTime);
 
 	bigtime_t quantum = ComputeQuantum() - atomic_get64((int64*)&fTimeUsed);
 	quantum += stolenTime;
@@ -421,7 +420,7 @@ inline void
 ThreadData::StartQuantum()
 {
 	SCHEDULER_ENTER_FUNCTION();
-	fQuantumStart = system_time();
+	atomic_set64((int64*)&fQuantumStart, system_time());
 }
 
 
@@ -437,10 +436,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	// quantum-end check fires. When that happens, quantum - fTimeUsed
 	// underflows to a large positive, granting an unintended stolen-time
 	// bonus. Cap at 2 * MaximumLatency() as a generous but safe upper bound.
-	bigtime_t timeUsedTotal = atomic_add64((int64*)&fTimeUsed, timeUsed)
-		+ timeUsed;
-
-	// Issue 68 fix: cap fTimeUsed accumulation.
+	bigtime_t timeUsedTotal = atomic_add64((int64*)&fTimeUsed, timeUsed) + timeUsed;
 	const bigtime_t kMaxTimeUsed = Scheduler::MaximumLatency() * 2;
 	if (timeUsedTotal > kMaxTimeUsed) {
 		timeUsedTotal = kMaxTimeUsed;
@@ -448,9 +444,6 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	}
 
 	bigtime_t quantum = ComputeQuantum();
-
-	// if the quantum shrank (e.g. core load increased since the
-	// last scheduling decision) fTimeUsed may already exceed the new quantum.
 	if (timeUsedTotal >= quantum) {
 		atomic_set64((int64*)&fTimeUsed, 0);
 		_UpdateDeadline();
@@ -539,13 +532,13 @@ ThreadData::GoesAway()
 		fInteractivityScore = min_c(fInteractivityScore + 10, 1000);
 	}
 
-	fLastInterruptTime = 0;
+	atomic_set64((int64*)&fLastInterruptTime, 0);
 
 	// Cache system_time() once; calling it twice gives slightly
 	// different timestamps under heavy interrupt load, skewing sleep-time
 	// accounting.
 	bigtime_t now = system_time();
-	fWentSleep = now;
+	atomic_set64((int64*)&fWentSleep, now);
 	// Issue 7 fix: fCore can be set to NULL by a concurrent MigrateTo() call.
 	// The original code checked for NULL once then called GetActiveTime() and
 	// RemoveLoad() in separate statements — if fCore became NULL between the
@@ -557,7 +550,7 @@ ThreadData::GoesAway()
 	// is real. The snapshot approach is the minimal safe fix.
 	{
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(&fCore);
-		fWentSleepActive = (snap != NULL) ? snap->GetActiveTime() : 0;
+		atomic_set64((int64*)&fWentSleepActive, (snap != NULL) ? snap->GetActiveTime() : 0);
 		if (gTrackCoreLoad && snap != NULL)
 			fLoadMeasurementEpoch = snap->RemoveLoad(fNeededLoad, false);
 	}
