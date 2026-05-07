@@ -175,11 +175,11 @@ ThreadData::Init()
 		bigtime_t vrt;
 		int retries = 0;
 		do {
-			homeA = atomic_get(const_cast<int32*>(&currentThreadData->fHomePackage));
+			homeA = atomic_get(&currentThreadData->fHomePackage);
 			memory_read_barrier();
 			vrt = atomic_get64((int64*)&currentThreadData->fVirtualRuntime);
 			memory_read_barrier();
-			homeB = atomic_get(const_cast<int32*>(&currentThreadData->fHomePackage));
+			homeB = atomic_get(&currentThreadData->fHomePackage);
 		} while (homeA != homeB && ++retries < 8);
 		fVirtualRuntime = vrt;
 		fHomePackage = homeB;
@@ -500,8 +500,7 @@ ThreadData::ComputeQuantumLengths()
 
 	atomic_set64(&sMaxLatency, Scheduler::MaximumLatency());
 
-	const bigtime_t kBaseSlice = atomic_get64(
-		const_cast<int64*>(&Scheduler::gDeadlineBucketSize));
+	const bigtime_t kBaseSlice = atomic_get64(&Scheduler::gDeadlineBucketSize);
 	const bigtime_t kQuantum0 = Scheduler::BaseQuantum();
 	const bigtime_t kQuantum1 = kQuantum0 * Scheduler::QuantumMultiplier(0);
 	const bigtime_t kQuantum2 = kQuantum0 * Scheduler::QuantumMultiplier(1);
@@ -667,8 +666,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 
 	// Cache bucket size: avoids redundant atomic reads on this hot path.
 	// The value is effectively constant within a scheduling decision.
-	const bigtime_t bucketSize = atomic_get64(
-		const_cast<int64*>(&Scheduler::gDeadlineBucketSize));
+	const bigtime_t bucketSize = atomic_get64(&Scheduler::gDeadlineBucketSize);
 
 	// Issue 14 fix: guard against division-by-zero if bucketSize is 0.
 	// This can occur transiently during mode initialisation before

@@ -446,7 +446,7 @@ CPUEntry::UpdatePriority(int32 priority)
 	if (oldPriority == priority)
 		return;
 
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(const_cast<CoreEntry**>(&fCore));
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 	core->CPUHeap()->ModifyKey(this, priority);
 
 	if (oldPriority == B_IDLE_PRIORITY)
@@ -465,7 +465,7 @@ CPUEntry::ComputeLoad()
 	ASSERT(!gCPU[fCPUNumber].disabled);
 	ASSERT(fCPUNumber == smp_get_current_cpu());
 
-	int32 currentLoad = atomic_get(const_cast<int32*>(&fLoad));
+	int32 currentLoad = atomic_get(&fLoad);
 	int oldLoad = compute_load(fMeasureTime, fMeasureActiveTime, currentLoad,
 			system_time());
 	if (oldLoad < 0)
@@ -502,7 +502,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	if (pinnedThread != NULL)
 		pinnedPriority = pinnedThread->GetEffectivePriority();
 
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(const_cast<CoreEntry**>(&fCore));
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 	CoreRunQueueLocker coreLocker(core);
 
 	ThreadData* sharedThread = core->PeekThread();
@@ -636,7 +636,7 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
 		locker.Unlock();
 
 		fMeasureActiveTime += active;
-		atomic_pointer_get<CoreEntry>(const_cast<CoreEntry**>(&fCore))->IncreaseActiveTime(active);
+		atomic_pointer_get<CoreEntry>(&fCore)->IncreaseActiveTime(active);
 
 		// Compute system_time() once and pass it to UpdateActivity so
 		// the virtual-runtime ceiling uses the same timestamp as the rest of
@@ -654,7 +654,7 @@ CPUEntry::TrackLoad(ThreadData* nextThreadData)
 #ifdef DEBUG_SCHEDULER
 	TRACE("scheduler: cpu=%d load=%d idle=%d\n",
 		fCPUNumber,
-		atomic_get(const_cast<int32*>(&fLoad)),
+		atomic_get(&fLoad),
 		gCPU[fCPUNumber].idle);
 #endif
 

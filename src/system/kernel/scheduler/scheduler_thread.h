@@ -163,7 +163,8 @@ public:
 
 	SCHEDULER_INLINE	CoreEntry*	Core() const
 	{
-		return atomic_pointer_get<CoreEntry>(&fCore);
+		return atomic_pointer_get<CoreEntry>(
+			const_cast<CoreEntry* volatile*>(&fCore));
 	}
 			void		UnassignCore(bool running = false);
 			void		MigrateTo(CoreEntry* targetCore);
@@ -686,7 +687,6 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		// Both CoreCPULocker and CoreRunQueueLocker dereference their argument
 		// in the constructor; a NULL fCore here causes a null-dereference panic
 		// before we even reach the existing null check below.
-		// both reach the existing null check below.
 		CoreEntry* coreSnapshot = atomic_pointer_get<CoreEntry>(&fCore);
 		if (coreSnapshot == NULL)
 			return false;
@@ -695,8 +695,9 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		CoreRunQueueLocker locker(coreSnapshot);
 
 		// Issue 1 fix: re-check under the lock — fCore may have been set to
-		// NULL (or migrated to another core) between the guard above and
-		// lock acquisition. If so, return false to trigger a retry.
+		// NULL between the guard above and lock acquisition.  The explicit
+		// Unlock() calls were redundant: AutoLocker's destructor checks
+		// fLocked and will not double-unlock.  RAII handles cleanup correctly.
 		if (atomic_pointer_get<CoreEntry>(&fCore) != coreSnapshot)
 			return false;
 
