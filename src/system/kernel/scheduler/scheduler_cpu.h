@@ -806,7 +806,7 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 			// and will (or has already) re-set the node bit — we must not
 			// clear it.
 			const int64 nodeBit = (int64)(1ULL << fNodeID);
-			int64 nodeMask;
+			int64 nodeMask __attribute__((aligned(8)));
 			// Issue 19 fix: add iteration bound to prevent livelock when
 			// packages continuously oscillate between idle/active states.
 			// After kMaxWakeupRetries CAS failures we give up; the next

@@ -220,8 +220,10 @@ ThreadData::Dump() const
 	kprintf("\tquantum_start:\t\t%" B_PRId64 " us\n",
 		atomic_get64((int64*)&fQuantumStart));
 	kprintf("\tneeded_load:\t\t%" B_PRId32 "%%\n", fNeededLoad / 10);
-	kprintf("\twent_sleep:\t\t%" B_PRId64 "\n", fWentSleep);
-	kprintf("\twent_sleep_active:\t%" B_PRId64 "\n", fWentSleepActive);
+	kprintf("\twent_sleep:\t\t%" B_PRId64 "\n",
+		atomic_get64((int64*)&fWentSleep));
+	kprintf("\twent_sleep_active:\t%" B_PRId64 "\n",
+		atomic_get64((int64*)&fWentSleepActive));
 	kprintf("\tinteractivity_score:\t%" B_PRId32 "\n", fInteractivityScore);
 
 	CoreEntry* core = Core();
