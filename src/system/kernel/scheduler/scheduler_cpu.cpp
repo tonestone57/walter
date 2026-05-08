@@ -466,10 +466,10 @@ CPUEntry::ComputeLoad()
 	ASSERT(fCPUNumber == smp_get_current_cpu());
 
 	int32 currentLoad = atomic_get(&fLoad);
-	bigtime_t measureTime = atomic_get64((int64*)&fMeasureTime);
-	bigtime_t measureActiveTime;
+	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int oldLoad;
 	do {
+		bigtime_t measureTime = atomic_get64((int64*)&fMeasureTime);
 		measureActiveTime = atomic_get64((int64*)&fMeasureActiveTime);
 		bigtime_t tempMeasureTime = measureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;

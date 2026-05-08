@@ -401,7 +401,7 @@ ThreadData::GetQuantumLeft()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	bigtime_t stolenTime;
+	bigtime_t stolenTime __attribute__((aligned(8)));
 	do {
 		stolenTime = atomic_get64((int64*)&fStolenTime);
 	} while (atomic_test_and_set64((int64*)&fStolenTime, 0, stolenTime) != stolenTime);
@@ -844,16 +844,16 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 
 		// Issue 58 fix: the goto below is inside the if (!IsRealTime()) block.
 
-		bigtime_t ceiling;
+		bigtime_t ceiling __attribute__((aligned(8)));
 		if (now > B_INT64_MAX - kLookahead)
 			ceiling = B_INT64_MAX;
 		else
 			ceiling = now + kLookahead;
 
-		bigtime_t vRuntime;
+		bigtime_t vRuntime __attribute__((aligned(8)));
 		do {
 			vRuntime = atomic_get64((int64*)&fVirtualRuntime);
-			bigtime_t next;
+			bigtime_t next __attribute__((aligned(8)));
 			if (vRuntime < ceiling - delta)
 				next = vRuntime + delta;
 			else if (vRuntime < ceiling)

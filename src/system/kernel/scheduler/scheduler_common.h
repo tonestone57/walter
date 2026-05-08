@@ -78,7 +78,7 @@ struct ThreadDataOptimal {
 
 #if B_HAIKU_64_BIT
 	// 64-bit systems: supports up to 64 L3 domains per node
-	typedef uint64 native_cpu_mask_t;
+	typedef uint64 native_cpu_mask_t __attribute__((aligned(8)));
 	#define SCHEDULER_MASK_IS_64_BIT 1
 #else
 	// 32-bit systems: supports up to 32 L3 domains per node
@@ -273,7 +273,7 @@ extern bool gTrackCoreLoad;
 extern bool gTrackCPULoad;
 extern int32 gRandomSamples;
 
-extern const bigtime_t kMinMeasurementWindow;
+extern const bigtime_t kMinMeasurementWindow __attribute__((aligned(8)));
 extern const int kLoadClampMax;
 
 

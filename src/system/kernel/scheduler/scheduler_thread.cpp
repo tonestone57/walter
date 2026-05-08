@@ -172,7 +172,7 @@ ThreadData::Init()
 		// read fHomePackage twice bracketing the fVirtualRuntime read;
 		// if both reads match the source thread has not migrated mid-read.
 		int32 homeA, homeB;
-		bigtime_t vrt;
+		bigtime_t vrt __attribute__((aligned(8)));
 		int retries = 0;
 		do {
 			homeA = atomic_get(&currentThreadData->fHomePackage);
@@ -186,7 +186,7 @@ ThreadData::Init()
 	} else {
 		fNeededLoad = 0;
 		atomic_set64((int64*)&fVirtualRuntime, 0);
-		fHomePackage = -1;
+		atomic_set(&fHomePackage, -1);
 	}
 
 	if (!IsRealTime())
@@ -579,10 +579,10 @@ ThreadData::_ComputeNeededLoad()
 	SCHEDULER_ENTER_FUNCTION();
 	ASSERT(!IsIdle());
 
-	bigtime_t lastMeasureTime = atomic_get64((int64*)&fLastMeasureAvailableTime);
-	bigtime_t measureActiveTime;
+	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int32 oldLoad;
 	do {
+		bigtime_t lastMeasureTime = atomic_get64((int64*)&fLastMeasureAvailableTime);
 		measureActiveTime = atomic_get64((int64*)&fMeasureAvailableActiveTime);
 		bigtime_t tempLastMeasureTime = lastMeasureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
