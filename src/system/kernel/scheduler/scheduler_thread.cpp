@@ -575,8 +575,8 @@ ThreadData::_ComputeNeededLoad()
 	SCHEDULER_ENTER_FUNCTION();
 	ASSERT(!IsIdle());
 
-	int32 oldLoad = compute_load(fLastMeasureAvailableTime,
-		fMeasureAvailableActiveTime, fNeededLoad, system_time());
+	int32 oldLoad = compute_load(atomic_get64((int64*)&fLastMeasureAvailableTime),
+		atomic_get64((int64*)&fMeasureAvailableActiveTime), fNeededLoad, system_time());
 	// Issue 83 fix: compute_load updates fLastMeasureAvailableTime (advancing
 	// the measurement window) even when it returns -1 (insufficient elapsed
 	// time). If we return early on oldLoad < 0, fNeededLoad is not updated

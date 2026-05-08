@@ -376,7 +376,7 @@ ThreadData::SetStolenInterruptTime(bigtime_t interruptTime)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	bigtime_t delta = interruptTime - fLastInterruptTime;
+	bigtime_t delta = interruptTime - atomic_get64((int64*)&fLastInterruptTime);
 	// Issue 94 fix: if interrupt_time goes backward (e.g. CPU accounting
 	// reset or wrap), delta is negative and fLastInterruptTime must be
 	// reset to the current interruptTime to restore correct accounting.
@@ -429,7 +429,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	bigtime_t timeUsed = system_time() - fQuantumStart;
+	bigtime_t timeUsed = system_time() - atomic_get64((int64*)&fQuantumStart);
 	ASSERT(timeUsed >= 0);
 	// Issue 68 fix: cap fTimeUsed accumulation. Under extremely rapid
 	// rescheduling, fTimeUsed can accumulate to near INT64_MAX before the
@@ -715,11 +715,11 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			}
 			// Issue 41 fix: AddLoad happens here, after all early-return guards.
 			if (gTrackCoreLoad && !wasReady) {
-				bigtime_t timeSlept = system_time() - fWentSleep;
+				bigtime_t timeSlept = system_time() - atomic_get64((int64*)&fWentSleep);
 				bool updateLoad = timeSlept > 0;
 				core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
 				if (updateLoad) {
-					fMeasureAvailableTime += timeSlept;
+					atomic_add64((int64*)&fMeasureAvailableTime, timeSlept);
 					_ComputeNeededLoad();
 				}
 			}
@@ -729,11 +729,11 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			return false;
 		} else if (!wasReady && gTrackCoreLoad) {
 			// Issue 41 fix: for non-stolen threads, AddLoad after CPUCount guard.
-			bigtime_t timeSlept = system_time() - fWentSleep;
+			bigtime_t timeSlept = system_time() - atomic_get64((int64*)&fWentSleep);
 			bool updateLoad = timeSlept > 0;
 			core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
 			if (updateLoad) {
-				fMeasureAvailableTime += timeSlept;
+				atomic_add64((int64*)&fMeasureAvailableTime, timeSlept);
 				_ComputeNeededLoad();
 			}
 		}
@@ -850,11 +850,17 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 		else
 			ceiling = now + kLookahead;
 
-		bigtime_t vRuntime = atomic_get64((int64*)&fVirtualRuntime);
-		if (vRuntime < ceiling - delta)
-			atomic_add64((int64*)&fVirtualRuntime, delta);
-		else if (vRuntime < ceiling)
-			atomic_set64((int64*)&fVirtualRuntime, ceiling);
+		bigtime_t vRuntime;
+		do {
+			vRuntime = atomic_get64((int64*)&fVirtualRuntime);
+			bigtime_t next;
+			if (vRuntime < ceiling - delta)
+				next = vRuntime + delta;
+			else if (vRuntime < ceiling)
+				next = ceiling;
+			else
+				break;
+		} while (atomic_test_and_set64((int64*)&fVirtualRuntime, next, vRuntime) != vRuntime);
 		// If fVirtualRuntime is already at or above ceiling (e.g. ceiling moved
 		// backward due to clock skew), leave it unchanged rather than reducing
 		// it, which would spuriously boost the thread's scheduling priority.
