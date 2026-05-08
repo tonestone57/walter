@@ -215,8 +215,10 @@ ThreadData::Dump() const
 
 	kprintf("\ttime_used:\t\t%" B_PRId64 " us (quantum: %" B_PRId64 " us)\n",
 		atomic_get64((int64*)&fTimeUsed), ComputeQuantum());
-	kprintf("\tstolen_time:\t\t%" B_PRId64 " us\n", fStolenTime);
-	kprintf("\tquantum_start:\t\t%" B_PRId64 " us\n", fQuantumStart);
+	kprintf("\tstolen_time:\t\t%" B_PRId64 " us\n",
+		atomic_get64((int64*)&fStolenTime));
+	kprintf("\tquantum_start:\t\t%" B_PRId64 " us\n",
+		atomic_get64((int64*)&fQuantumStart));
 	kprintf("\tneeded_load:\t\t%" B_PRId32 "%%\n", fNeededLoad / 10);
 	kprintf("\twent_sleep:\t\t%" B_PRId64 "\n", fWentSleep);
 	kprintf("\twent_sleep_active:\t%" B_PRId64 "\n", fWentSleepActive);

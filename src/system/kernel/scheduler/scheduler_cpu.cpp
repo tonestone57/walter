@@ -1113,7 +1113,7 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 		} else {
 			atomic_add(&fCPUCount, -1);
 		}
-		int32 oldIdleCount = atomic_add(&fIdleCPUCount, -1);
+		atomic_add(&fIdleCPUCount, -1);
 		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
 			cpu->ID());
 	}
