@@ -851,9 +851,9 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 			ceiling = now + kLookahead;
 
 		bigtime_t vRuntime __attribute__((aligned(8)));
+		bigtime_t next __attribute__((aligned(8)));
 		do {
 			vRuntime = atomic_get64((int64*)&fVirtualRuntime);
-			bigtime_t next __attribute__((aligned(8)));
 			if (vRuntime < ceiling - delta)
 				next = vRuntime + delta;
 			else if (vRuntime < ceiling)

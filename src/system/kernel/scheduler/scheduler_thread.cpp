@@ -181,6 +181,13 @@ ThreadData::Init()
 			memory_read_barrier();
 			homeB = atomic_get(&currentThreadData->fHomePackage);
 		} while (homeA != homeB && ++retries < 8);
+
+		if (homeA != homeB) {
+			// failed to get consistent snapshot, fallback to safe defaults
+			vrt = 0;
+			homeB = -1;
+		}
+
 		atomic_set64((int64*)&fVirtualRuntime, vrt);
 		atomic_set(&fHomePackage, homeB);
 	} else {
