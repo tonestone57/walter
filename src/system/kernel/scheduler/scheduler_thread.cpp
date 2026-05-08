@@ -15,7 +15,7 @@
 using namespace Scheduler;
 
 
-static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1]
+static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1] __attribute__((aligned(8)))
 	__attribute__((aligned(8)));
 
 
@@ -29,7 +29,7 @@ static const int32 kLoadScaleShift = 10;
 // 1024 / 800 * 1024 = 1310.72 ~= 1311
 static const int32 kRangeReciprocal = (int32)(((int64)kLoadScale * kLoadScale
 	+ (kMaxLoad - kLowLoad) / 2) / (kMaxLoad - kLowLoad));
-static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1]
+static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1] __attribute__((aligned(8)))
 	__attribute__((aligned(8)));
 
 bigtime_t ThreadData::sMaxLatency __attribute__((aligned(8)));
@@ -580,11 +580,21 @@ ThreadData::_ComputeNeededLoad()
 	ASSERT(!IsIdle());
 
 	bigtime_t lastMeasureTime = atomic_get64((int64*)&fLastMeasureAvailableTime);
-	bigtime_t measureActiveTime = atomic_get64((int64*)&fMeasureAvailableActiveTime);
-	int32 oldLoad = compute_load(lastMeasureTime, measureActiveTime, fNeededLoad,
-		system_time());
-	atomic_set64((int64*)&fLastMeasureAvailableTime, lastMeasureTime);
-	atomic_set64((int64*)&fMeasureAvailableActiveTime, measureActiveTime);
+	bigtime_t measureActiveTime;
+	int32 oldLoad;
+	do {
+		measureActiveTime = atomic_get64((int64*)&fMeasureAvailableActiveTime);
+		bigtime_t tempLastMeasureTime = lastMeasureTime;
+		bigtime_t tempMeasureActiveTime = measureActiveTime;
+		oldLoad = compute_load(tempLastMeasureTime, tempMeasureActiveTime, fNeededLoad,
+			system_time());
+		if (oldLoad < 0)
+			break;
+		if (atomic_test_and_set64((int64*)&fMeasureAvailableActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
+			atomic_set64((int64*)&fLastMeasureAvailableTime, tempLastMeasureTime);
+			break;
+		}
+	} while (true);
 	// Issue 83 fix: compute_load updates fLastMeasureAvailableTime (advancing
 	// the measurement window) even when it returns -1 (insufficient elapsed
 	// time). If we return early on oldLoad < 0, fNeededLoad is not updated

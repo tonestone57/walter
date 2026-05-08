@@ -467,11 +467,21 @@ CPUEntry::ComputeLoad()
 
 	int32 currentLoad = atomic_get(&fLoad);
 	bigtime_t measureTime = atomic_get64((int64*)&fMeasureTime);
-	bigtime_t measureActiveTime = atomic_get64((int64*)&fMeasureActiveTime);
-	int oldLoad = compute_load(measureTime, measureActiveTime, currentLoad,
-			system_time());
-	atomic_set64((int64*)&fMeasureTime, measureTime);
-	atomic_set64((int64*)&fMeasureActiveTime, measureActiveTime);
+	bigtime_t measureActiveTime;
+	int oldLoad;
+	do {
+		measureActiveTime = atomic_get64((int64*)&fMeasureActiveTime);
+		bigtime_t tempMeasureTime = measureTime;
+		bigtime_t tempMeasureActiveTime = measureActiveTime;
+		oldLoad = compute_load(tempMeasureTime, tempMeasureActiveTime, currentLoad,
+				system_time());
+		if (oldLoad < 0)
+			break;
+		if (atomic_test_and_set64((int64*)&fMeasureActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
+			atomic_set64((int64*)&fMeasureTime, tempMeasureTime);
+			break;
+		}
+	} while (true);
 	if (oldLoad < 0)
 		return;
 
