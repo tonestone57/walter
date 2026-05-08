@@ -466,8 +466,12 @@ CPUEntry::ComputeLoad()
 	ASSERT(fCPUNumber == smp_get_current_cpu());
 
 	int32 currentLoad = atomic_get(&fLoad);
-	int oldLoad = compute_load(atomic_get64((int64*)&fMeasureTime), atomic_get64((int64*)&fMeasureActiveTime), currentLoad,
+	bigtime_t measureTime = atomic_get64((int64*)&fMeasureTime);
+	bigtime_t measureActiveTime = atomic_get64((int64*)&fMeasureActiveTime);
+	int oldLoad = compute_load(measureTime, measureActiveTime, currentLoad,
 			system_time());
+	atomic_set64((int64*)&fMeasureTime, measureTime);
+	atomic_set64((int64*)&fMeasureActiveTime, measureActiveTime);
 	if (oldLoad < 0)
 		return;
 
