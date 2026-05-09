@@ -24,9 +24,11 @@ struct scheduler_mode_operations {
 	bool					(*has_cache_expired)(
 								const Scheduler::ThreadData* threadData);
 	Scheduler::CoreEntry*	(*choose_core)(
-								const Scheduler::ThreadData* threadData);
+								const Scheduler::ThreadData* threadData,
+								const CPUSet& mask);
 	Scheduler::CoreEntry*	(*rebalance)(
-								const Scheduler::ThreadData* threadData);
+								const Scheduler::ThreadData* threadData,
+								const CPUSet& mask);
 	void					(*rebalance_irqs)(bool idle);
 };
 

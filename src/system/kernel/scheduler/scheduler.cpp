@@ -483,7 +483,8 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 			targetCore = wakerCore;
 	} else if (threadData->Core() != NULL
 		&& (!newOne || !threadData->HasCacheExpired())) {
-		targetCore = threadData->Rebalance();
+		CPUSet mask = threadData->GetCPUMask();
+		targetCore = threadData->Rebalance(mask);
 	}
 
 	bool wasRunQueueEmpty = false;

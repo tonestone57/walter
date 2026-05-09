@@ -74,12 +74,12 @@ ThreadData::_InitBase()
 
 
 inline CoreEntry*
-ThreadData::_ChooseCore() const
+ThreadData::_ChooseCore(const CPUSet& mask) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(!gSingleCore);
-	return Scheduler::ChooseCore(this);
+	return Scheduler::ChooseCore(this, mask);
 }
 
 
@@ -282,7 +282,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 		}
 
 		if (targetCore == NULL && targetCPU == NULL) {
-			targetCore = _ChooseCore();
+			targetCore = _ChooseCore(mask);
 			// Issue 3 fix: _ChooseCore() (which delegates to choose_core in
 			// low_latency.cpp / power_saving.cpp) can return NULL when all
 			// cores are filtered out by the affinity mask or when the topology

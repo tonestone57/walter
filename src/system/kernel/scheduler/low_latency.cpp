@@ -82,13 +82,12 @@ has_cache_expired(const ThreadData* threadData)
 
 
 static CoreEntry*
-choose_core(const ThreadData* threadData)
+choose_core(const ThreadData* threadData, const CPUSet& mask)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	// useMask must be computed before Stage 0 so the
 	// hot-idle fast path can honour CPU affinity constraints.
-	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
 	if (useMask && Scheduler::IsAllEnabledMask(mask))
 		useMask = false;
@@ -532,7 +531,7 @@ choose_core(const ThreadData* threadData)
 
 
 static CoreEntry*
-rebalance(const ThreadData* threadData)
+rebalance(const ThreadData* threadData, const CPUSet& mask)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -544,7 +543,6 @@ rebalance(const ThreadData* threadData)
 	CoreEntry* core = threadData->Core();
 
 	// Get the least loaded core.
-	CPUSet mask = threadData->GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
 	CoreEntry* other = NULL;

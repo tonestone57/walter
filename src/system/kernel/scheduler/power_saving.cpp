@@ -272,6 +272,8 @@ choose_small_task_core(CPUEntry* cpu)
 			if (nodeID < 0 || nodeID >= gNodeCount)
 				return eCore;
 
+			int casRetries = 0;
+			const int kMaxCASRetries = 16;
 			while (true) {
 				CoreEntry* currentE = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 					&sSmallTaskCore[nodeID]);
@@ -284,6 +286,13 @@ choose_small_task_core(CPUEntry* cpu)
 						currentE) == currentE) {
 					return eCore;
 				}
+
+				if (++casRetries >= kMaxCASRetries) {
+					CoreEntry* latest = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+						&sSmallTaskCore[nodeID]);
+					return (latest != NULL) ? latest : eCore;
+				}
+				cpu_pause();
 			}
 		}
 	}
@@ -506,14 +515,13 @@ check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 
 
 static CoreEntry*
-choose_core(const ThreadData* threadData)
+choose_core(const ThreadData* threadData, const CPUSet& mask)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* core = NULL;
 
-	CPUSet mask = threadData->GetCPUMask();
 	bool useMask = !mask.IsEmpty();
 
 	// Optimization: Treat "all enabled" mask as no mask to enable fast sampling
@@ -740,7 +748,7 @@ choose_core(const ThreadData* threadData)
 
 
 static CoreEntry*
-rebalance(const ThreadData* threadData)
+rebalance(const ThreadData* threadData, const CPUSet& mask)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -751,7 +759,6 @@ rebalance(const ThreadData* threadData)
 		return threadData->Core();
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-	CPUSet mask = threadData->GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
 
 	// Returning NULL from rebalance signals "force full search" to

@@ -411,8 +411,8 @@ public:
 	static inline void SetOperationMode(scheduler_mode mode,
 		scheduler_mode_operations* operations)
 	{
-		sCurrentMode = operations;
-		sCurrentModeID = mode;
+		atomic_pointer_set<scheduler_mode_operations>(&sCurrentMode, operations);
+		atomic_set((int32*)&sCurrentModeID, (int32)mode);
 	}
 
 	// expose sCurrentMode via a public accessor.
@@ -422,62 +422,64 @@ public:
 	// static member from a non-member function is ill-formed in C++.
 	static inline scheduler_mode_operations* GetCurrentMode()
 	{
-		return sCurrentMode;
+		return atomic_pointer_get<scheduler_mode_operations>(&sCurrentMode);
 	}
 
 	static inline scheduler_mode Mode()
 	{
-		return sCurrentModeID;
+		return (scheduler_mode)atomic_get((int32*)&sCurrentModeID);
 	}
 
 	static inline void SwitchToMode()
 	{
-		sCurrentMode->switch_to_mode();
+		GetCurrentMode()->switch_to_mode();
 	}
 
 	static inline void SetCPUEnabled(int32 cpu, bool enabled)
 	{
-		sCurrentMode->set_cpu_enabled(cpu, enabled);
+		GetCurrentMode()->set_cpu_enabled(cpu, enabled);
 	}
 
 	static inline bool HasCacheExpired(const ThreadData* threadData)
 	{
-		return sCurrentMode->has_cache_expired(threadData);
+		return GetCurrentMode()->has_cache_expired(threadData);
 	}
 
-	static inline CoreEntry* ChooseCore(const ThreadData* threadData)
+	static inline CoreEntry* ChooseCore(const ThreadData* threadData,
+		const CPUSet& mask)
 	{
-		return sCurrentMode->choose_core(threadData);
+		return GetCurrentMode()->choose_core(threadData, mask);
 	}
 
-	static inline CoreEntry* Rebalance(const ThreadData* threadData)
+	static inline CoreEntry* Rebalance(const ThreadData* threadData,
+		const CPUSet& mask)
 	{
-		return sCurrentMode->rebalance(threadData);
+		return GetCurrentMode()->rebalance(threadData, mask);
 	}
 
 	static inline void RebalanceIRQs(bool idle)
 	{
-		sCurrentMode->rebalance_irqs(idle);
+		GetCurrentMode()->rebalance_irqs(idle);
 	}
 
 	static inline bigtime_t BaseQuantum()
 	{
-		return sCurrentMode->base_quantum;
+		return GetCurrentMode()->base_quantum;
 	}
 
 	static inline bigtime_t MinimalQuantum()
 	{
-		return sCurrentMode->minimal_quantum;
+		return GetCurrentMode()->minimal_quantum;
 	}
 
 	static inline bigtime_t QuantumMultiplier(int index)
 	{
-		return sCurrentMode->quantum_multipliers[index];
+		return GetCurrentMode()->quantum_multipliers[index];
 	}
 
 	static inline bigtime_t MaximumLatency()
 	{
-		return sCurrentMode->maximum_latency;
+		return GetCurrentMode()->maximum_latency;
 	}
 
 	static inline bool IsAllEnabledMask(const CPUSet& mask)

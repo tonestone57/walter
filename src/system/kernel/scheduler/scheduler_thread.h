@@ -32,7 +32,7 @@ struct CACHE_LINE_ALIGN ThreadData : public DoublyLinkedListLinkImpl<ThreadData>
 private:
 	inline	void		_InitBase();
 
-	SCHEDULER_INLINE	CoreEntry*	_ChooseCore() const;
+	SCHEDULER_INLINE	CoreEntry*	_ChooseCore(const CPUSet& mask) const;
 	SCHEDULER_INLINE	CPUEntry*	_ChooseCPU(CoreEntry* core,
 							bool& rescheduleNeeded) const;
 
@@ -85,7 +85,7 @@ public:
 	SCHEDULER_INLINE	bool		HasCacheExpired() const;
 	SCHEDULER_INLINE	int32		HomePackage() const { return fHomePackage; }
 	SCHEDULER_INLINE	CoreEntry*	PreviousCore() const;
-	SCHEDULER_INLINE	CoreEntry*	Rebalance() const;
+	SCHEDULER_INLINE	CoreEntry*	Rebalance(const CPUSet& mask) const;
 
 	SCHEDULER_INLINE	int32		GetEffectivePriority() const;
 
@@ -271,12 +271,12 @@ ThreadData::PreviousCore() const
 
 
 inline CoreEntry*
-ThreadData::Rebalance() const
+ThreadData::Rebalance(const CPUSet& mask) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(!gSingleCore);
-	return Scheduler::Rebalance(this);
+	return Scheduler::Rebalance(this, mask);
 }
 
 
