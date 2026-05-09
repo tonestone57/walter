@@ -335,4 +335,3 @@ private:
 
 
 #endif	// KERNEL_SCHEDULER_LOCKING_H
-

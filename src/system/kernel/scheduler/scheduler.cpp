@@ -29,6 +29,7 @@
 #include <kscheduler.h>
 #include <listeners.h>
 #include <load_tracking.h>
+#include <safemode.h>
 #include <scheduler_defs.h>
 #include <smp.h>
 #include <timer.h>
@@ -345,6 +346,31 @@ static object_cache* sThreadDataCache;
 // and the package that CPU in question belongs to.
 static int32* sCPUToCore;
 static int32* sCPUToPackage;
+
+enum topology_validation_mode {
+	TOPOLOGY_VALIDATION_STRICT = 0,
+	TOPOLOGY_VALIDATION_TOLERANT = 1
+};
+
+// Switch #1: strict/tolerant topology handling policy.
+// Keep strict by default; tolerant mode degrades malformed mappings by
+// disabling affected topology entries instead of failing init().
+static topology_validation_mode sTopologyValidationMode
+	= TOPOLOGY_VALIDATION_STRICT;
+
+static inline bool
+topology_validation_is_strict()
+{
+	return sTopologyValidationMode == TOPOLOGY_VALIDATION_STRICT;
+}
+
+// Switch #2: centralized topology validation reporting helper.
+static status_t
+topology_validation_error(status_t strictStatus, const char* message)
+{
+	dprintf("scheduler: topology validation: %s\n", message);
+	return topology_validation_is_strict() ? strictStatus : B_OK;
+}
 static int32* sPackageToNode;
 static int32* sCPUToCluster = NULL;
 
@@ -1052,6 +1078,13 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	dprintf("scheduler: %s CPU %" B_PRId32 "\n",
 		enabled ? "enabling" : "disabling", cpuID);
 
+	if (cpuID < 0 || cpuID >= smp_get_num_cpus()) {
+		dprintf("scheduler: ignoring %s request for invalid CPU %" B_PRId32
+			" (valid range: 0..%" B_PRId32 ")\n",
+			enabled ? "enable" : "disable", cpuID, smp_get_num_cpus() - 1);
+		return;
+	}
+
 	Scheduler::SetCPUEnabled(cpuID, enabled);
 
 	CPUEntry* cpu = &gCPUEntries[cpuID];
@@ -1060,10 +1093,13 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	ASSERT(core->CPUCount() >= 0);
 
 	if (enabled) {
-		cpu->LockScheduler();
+		// Resolve FIXME in scheduler_cpu.h issue 89:
+		// serialize AddCPU with the same global scheduler lock scope used by
+		// the disable/remove path to avoid races with idle-core state updates.
 		{
+			InterruptsBigSchedulerLocker bigLocker;
 			CoreCPUHeapLocker heapLocker(core);
-			cpu->Start();
+
 			// Issue 39 fix: AddCPU inserts the CPU into the heap. A concurrent
 			// enqueue() that races between disabled=false and the heap insert
 			// can call UpdatePriority on a CPU with no heap link, panicking.
@@ -1076,66 +1112,71 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 			gCPU[cpuID].disabled = false;
 			gCPUEnabled.SetBitAtomic(cpuID);
 		}
-		cpu->UnlockScheduler();
+
+		// Start the CPU after publishing all scheduler state and after
+		// releasing scheduler/core locks to avoid lock-order inversions if the
+		// startup path enters the scheduler immediately.
+		cpu->Start();
 	} else {
-		cpu->LockScheduler();
+		// Improve serialization of queue migration/removal:
+		// hold the global scheduler lock scope so concurrent scheduling on
+		// other CPUs cannot observe partial migration states.
+		bool sendRescheduleICI = false;
+		{
+			InterruptsBigSchedulerLocker bigLocker;
 
-		gCPU[cpuID].disabled = true;
-		gCPUEnabled.ClearBitAtomic(cpuID);
+			gCPU[cpuID].disabled = true;
+			gCPUEnabled.ClearBitAtomic(cpuID);
 
-		// If this is the last CPU in the core, we need to unassign threads from
-		// the core.  We do this AFTER marking the CPU disabled and acquiring
-		// the scheduler lock. This ensures no new threads are assigned to the
-		// core while we are unassigning them.
-		if (core->CPUCount() == 1)
-			thread_map(CoreEntry::_UnassignThread, core);
+			// If this is the last CPU in the core, we need to unassign threads from
+			// the core.  We do this AFTER marking the CPU disabled and acquiring
+			// the scheduler lock. This ensures no new threads are assigned to the
+			// core while we are unassigning them.
+			if (core->CPUCount() == 1)
+				thread_map(CoreEntry::_UnassignThread, core);
 
-		ThreadEnqueuer enqueuer;
+			ThreadEnqueuer enqueuer;
 
-		// flush CPU run queue
-		while (true) {
-			// (clarification): The flush loop holds CPURunQueueLocker
-			// per iteration but NOT CoreRunQueueLocker.  Concurrent readers of
-			// the core queue (via ChooseNextThread on other CPUs) can observe
-			// threads mid-migration.  This is safe because cpu->LockScheduler()
-			// (held for the entire disable path) prevents other CPUs from
-			// entering their scheduler critical sections, serialising the flush.
-			ThreadData* threadData;
-			{
-				CPURunQueueLocker locker(cpu);
-				threadData = cpu->PeekThread();
-				if (threadData == NULL || threadData->IsIdle())
-					break;
-				cpu->Remove(threadData);
+			// flush CPU run queue
+			while (true) {
+				// The flush loop holds CPURunQueueLocker per-iteration but not
+				// CoreRunQueueLocker. Global serialization comes from
+				// InterruptsBigSchedulerLocker held for this disable scope.
+				ThreadData* threadData;
+				{
+					CPURunQueueLocker locker(cpu);
+					threadData = cpu->PeekThread();
+					if (threadData == NULL || threadData->IsIdle())
+						break;
+					cpu->Remove(threadData);
+				}
+
+				enqueuer(threadData);
 			}
 
-			enqueuer(threadData);
+			{
+				CoreCPUHeapLocker heapLocker(core);
+				cpu->UpdatePriority(B_IDLE_PRIORITY);
+				// Issue 57 fix: document lock ordering.
+				// CoreCPUHeapLocker acquires fCPULock. RemoveCPU internally calls
+				// fPackage->RemoveIdleCore() which acquires fCoreLock (write).
+				// Lock ordering: fCPULock → fCoreLock.
+				// Verify no other path acquires these in reverse order.
+				// AddIdleCore() acquires fCoreLock then is called from AddCPU
+				// under fCPULock — same ordering, safe.
+				// CoreGoesIdle calls PackageEntry::CoreGoesIdle (no fCoreLock) —
+				// no ordering conflict.
+				core->RemoveCPU(cpu, enqueuer);
+			}
+
+			cpu->Stop();
+			sendRescheduleICI = smp_get_current_cpu() != cpuID;
 		}
-
-		{
-			CoreCPUHeapLocker heapLocker(core);
-			cpu->UpdatePriority(B_IDLE_PRIORITY);
-			// Issue 57 fix: document lock ordering.
-			// CoreCPUHeapLocker acquires fCPULock. RemoveCPU internally calls
-			// fPackage->RemoveIdleCore() which acquires fCoreLock (write).
-			// Lock ordering: fCPULock → fCoreLock.
-			// Verify no other path acquires these in reverse order.
-			// AddIdleCore() acquires fCoreLock then is called from AddCPU
-			// under fCPULock — same ordering, safe.
-			// CoreGoesIdle calls PackageEntry::CoreGoesIdle (no fCoreLock) —
-			// no ordering conflict.
-			core->RemoveCPU(cpu, enqueuer);
-		}
-
-		cpu->Stop();
-
 		// don't wait until the thread quantum ends
-		if (smp_get_current_cpu() != cpuID) {
+		if (sendRescheduleICI)
 			smp_send_ici(cpuID, SMP_MSG_RESCHEDULE, 0, 0, 0, NULL,
 				SMP_MSG_FLAG_ASYNC);
-		}
 
-		cpu->UnlockScheduler();
 	}
 }
 
@@ -1467,10 +1508,18 @@ init()
 	gCoreCount = coreCount;
 	gPackageCount = packageCount;
 
-	// Use topology-aware nodes detected by build_topology_mappings
-	// Issue 8 fix: do not clamp nodeCount to 64.  Nodes beyond 63 will
-	// just not be tracked in the global gIdleNodeMask, but merging them
-	// via modulo distortion is worse.
+	// Use topology-aware nodes detected by build_topology_mappings.
+	// Keep all nodes (do not fold by modulo). If the topology is malformed,
+	// fail early rather than clamping, since clamping would invalidate
+	// package->node mappings and can cause out-of-bounds accesses.
+	if (nodeCount <= 0) {
+		if (topology_validation_error(B_BAD_DATA,
+				"invalid topology node count, forcing single-node fallback")
+				!= B_OK) {
+			return B_BAD_DATA;
+		}
+		nodeCount = 1;
+	}
 	gNodeCount = nodeCount;
 
 	gSchedulerNodes = new(std::nothrow) SchedulerNode[nodeCount];
@@ -1496,30 +1545,45 @@ init()
 	ArrayDeleter<CoreEntry> coreEntriesDeleter(gCoreEntries);
 	ArrayDeleter<PackageEntry> packageEntriesDeleter(gPackageEntries);
 
+	uint8* seenNode = new(std::nothrow) uint8[nodeCount];
+	if (seenNode == NULL)
+		return B_NO_MEMORY;
+	ArrayDeleter<uint8> seenNodeDeleter(seenNode);
+	memset(seenNode, 0, sizeof(uint8) * nodeCount);
+
 	int32 currentNode = -1;
 	int32 currentPackageIndexInNode = 0;
 
 	for (int32 i = 0; i < packageCount; i++) {
 		int32 nodeIndex = sPackageToNode[i];
-		// Issue 8 fix: removed %= nodeCount remapping.
-
-		if (nodeIndex != currentNode) {
-			if (currentNode != -1) {
-				gSchedulerNodes[currentNode].SetPackageCount(
-					currentPackageIndexInNode);
+		if (nodeIndex < 0 || nodeIndex >= nodeCount) {
+			if (topology_validation_error(B_BAD_DATA,
+					"invalid package->node mapping") != B_OK) {
+				return B_BAD_DATA;
 			}
-
-			currentNode = nodeIndex;
-			currentPackageIndexInNode = gSchedulerNodes[currentNode].PackageCount();
-			if (currentPackageIndexInNode == 0)
-				gSchedulerNodes[currentNode].SetPackageStartIndex(i);
+			nodeIndex = 0;
 		}
 
-		// Ensure we don't overflow the package mask in SchedulerNode.
-		// Packages beyond the capacity of native_cpu_mask_t in a node will
-		// have NodeIndex() == -1, disabling their idle tracking in
-		// SchedulerNode to prevent mask corruption.
-		// Issue 8 fix: use correct bit limit for native_cpu_mask_t.
+		if (nodeIndex != currentNode) {
+			if (seenNode[nodeIndex] != 0) {
+				status_t mappingStatus = topology_validation_error(B_BAD_DATA,
+					"non-contiguous package->node mapping");
+				if (mappingStatus != B_OK) {
+					return B_BAD_DATA;
+				}
+				// Tolerant mode fallback: keep package contiguous by folding it
+				// into the currently active node block.
+				nodeIndex = currentNode >= 0 ? currentNode : 0;
+			}
+			if (currentNode != -1)
+				gSchedulerNodes[currentNode].SetPackageCount(currentPackageIndexInNode);
+
+			seenNode[nodeIndex] = 1;
+			currentNode = nodeIndex;
+			currentPackageIndexInNode = 0;
+			gSchedulerNodes[currentNode].SetPackageStartIndex(i);
+		}
+
 		int32 packageIndexInNode = currentPackageIndexInNode;
 		const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
 		if (packageIndexInNode >= kMaxPackagesPerNode || packageIndexInNode < 0) {
@@ -1531,17 +1595,12 @@ init()
 			packageIndexInNode = -1;
 		}
 
-		gPackageEntries[i].Init(i, &gSchedulerNodes[nodeIndex],
-			packageIndexInNode);
-
-		if (currentPackageIndexInNode != -1)
-			currentPackageIndexInNode++;
+		gPackageEntries[i].Init(i, &gSchedulerNodes[nodeIndex], packageIndexInNode);
+		currentPackageIndexInNode++;
 	}
 
-	if (currentNode != -1) {
-		gSchedulerNodes[currentNode].SetPackageCount(
-			currentPackageIndexInNode);
-	}
+	if (currentNode != -1)
+		gSchedulerNodes[currentNode].SetPackageCount(currentPackageIndexInNode);
 
 	// Map Core to Package and assign index within package
 	int32* packageCoreCounters = new(std::nothrow) int32[packageCount];
@@ -1556,15 +1615,42 @@ init()
 	if (coreToPackage == NULL)
 		return B_NO_MEMORY;
 	ArrayDeleter<int32> coreToPackageDeleter(coreToPackage);
+	for (int32 i = 0; i < coreCount; i++)
+		coreToPackage[i] = -1;
 
-	for (int32 i = 0; i < cpuCount; i++)
-		coreToPackage[sCPUToCore[i]] = sCPUToCluster[i];
+	for (int32 i = 0; i < cpuCount; i++) {
+		int32 coreIndex = sCPUToCore[i];
+		int32 packageID = sCPUToCluster[i];
+		if (coreIndex < 0 || coreIndex >= coreCount) {
+			if (topology_validation_error(B_BAD_DATA,
+					"invalid cpu->core mapping") != B_OK) {
+				return B_BAD_DATA;
+			}
+			continue;
+		}
+		if (packageID < 0) {
+			if (topology_validation_error(B_BAD_DATA,
+					"invalid cpu->package mapping") != B_OK) {
+				return B_BAD_DATA;
+			}
+			continue;
+		}
+		if (coreToPackage[coreIndex] != -1
+			&& coreToPackage[coreIndex] != packageID) {
+			if (topology_validation_error(B_BAD_DATA,
+					"inconsistent core->package mapping") != B_OK) {
+				return B_BAD_DATA;
+			}
+			continue;
+		}
+		coreToPackage[coreIndex] = packageID;
+	}
 
 	for (int32 i = 0; i < coreCount; i++) {
 		int32 packageID = coreToPackage[i];
 		CoreEntry* core = &gCoreEntries[i];
 
-		if (packageID >= packageCount) {
+		if (packageID < 0 || packageID >= packageCount) {
 			// This core belongs to a package beyond the limit. Skip initialization.
 			continue;
 		}
@@ -1590,7 +1676,16 @@ init()
 	}
 
 	for (int32 i = 0; i < cpuCount; i++) {
-		CoreEntry* core = &gCoreEntries[sCPUToCore[i]];
+		int32 coreIndex = sCPUToCore[i];
+		if (coreIndex < 0 || coreIndex >= coreCount) {
+			status_t mappingStatus = topology_validation_error(B_BAD_DATA,
+				"invalid cpu->core mapping during cpu init");
+			if (mappingStatus != B_OK)
+				return B_BAD_DATA;
+			gCPU[i].disabled = true;
+			continue;
+		}
+		CoreEntry* core = &gCoreEntries[coreIndex];
 
 		if (core->Package() == NULL) {
 			dprintf("scheduler: disabling cpu %" B_PRId32 " (topology limit)\n", i);
@@ -1804,10 +1899,15 @@ init()
 void
 scheduler_init()
 {
+	if (get_safemode_boolean("scheduler_topology_tolerant", false))
+		sTopologyValidationMode = TOPOLOGY_VALIDATION_TOLERANT;
+
 	int32 cpuCount = smp_get_num_cpus();
 	dprintf("scheduler_init: found %" B_PRId32 " logical cpu%s and %" B_PRId32
 		" cache level%s\n", cpuCount, cpuCount != 1 ? "s" : "",
 		gCPUCacheLevelCount, gCPUCacheLevelCount != 1 ? "s" : "");
+	dprintf("scheduler_init: topology validation mode: %s\n",
+		topology_validation_is_strict() ? "strict" : "tolerant");
 
 #ifdef SCHEDULER_PROFILING
 	Profiling::Profiler::Initialize();
