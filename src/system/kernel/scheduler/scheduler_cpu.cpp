@@ -535,9 +535,11 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 
 	int32 rest = max_c(pinnedPriority, sharedPriority);
 	if (oldPriority > rest || (!putAtBack && oldPriority == rest)) {
+		// Case A: oldThread is best.
 		if (sharedThreadIsFloating) {
 			cpuLocker.Unlock();
 			coreLocker.Unlock();
+
 			bool wasRunQueueEmpty;
 			bool requestPreemption;
 			bool updateInteraction;
@@ -569,23 +571,38 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	}
 
 	if (sharedPriority > pinnedPriority) {
+		// Case B: sharedThread is best.
 		if (sharedThread->fStolen) {
 			core->DecrementTotalThreadCount();
 			sharedThread->fStolen = false;
 		}
 		if (sharedThread->Core() == core && !sharedThreadIsFloating)
 			core->Remove(sharedThread);
+
 		return sharedThread;
 	}
 
+	// Case C: pinnedThread is best (or fallback).
+	// We MUST remove the thread while holding the locks to avoid a race condition.
+	ThreadData* nextThread = NULL;
+	if (pinnedThread != NULL && pinnedThread->IsEnqueued()) {
+		Remove(pinnedThread);
+		nextThread = pinnedThread;
+	} else {
+		// pinnedThread was stolen while we were stealing/peeking; fallback.
+		nextThread = PeekThread();
+		if (nextThread != NULL)
+			Remove(nextThread);
+	}
+
 	if (sharedThreadIsFloating) {
+		// We decided to run a pinned thread; put back the stolen shared thread.
 		cpuLocker.Unlock();
 		coreLocker.Unlock();
 
 		bool wasRunQueueEmpty;
 		bool requestPreemption;
 		bool updateInteraction;
-		// Re-enqueue via global path if core was disabled.
 		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
 				updateInteraction)) {
 			Thread* const thread = sharedThread->GetThread();
@@ -607,25 +624,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 			scheduler_update_interaction_state();
 	}
 
-	if (!cpuLocker.IsLocked())
-		cpuLocker.Lock();
-
-	// Issue 78 fix: pinnedThread was obtained before cpuLocker was released
-	// and re-acquired in the floating-thread path. Between the unlock and
-	// re-lock, pinnedThread may have been dequeued by a concurrent Dequeue()
-	// (e.g. from scheduler_set_thread_priority). Verify it is still enqueued
-	// before calling Remove(), which ASSERTs IsEnqueued().
-	if (pinnedThread != NULL && pinnedThread->IsEnqueued()) {
-		Remove(pinnedThread);
-		return pinnedThread;
-	}
-	// pinnedThread was stolen; fall back to whatever is at the head now.
-	ThreadData* fallback = PeekThread();
-	if (fallback != NULL) {
-		Remove(fallback);
-		return fallback;
-	}
-	return NULL;
+	return nextThread;
 }
 
 

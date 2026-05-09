@@ -275,6 +275,7 @@ struct RunQueueScanner {
 
 		void operator()(const ThreadRunQueue* runQueue) const {
 			const uint32* bitmap = runQueue->GetBitmap();
+			bigtime_t now = system_time();
 
 			for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
 				uint32 val = bitmap[i];
@@ -290,7 +291,6 @@ struct RunQueueScanner {
 					unsigned int priority = i * 32 + bit;
 					ThreadData* thread = runQueue->GetHead(priority);
 					int count = 0;
-					bigtime_t now = system_time();
 
 					while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
 						ThreadData* next = thread->GetRunQueueLink()->fNext;
