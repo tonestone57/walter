@@ -1095,20 +1095,27 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 		// Resolve FIXME in scheduler_cpu.h issue 89:
 		// serialize AddCPU with the same global scheduler lock scope used by
 		// the disable/remove path to avoid races with idle-core state updates.
+		{
 			InterruptsBigSchedulerLocker bigLocker;
 			CoreCPUHeapLocker heapLocker(core);
-			cpu->Start();
-		// Issue 39 fix: AddCPU inserts the CPU into the heap. A concurrent
-		// enqueue() that races between disabled=false and the heap insert
-		// can call UpdatePriority on a CPU with no heap link, panicking.
-		// Fix: complete AddCPU FIRST while disabled is still true, then
-		// clear the disabled flag and publish the CPU via gCPUEnabled.
-		core->AddCPU(cpu);
-		// Issue 69 fix: set disabled=false and SetBitAtomic atomically
+
+			// Issue 39 fix: AddCPU inserts the CPU into the heap. A concurrent
+			// enqueue() that races between disabled=false and the heap insert
+			// can call UpdatePriority on a CPU with no heap link, panicking.
+			// Fix: complete AddCPU FIRST while disabled is still true, then
+			// clear the disabled flag and publish the CPU via gCPUEnabled.
+			core->AddCPU(cpu);
+			// Issue 69 fix: set disabled=false and SetBitAtomic atomically
 			// under CoreCPUHeapLocker. GetCPUMask reads gCPUEnabled; enqueue
 			// checks !gCPU[id].disabled. Both must agree simultaneously.
 			gCPU[cpuID].disabled = false;
 			gCPUEnabled.SetBitAtomic(cpuID);
+		}
+
+		// Start the CPU after publishing all scheduler state and after
+		// releasing scheduler/core locks to avoid lock-order inversions if the
+		// startup path enters the scheduler immediately.
+		cpu->Start();
 	} else {
 		// Improve serialization of queue migration/removal:
 		// hold the global scheduler lock scope so concurrent scheduling on
