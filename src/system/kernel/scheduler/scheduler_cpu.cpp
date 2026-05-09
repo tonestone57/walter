@@ -629,7 +629,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 
 
 void
-CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
+CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -648,10 +648,8 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData)
 		atomic_add64((int64*)&fMeasureActiveTime, active);
 		atomic_pointer_get<CoreEntry>(&fCore)->IncreaseActiveTime(active);
 
-		// Compute system_time() once and pass it to UpdateActivity so
-		// the virtual-runtime ceiling uses the same timestamp as the rest of
-		// this scheduling decision.  Avoids a redundant syscall on the hot path.
-		oldThreadData->UpdateActivity(active, system_time());
+		// Use the provided timestamp for UpdateActivity.
+		oldThreadData->UpdateActivity(active, now);
 	}
 }
 

@@ -290,17 +290,17 @@ choose_core(const ThreadData* threadData, const CPUSet& mask)
 			}
 
 			if (core == NULL && !useMask) {
-				int32 startIndex2 = tryRandomStd
+				int32 startIndexStd = tryRandomStd
 					? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
 					: 0;
-				int32 attempts2 = min_c(gPackageCount, kMaxFallbackAttempts);
-				for (int32 i = 0; i < attempts2; i++) {
-					int32 index = startIndex2 + i;
+				int32 attemptsStd = min_c(gPackageCount, kMaxFallbackAttempts);
+				for (int32 i = 0; i < attemptsStd; i++) {
+					int32 index = startIndexStd + i;
 					if (index >= gPackageCount)
 						index -= gPackageCount;
 					if (CheckPackageMinimumLoad(cpu, &gPackageEntries[index], NULL,
 						core, stdBestScore, CORE_TYPE_STANDARD))
-					break;
+						break;
 				}
 			}
 

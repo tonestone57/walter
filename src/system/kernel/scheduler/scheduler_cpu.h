@@ -135,7 +135,8 @@ public:
 						ThreadData*		ChooseNextThread(ThreadData* oldThread,
 											bool putAtBack);
 
-						void			UpdateActiveTime(ThreadData* oldThreadData);
+						void			UpdateActiveTime(ThreadData* oldThreadData,
+											bigtime_t now);
 						void			TrackLoad(ThreadData* nextThreadData);
 
 						void			StartQuantumTimer(ThreadData* thread,

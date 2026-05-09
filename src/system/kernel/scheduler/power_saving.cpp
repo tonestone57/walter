@@ -557,16 +557,9 @@ choose_core(const ThreadData* threadData, const CPUSet& mask)
 		if (core == NULL && !useMask) {
 			int32 startIndex = tryRandom
 				? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
-			// the 3-type intermediate fallback
-			// in power_saving::choose_core passes `useMask ? &mask : NULL`
-			// inside a block that is only reached when !useMask (the outer
-			// `if (core == NULL && !useMask)` guard).  Therefore &mask is
-			// never passed; NULL is always passed.  The expression is
-			// redundant but not incorrect.  No code change required.
 				: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-// Issue 34 fix (power_saving): same early-exit as low_latency.
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
@@ -593,7 +586,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask)
 			bool tryRandomStd = gPackageCount > kRandomSearchThreshold;
 
 			if (tryRandomStd && !useMask) {
-				search_global_random(PackagePackingAction(cpu, useMask ? &mask : NULL,
+				search_global_random(PackagePackingAction(cpu, NULL,
 						core, stdBestScore, foundNonOverloadedStd, CORE_TYPE_STANDARD));
 			} else if (useMask) {
 				check_masked_packages_packing(cpu, mask, core, stdBestScore,
@@ -609,7 +602,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask)
 					int32 index = startIndex + i;
 					if (index >= gPackageCount) index -= gPackageCount;
 					check_package_packing(cpu, &gPackageEntries[index],
-						useMask ? &mask : NULL, core, stdBestScore,
+						NULL, core, stdBestScore,
 						foundNonOverloadedStd, CORE_TYPE_STANDARD);
 				}
 			}

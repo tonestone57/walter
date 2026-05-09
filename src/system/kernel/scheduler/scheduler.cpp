@@ -789,6 +789,8 @@ reschedule(int32 nextState)
 	int32 thisCPU = smp_get_current_cpu();
 	gCPU[thisCPU].invoke_scheduler = false;
 
+	bigtime_t now = system_time();
+
 	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);
 	cpu->ClearReschedulePending();
 	CoreEntry* core = CoreEntry::GetCore(thisCPU);
@@ -799,7 +801,7 @@ reschedule(int32 nextState)
 	CPUSet oldThreadMask;
 	bool useOldThreadMask, fetchedOldThreadMask = false;
 
-	oldThreadData->StopCPUTime();
+	oldThreadData->StopCPUTime(now);
 
 	SchedulerModeLocker modeLocker;
 
@@ -869,7 +871,7 @@ reschedule(int32 nextState)
 			oldThreadData->UnassignCore(true);
 			core->DecrementTotalThreadCount();
 			// Issue 24 fix: track activity for the last quantum before disable.
-			cpu->UpdateActiveTime(oldThreadData);
+			cpu->UpdateActiveTime(oldThreadData, now);
 
 			CPURunQueueLocker cpuLocker(cpu);
 			nextThreadData = cpu->PeekIdleThread();
@@ -890,7 +892,7 @@ reschedule(int32 nextState)
 			= cpu->ChooseNextThread(enqueueOldThread ? oldThreadData : NULL,
 				putOldThreadAtBack);
 
-		cpu->UpdateActiveTime(oldThreadData);
+		cpu->UpdateActiveTime(oldThreadData, now);
 
 		if (oldThreadShouldMigrate) {
 			enqueue(oldThread, true, NULL);
@@ -934,7 +936,7 @@ reschedule(int32 nextState)
 
 	ASSERT(nextThreadData->Core() == core);
 	nextThread->state = B_THREAD_RUNNING;
-	nextThreadData->StartCPUTime();
+	nextThreadData->StartCPUTime(now);
 
 	// track CPU activity
 	cpu->TrackLoad(nextThreadData);
@@ -960,7 +962,7 @@ reschedule(int32 nextState)
 			nextThreadData->Continues();
 		else
 			Scheduler::RebalanceIRQs(true);
-		nextThreadData->StartQuantum();
+		nextThreadData->StartQuantum(now);
 
 		modeLocker.Unlock();
 

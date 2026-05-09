@@ -89,8 +89,8 @@ public:
 
 	SCHEDULER_INLINE	int32		GetEffectivePriority() const;
 
-	SCHEDULER_INLINE	void		StartCPUTime();
-	SCHEDULER_INLINE	void		StopCPUTime();
+	SCHEDULER_INLINE	void		StartCPUTime(bigtime_t now);
+	SCHEDULER_INLINE	void		StopCPUTime(bigtime_t now);
 
 			void		ResetPriorityBoost();
 
@@ -103,7 +103,7 @@ public:
 
 			bigtime_t	ComputeQuantum() const;
 	SCHEDULER_INLINE	bigtime_t	GetQuantumLeft();
-	SCHEDULER_INLINE	void		StartQuantum();
+	SCHEDULER_INLINE	void		StartQuantum(bigtime_t now);
 	SCHEDULER_INLINE	bool		HasQuantumEnded(bool wasPreempted, bool hasYielded);
 			void		DonateTimesliceTo(Thread* beneficiary);
 
@@ -341,23 +341,23 @@ ThreadData::_UpdatePriorityBoost()
 
 
 inline void
-ThreadData::StartCPUTime()
+ThreadData::StartCPUTime(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	SpinLocker threadTimeLocker(fThread->time_lock);
-	fThread->last_time = system_time();
+	fThread->last_time = now;
 }
 
 
 inline void
-ThreadData::StopCPUTime()
+ThreadData::StopCPUTime(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	// User time is tracked in thread_at_kernel_entry()
 	SpinLocker threadTimeLocker(fThread->time_lock);
-	fThread->kernel_time += system_time() - fThread->last_time;
+	fThread->kernel_time += now - fThread->last_time;
 	fThread->last_time = 0;
 	threadTimeLocker.Unlock();
 
@@ -417,10 +417,10 @@ ThreadData::GetQuantumLeft()
 
 
 inline void
-ThreadData::StartQuantum()
+ThreadData::StartQuantum(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
-	atomic_set64((int64*)&fQuantumStart, system_time());
+	atomic_set64((int64*)&fQuantumStart, now);
 }
 
 
