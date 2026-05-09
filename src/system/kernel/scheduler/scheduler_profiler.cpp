@@ -284,14 +284,18 @@ Profiler::_Dump(FunctionData* data, uint32 count)
 		"function\n");
 	for (uint32 i = 0; i < count; i++) {
 		FunctionData* function = &data[i];
-		kprintf("%10" B_PRId32 " %14" B_PRId64 " %8" B_PRId64 " %14" B_PRId64
-			" %8" B_PRId64 " %s\n", function->fCalled,
-			function->fTimeInclusive,
-			function->fCalled > 0 ? function->fTimeInclusive / function->fCalled
-				: 0,
-			function->fTimeExclusive,
-			function->fCalled > 0 ? function->fTimeExclusive / function->fCalled
-				: 0,
+		int32 called = function->fCalled;
+		bigtime_t inclusive = function->fTimeInclusive;
+		bigtime_t exclusive = function->fTimeExclusive;
+
+		kprintf("%10" B_PRId32 " %14" B_PRId64 " %8" B_PRId64 ".%02" B_PRId64
+			" %14" B_PRId64 " %8" B_PRId64 ".%02" B_PRId64 " %s\n",
+			called, inclusive,
+			called > 0 ? inclusive / called : 0,
+			called > 0 ? (inclusive % called) * 100 / called : 0,
+			exclusive,
+			called > 0 ? exclusive / called : 0,
+			called > 0 ? (exclusive % called) * 100 / called : 0,
 			function->fFunction);
 	}
 }
