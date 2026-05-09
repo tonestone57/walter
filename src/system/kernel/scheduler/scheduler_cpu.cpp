@@ -453,13 +453,16 @@ CPUEntry::UpdatePriority(int32 priority)
 
 
 void
-CPUEntry::ComputeLoad()
+CPUEntry::ComputeLoad(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(gTrackCPULoad);
 	ASSERT(!gCPU[fCPUNumber].disabled);
 	ASSERT(fCPUNumber == smp_get_current_cpu());
+
+	if (now == 0)
+		now = system_time();
 
 	int32 currentLoad = atomic_get(&fLoad);
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
@@ -470,7 +473,7 @@ CPUEntry::ComputeLoad()
 		bigtime_t tempMeasureTime = measureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
 		oldLoad = compute_load(tempMeasureTime, tempMeasureActiveTime, currentLoad,
-				system_time());
+				now);
 		if (oldLoad < 0)
 			break;
 		if (atomic_test_and_set64((int64*)&fMeasureActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
@@ -505,15 +508,14 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	if (oldThread != NULL)
 		oldPriority = oldThread->GetEffectivePriority();
 
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreRunQueueLocker coreLocker(core);
 	CPURunQueueLocker cpuLocker(this);
 
 	ThreadData* pinnedThread = PeekThread();
 	int32 pinnedPriority = -1;
 	if (pinnedThread != NULL)
 		pinnedPriority = pinnedThread->GetEffectivePriority();
-
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
-	CoreRunQueueLocker coreLocker(core);
 
 	ThreadData* sharedThread = core->PeekThread();
 	if (sharedThread == NULL && pinnedThread == NULL) {
@@ -534,8 +536,8 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	int32 rest = max_c(pinnedPriority, sharedPriority);
 	if (oldPriority > rest || (!putAtBack && oldPriority == rest)) {
 		if (sharedThreadIsFloating) {
-			coreLocker.Unlock();
 			cpuLocker.Unlock();
+			coreLocker.Unlock();
 			bool wasRunQueueEmpty;
 			bool requestPreemption;
 			bool updateInteraction;
@@ -567,7 +569,6 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 	}
 
 	if (sharedPriority > pinnedPriority) {
-		CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 		if (sharedThread->fStolen) {
 			core->DecrementTotalThreadCount();
 			sharedThread->fStolen = false;
@@ -577,10 +578,10 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		return sharedThread;
 	}
 
-	coreLocker.Unlock();
-
 	if (sharedThreadIsFloating) {
 		cpuLocker.Unlock();
+		coreLocker.Unlock();
+
 		bool wasRunQueueEmpty;
 		bool requestPreemption;
 		bool updateInteraction;
@@ -655,9 +656,12 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now)
 
 
 void
-CPUEntry::TrackLoad(ThreadData* nextThreadData)
+CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	if (now == 0)
+		now = system_time();
 
 #ifdef DEBUG_SCHEDULER
 	TRACE("scheduler: cpu=%d load=%d idle=%d\n",
@@ -682,7 +686,7 @@ CPUEntry::TrackLoad(ThreadData* nextThreadData)
 
 	if (gTrackCPULoad) {
 		if (!cpuEntry->disabled)
-			ComputeLoad();
+			ComputeLoad(now);
 		_RequestPerformanceLevel(nextThreadData);
 	}
 }
@@ -909,7 +913,8 @@ CPUEntry::_RescheduleEvent(timer* /* unused */)
 /* static */ int32
 CPUEntry::_UpdateLoadEvent(timer* /* unused */)
 {
-	CoreEntry::GetCore(smp_get_current_cpu())->ChangeLoad(0);
+	bigtime_t now = system_time();
+	CoreEntry::GetCore(smp_get_current_cpu())->ChangeLoad(0, now);
 	CPUEntry::GetCPU(smp_get_current_cpu())->fUpdateLoadEvent = false;
 	return B_HANDLED_INTERRUPT;
 }
@@ -1289,7 +1294,7 @@ CoreEntry::SetCapacity(int32 capacity)
 
 
 void
-CoreEntry::_UpdateLoad(bool forceUpdate)
+CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -1297,9 +1302,11 @@ CoreEntry::_UpdateLoad(bool forceUpdate)
 	if (cpuCount <= 0)
 		return;
 
+	if (now == 0)
+		now = system_time();
+
 	// one system_time() call shared by both branches eliminates
 	// a redundant syscall and ensures consistent timestamps.
-	bigtime_t now = system_time();
 	bigtime_t lastUpdate = atomic_get64(&fLastLoadUpdate);
 	if (!forceUpdate) {
 		if (now < kLoadMeasureInterval + lastUpdate)

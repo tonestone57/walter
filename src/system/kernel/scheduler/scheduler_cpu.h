@@ -130,14 +130,15 @@ public:
 
 	inline				int32			GetLoad() const;
 						bigtime_t		GetMinVirtualRuntime() const;
-						void			ComputeLoad();
+						void			ComputeLoad(bigtime_t now = 0);
 
 						ThreadData*		ChooseNextThread(ThreadData* oldThread,
 											bool putAtBack);
 
 						void			UpdateActiveTime(ThreadData* oldThreadData,
 											bigtime_t now);
-						void			TrackLoad(ThreadData* nextThreadData);
+						void			TrackLoad(ThreadData* nextThreadData,
+											bigtime_t now = 0);
 
 						void			StartQuantumTimer(ThreadData* thread,
 											bool wasPreempted);
@@ -291,9 +292,10 @@ public:
 											{ return (int32)(atomic_get64((int64*)&fCombinedLoad) >> 32); }
 
 	inline				void			AddLoad(int32 load, uint32 epoch,
-											bool updateLoad);
-	inline				uint32			RemoveLoad(int32 load, bool force);
-	inline				void			ChangeLoad(int32 delta);
+											bool updateLoad, bigtime_t now = 0);
+	inline				uint32			RemoveLoad(int32 load, bool force,
+											bigtime_t now = 0);
+	inline				void			ChangeLoad(int32 delta, bigtime_t now = 0);
 
 	inline				void			CPUGoesIdle(CPUEntry* cpu);
 	inline				void			CPUWakesUp(CPUEntry* cpu);
@@ -306,7 +308,8 @@ public:
 												threadPostProcessing);
 
 private:
-						void			_UpdateLoad(bool forceUpdate = false);
+						void			_UpdateLoad(bool forceUpdate = false,
+											bigtime_t now = 0);
 
 	static				void			_UnassignThread(Thread* thread,
 											void* core);
@@ -646,7 +649,7 @@ CoreEntry::GetScore() const
 
 
 inline void
-CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad)
+CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -658,12 +661,12 @@ CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad)
 		atomic_add(&fLoad, load);
 
 	if (updateLoad)
-		_UpdateLoad(true);
+		_UpdateLoad(true, now);
 }
 
 
 inline uint32
-CoreEntry::RemoveLoad(int32 load, bool force)
+CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -674,14 +677,14 @@ CoreEntry::RemoveLoad(int32 load, bool force)
 	if (force) {
 		atomic_add(&fLoad, -load);
 
-		_UpdateLoad(true);
+		_UpdateLoad(true, now);
 	}
 	return (uint32)oldCombined;
 }
 
 
 inline void
-CoreEntry::ChangeLoad(int32 delta)
+CoreEntry::ChangeLoad(int32 delta, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -693,7 +696,7 @@ CoreEntry::ChangeLoad(int32 delta)
 		atomic_add(&fLoad, delta);
 	}
 
-	_UpdateLoad();
+	_UpdateLoad(false, now);
 }
 
 

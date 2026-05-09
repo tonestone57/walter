@@ -107,10 +107,11 @@ public:
 	SCHEDULER_INLINE	bigtime_t	GetQuantumLeft();
 	SCHEDULER_INLINE	void		StartQuantum(bigtime_t now);
 	SCHEDULER_INLINE	void		StartQuantum() { StartQuantum(system_time()); }
-	SCHEDULER_INLINE	bool		HasQuantumEnded(bool wasPreempted, bool hasYielded);
+	SCHEDULER_INLINE	bool		HasQuantumEnded(bool wasPreempted,
+								bool hasYielded, bigtime_t now = 0);
 			void		DonateTimesliceTo(Thread* beneficiary);
 
-	SCHEDULER_INLINE	void		Continues();
+	SCHEDULER_INLINE	void		Continues(bigtime_t now = 0);
 	SCHEDULER_INLINE	void		GoesAway();
 	SCHEDULER_INLINE	void		Dies();
 
@@ -175,10 +176,10 @@ public:
 	static	void		ComputeQuantumLengths();
 
 private:
-	SCHEDULER_INLINE	void		_UpdatePriorityBoost();
+	SCHEDULER_INLINE	void		_UpdatePriorityBoost(bigtime_t now);
 
-			void		_ComputeNeededLoad();
-			void		_UpdateDeadline();
+			void		_ComputeNeededLoad(bigtime_t now = 0);
+			void		_UpdateDeadline(bigtime_t now = 0);
 
 			void		_ComputeEffectivePriority(bigtime_t now) const;
 
@@ -292,7 +293,7 @@ ThreadData::GetEffectivePriority() const
 
 
 inline void
-ThreadData::_UpdatePriorityBoost()
+ThreadData::_UpdatePriorityBoost(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -300,7 +301,7 @@ ThreadData::_UpdatePriorityBoost()
 		return;
 
 	int32 oldPriority = GetEffectivePriority();
-	_ComputeEffectivePriority(system_time());
+	_ComputeEffectivePriority(now);
 	int32 newPriority = GetEffectivePriority();
 
 	if (oldPriority != newPriority) {
@@ -428,11 +429,14 @@ ThreadData::StartQuantum(bigtime_t now)
 
 
 inline bool
-ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
+ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	bigtime_t timeUsed = system_time() - atomic_get64((int64*)&fQuantumStart);
+	if (now == 0)
+		now = system_time();
+
+	bigtime_t timeUsed = now - atomic_get64((int64*)&fQuantumStart);
 	ASSERT(timeUsed >= 0);
 	// Issue 68 fix: cap fTimeUsed accumulation. Under extremely rapid
 	// rescheduling, fTimeUsed can accumulate to near B_INT64_MAX before the
@@ -449,7 +453,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	bigtime_t quantum = ComputeQuantum();
 	if (timeUsedTotal >= quantum) {
 		atomic_set64((int64*)&fTimeUsed, 0);
-		_UpdateDeadline();
+		_UpdateDeadline(now);
 		return true;
 	}
 
@@ -473,7 +477,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 
 	if (timeLeft == 0) {
 		atomic_set64((int64*)&fTimeUsed, 0);
-		_UpdateDeadline();
+		_UpdateDeadline(now);
 		return true;
 	}
 
@@ -482,7 +486,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 
 
 inline void
-ThreadData::Continues()
+ThreadData::Continues(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -498,7 +502,7 @@ ThreadData::Continues()
 		return;
 	}
 	if (gTrackCoreLoad)
-		_ComputeNeededLoad();
+		_ComputeNeededLoad(now);
 }
 
 

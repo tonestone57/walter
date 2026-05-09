@@ -581,10 +581,13 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 
 
 void
-ThreadData::_ComputeNeededLoad()
+ThreadData::_ComputeNeededLoad(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	ASSERT(!IsIdle());
+
+	if (now == 0)
+		now = system_time();
 
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int32 oldLoad;
@@ -594,7 +597,7 @@ ThreadData::_ComputeNeededLoad()
 		bigtime_t tempLastMeasureTime = lastMeasureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
 		oldLoad = compute_load(tempLastMeasureTime, tempMeasureActiveTime, fNeededLoad,
-			system_time());
+			now);
 		if (oldLoad < 0)
 			break;
 		if (atomic_test_and_set64((int64*)&fMeasureAvailableActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
@@ -620,12 +623,15 @@ ThreadData::_ComputeNeededLoad()
 
 
 void
-ThreadData::_UpdateDeadline()
+ThreadData::_UpdateDeadline(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (IsIdle() || IsRealTime())
 		return;
+
+	if (now == 0)
+		now = system_time();
 
 	// Issue 6/37 fix: _UpdateDeadline is called from HasQuantumEnded which is
 	// called under SchedulerModeLocker (read lock). gDeadlineBucketSize won't
@@ -643,7 +649,6 @@ ThreadData::_UpdateDeadline()
 
 	// Virtual Deadline Calculation:
 	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)
-	bigtime_t now = system_time();
 	int32 priority = GetPriority();
 	if (priority > THREAD_MAX_SET_PRIORITY)
 		priority = THREAD_MAX_SET_PRIORITY;
@@ -827,6 +832,8 @@ ThreadData::ResetPriorityBoost()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	bigtime_t now = system_time();
+
 	// Issue 64 fix: _ComputeEffectivePriority maps (fVirtualDeadline - now)
 	// to a priority bucket. Without a preceding _UpdateDeadline, fVirtualDeadline
 	// may be from the previous quantum, causing the reset to assign a priority
@@ -834,7 +841,7 @@ ThreadData::ResetPriorityBoost()
 	// just been woken after a long sleep (fVirtualDeadline far in the past).
 	// Update the deadline first so the priority reflects current scheduling state.
 	if (!IsIdle() && !IsRealTime())
-		_UpdateDeadline();
+		_UpdateDeadline(now);
 
-	_ComputeEffectivePriority(system_time());
+	_ComputeEffectivePriority(now);
 }

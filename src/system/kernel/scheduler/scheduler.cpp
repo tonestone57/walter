@@ -290,10 +290,11 @@ struct RunQueueScanner {
 					unsigned int priority = i * 32 + bit;
 					ThreadData* thread = runQueue->GetHead(priority);
 					int count = 0;
+					bigtime_t now = system_time();
 
 					while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
 						ThreadData* next = thread->GetRunQueueLink()->fNext;
-						thread->_UpdatePriorityBoost();
+						thread->_UpdatePriorityBoost(now);
 						thread = next;
 					}
 
@@ -442,15 +443,17 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 	// destructor may double-unlock or fail to unlock.
 	// Use explicit Lock()/Unlock() calls instead of the two-argument
 	// constructor to make the locking intent unambiguous.
-	CoreRunQueueLocker coreLocker(core, false, false); // start unlocked
+
 	// Issue 11/72 fix: The thread-count check was done without the lock; a thread
 	// could be removed between the check and lock acquisition, making the
 	// locked scan a wasted spinlock round-trip.  Re-check inside the lock.
 	if (ownsCoreQueueScan) {
-		coreLocker.Lock(); // explicit: matches explicit unlock in destructor
+		// Scoped locker: ensure Core and CPU run-queue locks are NEVER
+		// held simultaneously in this function to eliminate lock inversion.
+		CoreRunQueueLocker coreLocker(core, false, false);
+		coreLocker.Lock();
 		if (core->CoreRunQueueThreadCount() > 0)
 			scanRunQueue(core->RunQueue());
-		// coreLocker destructor handles unlock
 	}
 
 	// Check CPU RunQueue
@@ -939,7 +942,7 @@ reschedule(int32 nextState)
 	nextThreadData->StartCPUTime(now);
 
 	// track CPU activity
-	cpu->TrackLoad(nextThreadData);
+	cpu->TrackLoad(nextThreadData, now);
 
 	if (nextThread != oldThread || oldThread->cpu->preempted) {
 		// Dynamic Quantum Scaling:
@@ -959,7 +962,7 @@ reschedule(int32 nextState)
 
 		oldThread->cpu->preempted = false;
 		if (!nextThreadData->IsIdle())
-			nextThreadData->Continues();
+			nextThreadData->Continues(now);
 		else
 			Scheduler::RebalanceIRQs(true);
 		nextThreadData->StartQuantum(now);

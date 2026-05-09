@@ -600,7 +600,8 @@ choose_core(const ThreadData* threadData, const CPUSet& mask)
 				int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 				for (int32 i = 0; i < attempts; i++) {
 					int32 index = startIndex + i;
-					if (index >= gPackageCount) index -= gPackageCount;
+					if (index >= gPackageCount)
+						index -= gPackageCount;
 					check_package_packing(cpu, &gPackageEntries[index],
 						NULL, core, stdBestScore,
 						foundNonOverloadedStd, CORE_TYPE_STANDARD);
