@@ -278,8 +278,10 @@ cmd_scheduler(int argc, char** argv)
 	kprintf("runs:\n");
 	kprintf("  total #: %" B_PRId64 "\n", runs);
 	kprintf("  total:   %" B_PRIdBIGTIME " us\n", totalRunTime);
-	kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
-		totalRunTime / runs, (totalRunTime % runs) * 100 / runs);
+	if (runs > 0) {
+		kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
+			totalRunTime / runs, (totalRunTime % runs) * 100 / runs);
+	}
 	kprintf("  min:     %" B_PRIdBIGTIME " us\n", minRunTime);
 	kprintf("  max:     %" B_PRIdBIGTIME " us\n", maxRunTime);
 
@@ -287,8 +289,10 @@ cmd_scheduler(int argc, char** argv)
 		kprintf("scheduling latency after wake up:\n");
 		kprintf("  total #: %" B_PRId64 "\n", latencies);
 		kprintf("  total:   %" B_PRIdBIGTIME " us\n", totalLatency);
-		kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
-			totalLatency / latencies, (totalLatency % latencies) * 100 / latencies);
+		if (latencies > 0) {
+			kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
+				totalLatency / latencies, (totalLatency % latencies) * 100 / latencies);
+		}
 		kprintf("  min:     %" B_PRIdBIGTIME " us\n", minLatency);
 		kprintf("  max:     %" B_PRIdBIGTIME " us (at tracing entry %" B_PRId32
 			")\n", maxLatency, maxLatencyEntry);
@@ -299,8 +303,10 @@ cmd_scheduler(int argc, char** argv)
 		kprintf("scheduling latency after preemption:\n");
 		kprintf("  total #: %" B_PRId64 "\n", reruns);
 		kprintf("  total:   %" B_PRIdBIGTIME " us\n", totalRerunTime);
-		kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
-			totalRerunTime / reruns, (totalRerunTime % reruns) * 100 / reruns);
+		if (reruns > 0) {
+			kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
+				totalRerunTime / reruns, (totalRerunTime % reruns) * 100 / reruns);
+		}
 		kprintf("  min:     %" B_PRIdBIGTIME " us\n", minRerunTime);
 		kprintf("  max:     %" B_PRIdBIGTIME " us (at tracing entry %" B_PRId32
 			")\n", maxRerunTime, maxRerunEntry);
