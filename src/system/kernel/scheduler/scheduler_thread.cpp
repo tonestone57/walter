@@ -651,7 +651,7 @@ ThreadData::_UpdateDeadline()
 	bigtime_t slice = atomic_get64(&sVirtualDeadlineSlices[priority]);
 
 	// Scale virtual deadline slice by interactivity (bursty threads get shorter slices)
-	// Fast integer approximation of / 1000
+	// Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
 	// Ensure 64-bit arithmetic to prevent overflow.
 	// Use clamped interactivity to prevent negative slice.
 	int32 interactivity = fInteractivityScore;

@@ -698,6 +698,8 @@ CPUEntry::GetRandom()
 	x ^= x << 25;
 	x ^= x >> 27;
 	fRandomState = x;
+	// Multiplicative mapping to mix the state: 0x2545F4914F6CDD1DULL
+	// is a large 64-bit prime constant used to distribute entropy.
 	return (uint32)((x * 0x2545F4914F6CDD1DULL) >> 32);
 }
 

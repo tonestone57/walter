@@ -26,7 +26,13 @@ using namespace Scheduler;
  */
 const static int kFShift = 11;
 const static long kFScale = 1 << kFShift;
-static struct loadavg sAverageRunnable __attribute__((aligned(8))) = {{0, 0, 0}, kFScale};
+static struct loadavg sAverageRunnable __attribute__((aligned(8))) = {{0, 0, 0}, (int32)kFScale};
+
+// Exponential decay constants for 1, 5, and 15 minute averages.
+// Formula: exp(-t / C) * kFScale, where t = 5s (update interval).
+// 1m: exp(-5 / 60)  * 2048 = 1884.21 ~= 1884
+// 5m: exp(-5 / 300) * 2048 = 2014.15 ~= 2014
+// 15m: exp(-5 / 900) * 2048 = 2036.64 ~= 2037
 const static uint64 sCExp[3] __attribute__((aligned(8))) = { 1884, 2014, 2037 };
 
 static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;
