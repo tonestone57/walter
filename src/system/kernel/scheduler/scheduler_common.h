@@ -343,6 +343,8 @@ SubAcquireRelease(int32& value, int v)
 inline void
 SetCPUIDle(uint64& mask, int cpu)
 {
+	if ((unsigned)cpu >= 64)
+		return;
 	atomic_or64((int64*)&mask, 1ULL << cpu);
 }
 
@@ -350,6 +352,8 @@ SetCPUIDle(uint64& mask, int cpu)
 inline void
 ClearCPUIDle(uint64& mask, int cpu)
 {
+	if ((unsigned)cpu >= 64)
+		return;
 	atomic_and64((int64*)&mask, ~(1ULL << cpu));
 }
 
@@ -357,6 +361,8 @@ ClearCPUIDle(uint64& mask, int cpu)
 inline bool
 IsCPUIDle(const uint64& mask, int cpu)
 {
+	if ((unsigned)cpu >= 64)
+		return false;
 	return (atomic_get64((int64*)&mask) & (1ULL << cpu)) != 0;
 }
 
