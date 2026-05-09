@@ -432,7 +432,7 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded)
 	bigtime_t timeUsed = system_time() - atomic_get64((int64*)&fQuantumStart);
 	ASSERT(timeUsed >= 0);
 	// Issue 68 fix: cap fTimeUsed accumulation. Under extremely rapid
-	// rescheduling, fTimeUsed can accumulate to near INT64_MAX before the
+	// rescheduling, fTimeUsed can accumulate to near B_INT64_MAX before the
 	// quantum-end check fires. When that happens, quantum - fTimeUsed
 	// underflows to a large positive, granting an unintended stolen-time
 	// bonus. Cap at 2 * MaximumLatency() as a generous but safe upper bound.

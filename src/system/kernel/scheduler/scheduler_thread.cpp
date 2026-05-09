@@ -114,7 +114,7 @@ ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
 
 	CoreCPUHeapLocker _(core);
 	CPUEntry* bestCPU = NULL;
-	int32 bestKey = INT32_MAX;
+	int32 bestKey = B_INT32_MAX;
 
 	int32 index = 0;
 	while (true) {
@@ -753,11 +753,11 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		if (urgency < 0) urgency = 0;
 		if (urgency > kMaxDynamicPriority) urgency = kMaxDynamicPriority;
 		// kMaxDynamicPriority fits in int32, but if diff is very
-		// negative the expression can produce urgency > INT32_MAX before the
+		// negative the expression can produce urgency > B_INT32_MAX before the
 		// clamp.  The clamp to kMaxDynamicPriority above is sufficient for
 		// correctness (bigtime_t is 64-bit signed), but add an explicit cast
 		// guard to silence undefined-behaviour sanitisers.
-		if (urgency > (bigtime_t)INT32_MAX) urgency = (bigtime_t)INT32_MAX;
+		if (urgency > (bigtime_t)B_INT32_MAX) urgency = (bigtime_t)B_INT32_MAX;
 
 		fEffectivePriority = (int32)urgency;
 	}

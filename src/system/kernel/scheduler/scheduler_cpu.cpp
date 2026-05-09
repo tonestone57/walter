@@ -74,13 +74,12 @@ struct LocalNodeStealAction {
 
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
-			*stolen = victim->StealThread(stolenPriority, cpu->ID(), enabled);
+			*stolen = victim->StealThread(stolenPriority, cpu->ID());
 
 			if (*stolen != NULL) {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
-				if ((threadMask.IsEmpty() || threadMask.GetBit(cpu->ID()))
-						&& enabled.GetBit(cpu->ID())) {
+				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core());
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
@@ -136,13 +135,12 @@ struct GlobalRandomStealAction {
 
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
-			*stolen = victim->StealThread(stolenPriority, cpu->ID(), enabled);
+			*stolen = victim->StealThread(stolenPriority, cpu->ID());
 
 			if (*stolen != NULL) {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
-				if ((threadMask.IsEmpty() || threadMask.GetBit(cpu->ID()))
-						&& enabled.GetBit(cpu->ID())) {
+				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core());
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
@@ -164,19 +162,17 @@ struct GlobalRandomStealAction {
 };
 
 struct StealThreadPredicate {
-	const CPUSet& enabled;
 	int32 thiefCPU;
 
-	StealThreadPredicate(const CPUSet& e, int32 t)
-		: enabled(e), thiefCPU(t) {}
+	StealThreadPredicate(int32 t)
+		: thiefCPU(t) {}
 
 	bool operator()(ThreadData* td) const {
 		if (td->IsIdle())
 			return false;
 
 		const CPUSet& threadMask = td->GetThread()->cpumask;
-		return (threadMask.IsEmpty() || threadMask.GetBit(thiefCPU))
-			&& enabled.GetBit(thiefCPU);
+		return threadMask.IsEmpty() || threadMask.GetBit(thiefCPU);
 	}
 };
 
@@ -778,14 +774,12 @@ CPUEntry::_TryStealWork()
 		// Use TryLock to avoid contention
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
-			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber,
-				enabled);
+			ThreadData* stolen = victim->StealThread(stolenPriority, fCPUNumber);
 
 			if (stolen != NULL) {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = stolen->GetThread()->cpumask;
-				if ((threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber))
-						&& enabled.GetBit(fCPUNumber)) {
+				if (threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber)) {
 					CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 					stolen->MigrateTo(core);
 					stolen->fStolen = true;
@@ -1043,14 +1037,12 @@ CoreEntry::Remove(ThreadData* thread)
 
 
 ThreadData*
-CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU,
-	const CPUSet& enabled)
+CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	// Explicitly exclude idle threads from steal candidates.
-	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(enabled,
-		thiefCPU));
+	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(thiefCPU));
 
 	if (thread != NULL) {
 		stolenPriority = thread->GetEffectivePriority();
@@ -1197,16 +1189,16 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		}
 	}
 
-	// Use INT32_MIN instead of the implicit magic -1.  INT32_MIN is
+	// Use B_INT32_MIN instead of the implicit magic -1.  B_INT32_MIN is
 	// less than every valid scheduler priority (minimum B_IDLE_PRIORITY == 0),
 	// so the CPU is guaranteed to bubble to the heap root.  The explicit
 	// constant makes the intent clear and prevents silent misbehaviour if the
 	// priority range ever grows to include negative values.
-	fCPUHeap.ModifyKey(cpu, INT32_MIN);
+	fCPUHeap.ModifyKey(cpu, B_INT32_MIN);
 	// Issue 2 fix: fCPUHeap is accessed exclusively under fCPULock, which the
 	// caller holds via CoreCPUHeapLocker for the duration of RemoveCPU.  No
 	// other CPU can concurrently modify the heap, so the root is guaranteed to
-	// be 'cpu' immediately after ModifyKey(cpu, INT32_MIN).  The previous spin
+	// be 'cpu' immediately after ModifyKey(cpu, B_INT32_MIN).  The previous spin
 	// loop was dead code and its 1000-iteration cap masked any real invariant
 	// violations by silently proceeding with a wrong root.
 	ASSERT(fCPUHeap.PeekRoot() == cpu);
@@ -1271,8 +1263,8 @@ CoreEntry::PeekMinimumLoadCPU()
 				CPUEntry* entry = &gCPUEntries[cpu];
 				// Issue 52 fix: verify the CPU is still in the heap before
 				// returning it. A concurrent RemoveCPU may have set the heap
-				// key to INT32_MIN between the fCPUSet read and this check.
-				// GetKey returns INT32_MIN for removed CPUs; any valid CPU
+				// key to B_INT32_MIN between the fCPUSet read and this check.
+				// GetKey returns B_INT32_MIN for removed CPUs; any valid CPU
 				// has key >= B_IDLE_PRIORITY (0).
 				if (entry->Core() == this && !gCPU[cpu].disabled
 						&& CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)

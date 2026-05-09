@@ -27,8 +27,7 @@ using namespace Scheduler;
 const static int kFShift = 11;
 const static long kFScale = 1 << kFShift;
 static struct loadavg sAverageRunnable __attribute__((aligned(8))) = {{0, 0, 0}, kFScale};
-const static uint64 sCExp[3] __attribute__((aligned(8))) = {(uint64)(0.9200444146293232 * kFScale),
-	(uint64)(0.9834714538216174 * kFScale), (uint64)(0.9944598480048967 * kFScale)};
+const static uint64 sCExp[3] __attribute__((aligned(8))) = { 1884, 2014, 2037 };
 
 static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;
 
@@ -71,7 +70,7 @@ _LoadavgUpdate(void *data, int iteration)
 		// Issue 10 fix: the 128-bit intermediate is correct, but the final
 		// uint64 truncation can overflow for pathological thread counts or
 		// if ldavg accumulated a very large value across prior iterations.
-		// Clamp the result to INT32_MAX (a sane upper bound: no system has
+		// Clamp the result to B_INT32_MAX (a sane upper bound: no system has
 		// 2^31 runnable threads).  The FreeBSD algorithm assumes the same
 		// practical bound.
 		// GCC 2.95 compatibility: use uint64; intermediate fits in 64 bits.
@@ -79,7 +78,7 @@ _LoadavgUpdate(void *data, int iteration)
 			(uint64)sCExp[i] * sAverageRunnable.ldavg[i]
 			+ (uint64)threadCount * (kFScale - sCExp[i]) * kFScale;
 		uint64 result = (uint64)(acc >> kFShift);
-		const uint64 kMaxLdAvg = (uint64)INT32_MAX;
+		const uint64 kMaxLdAvg = (uint64)B_INT32_MAX;
 		sAverageRunnable.ldavg[i] = (result < kMaxLdAvg) ? result : kMaxLdAvg;
 	}
 }

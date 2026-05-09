@@ -608,8 +608,8 @@ rebalance(const ThreadData* threadData)
 	// If the current core is significantly lagging behind the other core,
 	// we lower the threshold for migration to improve latency.
 	// Issue 8 fix: guard both signed overflow AND underflow.
-	// coreVRuntime near INT64_MAX risks addition overflow (existing guard).
-	// coreVRuntime near INT64_MIN risks subtraction underflow: if another
+	// coreVRuntime near B_INT64_MAX risks addition overflow (existing guard).
+	// coreVRuntime near B_INT64_MIN risks subtraction underflow: if another
 	// expression later computes (coreVRuntime - X) where X > 0 the result
 	// wraps to a large positive, inverting comparisons.  The additional
 	// lower-bound guard eliminates this path entirely.
@@ -618,8 +618,8 @@ rebalance(const ThreadData* threadData)
 	// Both are required and neither can be safely removed.
 	// static_assert replaced by comment for GCC 2.95
 	// sizeof(bigtime_t) == 8
-	bool congested = (coreVRuntime >= (bigtime_t)(INT64_MIN + 20000LL))
-		&& (coreVRuntime <= (bigtime_t)(INT64_MAX - 20000LL))
+	bool congested = (coreVRuntime >= (bigtime_t)(B_INT64_MIN + 20000LL))
+		&& (coreVRuntime <= (bigtime_t)(B_INT64_MAX - 20000LL))
 		&& (otherVRuntime > coreVRuntime + 20000LL);
 
 	// Heterogeneous Placement Stickiness: scale threshold by core performance

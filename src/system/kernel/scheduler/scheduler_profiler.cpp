@@ -173,7 +173,7 @@ Profiler::DumpCalled(uint32 maxCount)
 		&_CompareFunctions<int32, &FunctionData::fCalled>);
 
 	if (maxCount > 0)
-		count = std::min(count, maxCount);
+		count = min_c(count, maxCount);
 	_Dump(fSortBuffer, count);
 }
 
@@ -188,7 +188,7 @@ Profiler::DumpTimeInclusive(uint32 maxCount)
 		&_CompareFunctions<nanotime_t, &FunctionData::fTimeInclusive>);
 
 	if (maxCount > 0)
-		count = std::min(count, maxCount);
+		count = min_c(count, maxCount);
 	_Dump(fSortBuffer, count);
 }
 
@@ -203,7 +203,7 @@ Profiler::DumpTimeExclusive(uint32 maxCount)
 		&_CompareFunctions<nanotime_t, &FunctionData::fTimeExclusive>);
 
 	if (maxCount > 0)
-		count = std::min(count, maxCount);
+		count = min_c(count, maxCount);
 	_Dump(fSortBuffer, count);
 }
 
@@ -218,7 +218,7 @@ Profiler::DumpTimeInclusivePerCall(uint32 maxCount)
 		&_CompareFunctionsPerCall<nanotime_t, &FunctionData::fTimeInclusive>);
 
 	if (maxCount > 0)
-		count = std::min(count, maxCount);
+		count = min_c(count, maxCount);
 	_Dump(fSortBuffer, count);
 }
 
@@ -233,7 +233,7 @@ Profiler::DumpTimeExclusivePerCall(uint32 maxCount)
 		&_CompareFunctionsPerCall<nanotime_t, &FunctionData::fTimeExclusive>);
 
 	if (maxCount > 0)
-		count = std::min(count, maxCount);
+		count = min_c(count, maxCount);
 	_Dump(fSortBuffer, count);
 }
 
@@ -418,7 +418,7 @@ dump_profiler(int argc, char** argv)
 	int32 count = 0;
 	if (argc >= 3)
 		count = parse_expression(argv[2]);
-	count = std::max(count, int32(0));
+	count = max_c(count, (int32)0);
 
 	if (!strcmp(argv[1], "called"))
 		Profiler::Get()->DumpCalled(count);
