@@ -8,12 +8,6 @@
 // formula uses fRegisteredCoreCount AFTER it has already been updated by
 //   fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
 // so it correctly reflects the new count including the just-registered core.
-// No code change is needed; the original audit finding was based on reading
-// the pre-update value, which is not what the code does.
-//
-// (note — CPUEntry::Init RNG seed): Improving entropy requires a
-// platform-specific hardware RNG (rdtsc/mrs cntvct) call per CPU during
-// init.  This is architecture-dependent and deferred to a follow-up patch.
 // The current Xorshift64 mixing is sufficient for scheduling fairness even
 // with correlated seeds; the correlation resolves after the first few calls.
 
