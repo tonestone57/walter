@@ -258,7 +258,7 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	// gPackageCount > 128 fallback: consecutive-duplicate suppression
 	// misses non-adjacent duplicates. Add a secondary hash-bucket check
 	// for medium-sized systems (129-512 packages).
-	const bool useMediumBitmask = (!useVisitedBitmask && gPackageCount <= 512);
+	const bool useMediumBitmask = (!useVisitedBitmask && gPackageCount <= 512); // Issue 78
 	// Use a simple modular hash into a 64-bit word for 129-512 packages.
 	// Collisions are possible but acceptable — this is a best-effort guard.
 	uint64 mediumVisited = 0;

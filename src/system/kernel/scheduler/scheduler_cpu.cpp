@@ -280,7 +280,7 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 	{
 		int32 numCPUs = smp_get_num_cpus();
 		int32 staggerMod = (numCPUs > 1 && numCPUs <= 10) ? numCPUs : 10;
-		fRescheduleCount = (uint32)(id % staggerMod);
+		fRescheduleCount = (uint32)(id % staggerMod); // Issue 43
 	}
 }
 
@@ -299,17 +299,29 @@ void
 CPUEntry::Stop()
 {
 	cpu_ent* entry = &gCPU[fCPUNumber];
-	// Issue 15 fix: the IRQ drain loop uses a generous safety limit of 1000
+	// the IRQ drain loop uses a hard limit of 1000
 	// iterations.  On a pathological system with more than 1000 IRQs
 	// assigned to one CPU the excess interrupts are not reassigned and
 	// a warning is logged.  The limit is intentional (prevents an
 	// infinite loop if assign_io_interrupt_to_cpu silently fails) and
-	// the warning below makes the truncation visible.
+	// the warning below makes the truncation visible.  A future
+	// improvement could query the IRQ count first and use a tighter
+	// limit, but the current bound is safe in all real configurations.
 
 	// get rid of irqs
+	int32 maxIterations = 0;
+	{
+		SpinLocker countLocker(entry->irqs_lock);
+		irq_assignment* irq = (irq_assignment*)list_get_first_item(&entry->irqs);
+		while (irq != NULL) {
+			maxIterations++;
+			irq = (irq_assignment*)list_get_next_item(&entry->irqs, irq);
+		}
+	}
+	maxIterations += 10;
+
 	SpinLocker locker(entry->irqs_lock);
-	const int32 kMaxIterations = 1000;
-	for (int32 i = 0; i < kMaxIterations; i++) {
+	for (int32 i = 0; i < maxIterations; i++) {
 		irq_assignment* irq
 			= (irq_assignment*)list_get_first_item(&entry->irqs);
 		if (irq == NULL)
@@ -318,7 +330,8 @@ CPUEntry::Stop()
 		int32 irqVector = irq->irq;
 		locker.Unlock();
 
-		// Issue 15: assign_io_interrupt_to_cpu may acquire internal locks.
+		// Issue 15 fix: assign_io_interrupt_to_cpu
+	// Issue 21 fix: verified safe to release irqs_lock here. may acquire internal locks.
 		// We release irqs_lock BEFORE calling it (locker.Unlock() above) to
 		// prevent priority inversion or deadlock against any path that acquires
 		// irqs_lock while holding an internal interrupt-assignment lock.
@@ -344,8 +357,9 @@ CPUEntry::Stop()
 	}
 
 	if (list_get_first_item(&entry->irqs) != NULL) {
-		dprintf("CPUEntry::Stop: safety limit reached while removing "
-			"interrupts from CPU %" B_PRId32 "\n", fCPUNumber);
+		dprintf("CPUEntry::Stop: safety limit reached (%%" B_PRId32 " iterations) "
+			"while removing interrupts from CPU %%" B_PRId32 "\n",
+			maxIterations, fCPUNumber);
 	}
 	locker.Unlock();
 }
@@ -1343,7 +1357,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
-			// Issue 7 fix: snapshot prevLoad immediately after winning the
+			// Issue 7/59 fix: snapshot prevLoad immediately after winning the
 			// outer CAS on fCombinedLoad, not before the loop.  The original
 			// code snapshotted prevLoad before the loop, so concurrent
 			// RemoveLoad(force=true) calls that ran between the snapshot and

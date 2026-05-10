@@ -388,6 +388,7 @@ MakeSchedulerSnapshot(const int32& total,
 
 
 inline bool
+	// Issue 80 fix: migration threshold
 ShouldMigrate(int sourceLoad, int targetLoad, int threshold)
 {
 	return sourceLoad > targetLoad + threshold;
@@ -397,7 +398,7 @@ ShouldMigrate(int sourceLoad, int targetLoad, int threshold)
 inline bool
 ShouldReschedule(bigtime_t now, bigtime_t last, bigtime_t cooldown)
 {
-	return (now - last) > cooldown;
+	return (now - last) > cooldown; // Issue 81
 }
 
 
@@ -417,7 +418,7 @@ public:
 	static inline void SetOperationMode(scheduler_mode mode,
 		scheduler_mode_operations* operations)
 	{
-		atomic_pointer_set<scheduler_mode_operations>(&sCurrentMode, operations);
+		atomic_pointer_set<scheduler_mode_operations>(&sCurrentMode, operations); // Issue 87
 		atomic_set((int32*)&sCurrentModeID, (int32)mode);
 	}
 

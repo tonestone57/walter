@@ -189,7 +189,7 @@ scheduler_update_interaction_state(bigtime_t now)
 		//     harmless.  No code change required.
 		return;
 
-	 // Issue 28 fix: Cache gDeadlineBucketSize once — it is read twice below and
+	 // Issue 28: Cache gDeadlineBucketSize once — it is read twice below and
 	// the two reads could observe different values if a concurrent DPC is
 	// updating it.  A single cached read is also cheaper on the hot path.
 	int64 currentBucketSize = atomic_get64(&gDeadlineBucketSize);
@@ -386,7 +386,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu, bigtime_t now = 0)
 	if (now == 0)
 		now = system_time();
 
-	// Issue 40 fix: This mask is recomputed from a compile-time constant on every
+	// Issue 40: This mask is recomputed from a compile-time constant on every
 	// reschedule.  Hoist it to a static const so the compiler evaluates it
 	// once at startup.
 	static const uint32 kTopWordMask =
@@ -630,7 +630,7 @@ scheduler_enqueue_in_run_queue(Thread *thread)
 	Thread* waker = thread->waker;
 	thread->waker = NULL;
 
-	bigtime_t now = system_time();
+	bigtime_t now = system_time(); // Issue 47
 	threadData->ResetPriorityBoost(now);
 	enqueue(thread, true, waker, now);
 }
@@ -654,7 +654,7 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 	TRACE("changing thread %" B_PRId32 " priority to %" B_PRId32 " (old: %" B_PRId32 ", effective: %" B_PRId32 ")\n",
 		thread->id, priority, oldPriority, threadData->GetEffectivePriority());
 
-	bigtime_t now = system_time();
+	bigtime_t now = system_time(); // Issue 47
 	thread->priority = priority;
 	threadData->ResetPriorityBoost(now);
 
@@ -803,7 +803,7 @@ reschedule(int32 nextState)
 	int32 thisCPU = smp_get_current_cpu();
 	gCPU[thisCPU].invoke_scheduler = false;
 
-	bigtime_t now = system_time();
+	bigtime_t now = system_time(); // Issue 47
 
 	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);
 	cpu->ClearReschedulePending();
@@ -958,7 +958,7 @@ reschedule(int32 nextState)
 	if (nextThread != oldThread || oldThread->cpu->preempted) {
 		// Dynamic Quantum Scaling:
 		// Reduce quantum if the core is crowded to maintain interactivity.
-		// Issue 35 fix: ThreadCount() can transiently return 0 during a remove
+		// Issue 35: ThreadCount() can transiently return 0 during a remove
 		// race.  If load == 1, (load - 1) == 0 causes division by zero.
 		// Clamp divisor to at least 1.
 		int32 load = core->ThreadCount();
@@ -1441,7 +1441,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 						packageCount++;
 						sPackageToNode[packageCount] = currentNodeID;
 					}
-		// Issue 19 fix: when the guard above prevents a new package from being
+		// Issue 19: when the guard above prevents a new package from being
 		// created, the remaining CPUs in this cluster are folded into the
 		// current package.  No sPackageToNode write is needed since the
 		// current package's node was already written at cluster start.
@@ -2143,7 +2143,7 @@ scheduler_on_team_foreground_changed(Team* team)
 					|| threadData->IsRealTime())
 				continue;
 
-			bigtime_t now = system_time();
+			bigtime_t now = system_time(); // Issue 47
 			if (thread->state == B_THREAD_READY) {
 				if (threadData->Dequeue()) {
 					threadData->SetForeground(team->fIsForeground);

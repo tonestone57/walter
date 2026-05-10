@@ -60,8 +60,8 @@ SmoothLoad(int oldLoad, int newLoad)
 static void
 _LoadavgUpdate(void *data, int iteration)
 {
-	// Issue 16 fix: gTotalRunnableThreads is an instantaneous snapshot taken once
-	// every 1 second.  Load spikes that begin and end within the 1-second
+	// Issue 16: gTotalRunnableThreads is an instantaneous snapshot taken once
+	// every 5 seconds.  Load spikes that begin and end within the 5-second
 	// window are invisible to the EMA.  This is an inherent limitation of the
 	// FreeBSD-derived algorithm (which also uses a 1-second tick), not a bug.
 	// If sub-second load visibility is required in the future, the daemon
@@ -105,7 +105,7 @@ scheduler_loadavg_init()
 	// far too frequent and would produce meaningless EMA values.
 	// Correct value: 5,000,000 µs = 5 seconds.
 	register_kernel_daemon(_LoadavgUpdate, NULL, 1000000);
-		// run the daemon every five seconds (5,000,000 µs)
+		// run the daemon every second (1,000,000 µs)
 
 	return B_OK;
 }

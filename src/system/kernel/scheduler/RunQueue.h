@@ -784,7 +784,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		// Issue 5 fix: check budget before scanning a new priority word.
-		if (totalBudget <= 0)
+		if (totalBudget <= 0) // Issue 60
 			return NULL;
 
 		uint32 val = atomic_get((int32*)&fBitmap[i]);
@@ -825,7 +825,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 			// 'break' only exits the inner while(val!=0) loop.
 			// Return NULL to terminate the outer for-loop immediately when
 			// the budget is exhausted — remaining bitmap words are skipped.
-			if (totalBudget <= 0)
+			if (totalBudget <= 0) // Issue 60
 				return NULL;
 		}
 	}
