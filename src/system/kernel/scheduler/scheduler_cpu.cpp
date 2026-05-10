@@ -299,25 +299,20 @@ void
 CPUEntry::Stop()
 {
 	cpu_ent* entry = &gCPU[fCPUNumber];
-	// Issue 15 fix: the IRQ drain loop uses a dynamic limit based on the number of
-	// interrupts currently assigned to this CPU, with a safety margin.
-	// This ensures all IRQs are drained even on systems with many vectors,
-	// while still preventing an infinite loop if assign_io_interrupt_to_cpu
-	// silently fails.
+	// Issue 15 fix: the IRQ drain loop uses a generous safety limit of 1000
+	// iterations.  On a pathological system with more than 1000 IRQs
+	// assigned to one CPU the excess interrupts are not reassigned and
+	// a warning is logged.  The limit is intentional (prevents an
+	// infinite loop if assign_io_interrupt_to_cpu silently fails) and
+	// the warning below makes the truncation visible.
 
 	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);
 
-	int32 maxIterations = 0;
-	irq_assignment* irq = (irq_assignment*)list_get_first_item(&entry->irqs);
-	while (irq != NULL) {
-		maxIterations++;
-		irq = (irq_assignment*)list_get_next_item(&entry->irqs, irq);
-	}
-	maxIterations += 10;
+	const int32 maxIterations = 1000;
 
 	for (int32 i = 0; i < maxIterations; i++) {
-		irq = (irq_assignment*)list_get_first_item(&entry->irqs);
+		irq_assignment* irq = (irq_assignment*)list_get_first_item(&entry->irqs);
 		if (irq == NULL)
 			break;
 
@@ -351,9 +346,8 @@ CPUEntry::Stop()
 	}
 
 	if (list_get_first_item(&entry->irqs) != NULL) {
-		dprintf("CPUEntry::Stop: safety limit reached (%" B_PRId32
-			" iterations) while removing interrupts from CPU %" B_PRId32 "\n",
-			maxIterations, fCPUNumber);
+		dprintf("CPUEntry::Stop: safety limit reached while removing "
+			"interrupts from CPU %" B_PRId32 "\n", fCPUNumber);
 	}
 	locker.Unlock();
 }

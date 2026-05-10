@@ -770,7 +770,7 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 		// node goes idle (first package)
 		// Issue 8 fix: guard gIdleNodeMask update; nodes >= 64 cannot
 		// be tracked for idleness but must still exist.
-		if (fNodeID < 64) // Issue 74 fix: node limit
+		if (fNodeID < 64) { // Issue 74 fix: node limit
 			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
 	}
 }
