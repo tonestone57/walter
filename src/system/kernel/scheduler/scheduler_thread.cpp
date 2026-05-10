@@ -643,8 +643,9 @@ ThreadData::_UpdateDeadline(bigtime_t now)
 	// Issue 72 fix: document that _UpdateDeadline is called inside
 	// CoreRunQueueLocker (via HasQuantumEnded → _UpdateDeadline). Calling
 	// system_time() while holding a spinlock adds non-deterministic latency
-	// if the TSC is slow or virtualized. This was addressed by pre-computing
-	// 'now' in reschedule() and propagating it through the call chain.
+	// if the TSC is slow or virtualized. This is accepted as unavoidable
+	// given the current design; a future improvement would pre-compute 'now'
+	// in reschedule() and pass it through the call chain.
 
 	// Virtual Deadline Calculation:
 	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)

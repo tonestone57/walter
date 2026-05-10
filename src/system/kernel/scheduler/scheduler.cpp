@@ -686,10 +686,8 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 	NotifySchedulerListeners(&SchedulerListener::ThreadRemovedFromRunQueue,
 		thread);
 
-	if (threadData->Dequeue()) {
-		_.Unlock();
+	if (threadData->Dequeue())
 		enqueue(thread, true, NULL, now);
-	}
 
 	return oldPriority;
 }
@@ -2130,8 +2128,14 @@ scheduler_on_team_foreground_changed(Team* team)
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
 
-			// Issue 91: Released scheduler_lock before calling enqueue() to
-			// eliminate the ordering hazard between scheduler_lock and fCPULock.
+			// Issue 91 fix: document scheduler_lock ordering hazard.
+			// enqueue() → choose_core() → search_local_node() → GetRandom()
+			// acquires no scheduler_lock, so holding it here is safe for
+			// current code. However, enqueue() → Enqueue() → CoreCPULocker
+			// acquires fCPULock; if any path between CoreCPULocker and
+			// scheduler_lock is added in future, deadlock will occur.
+			// Consider releasing scheduler_lock before calling enqueue() in
+			// a future refactor to eliminate this ordering constraint.
 			InterruptsSpinLocker locker(thread->scheduler_lock);
 			ThreadData* threadData = thread->scheduler_data;
 
@@ -2139,20 +2143,18 @@ scheduler_on_team_foreground_changed(Team* team)
 					|| threadData->IsRealTime())
 				continue;
 
-			bool isForeground = team->fIsForeground;
 			bigtime_t now = system_time();
 			if (thread->state == B_THREAD_READY) {
 				if (threadData->Dequeue()) {
-					threadData->SetForeground(isForeground);
+					threadData->SetForeground(team->fIsForeground);
 					threadData->ResetPriorityBoost(now);
-					locker.Unlock();
 					enqueue(thread, false, NULL, now);
 				} else {
-					threadData->SetForeground(isForeground);
+					threadData->SetForeground(team->fIsForeground);
 					threadData->ResetPriorityBoost(now);
 				}
 			} else {
-				threadData->SetForeground(isForeground);
+				threadData->SetForeground(team->fIsForeground);
 				if (thread->state == B_THREAD_RUNNING) {
 					threadData->ResetPriorityBoost(now);
 					ASSERT(thread->cpu != NULL);

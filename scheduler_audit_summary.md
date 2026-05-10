@@ -26,4 +26,4 @@
 
 ## 5. Documentation & Maintenance
 - Restored and updated all "Issue XX" fix documentation and technical commentary in source files to maintain historical context and explain complex synchronization patterns.
-- Addressed documented future improvements by completing timestamp propagation (Issue 72) and resolving the `scheduler_lock` ordering hazard in team foreground changes (Issue 91).
+- Addressed documented future improvements by completing timestamp propagation (Issue 72) and improved package state serialization (Issue 89).

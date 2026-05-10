@@ -304,8 +304,9 @@ CPUEntry::Stop()
 	// assigned to one CPU the excess interrupts are not reassigned and
 	// a warning is logged.  The limit is intentional (prevents an
 	// infinite loop if assign_io_interrupt_to_cpu silently fails) and
-	// the warning below makes the truncation visible.  The current bound
-	// is safe in all real configurations.
+	// the warning below makes the truncation visible.  A future
+	// improvement could query the IRQ count first and use a tighter
+	// limit, but the current bound is safe in all real configurations.
 
 	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);

@@ -4,16 +4,8 @@
  * Distributed under the terms of the MIT License.
  */
 
-// (clarification — PackageEntry::RegisterCore): The fMaxAttempts
-// formula uses fRegisteredCoreCount AFTER it has already been updated by
-//   fRegisteredCoreCount = max_c(fRegisteredCoreCount, index + 1);
-// so it correctly reflects the new count including the just-registered core.
-// The current Xorshift64 mixing is sufficient for scheduling fairness even
-// with correlated seeds; the correlation resolves after the first few calls.
-
 #ifndef KERNEL_SCHEDULER_TOPOLOGY_H
 #define KERNEL_SCHEDULER_TOPOLOGY_H
-
 
 #include <string.h>
 
