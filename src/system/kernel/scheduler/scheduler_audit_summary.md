@@ -1,28 +1,34 @@
-# Haiku Scheduler Audit Summary (2025)
+# Haiku Scheduler Audit & Refinement Summary (2025)
 
-## Overview
-A comprehensive audit of the Haiku kernel scheduler was performed in February 2025. Technical debt in this subsystem is tracked using a custom `// Issue XX` numbering convention (1-100), rather than traditional `TODO` or `FIXME` tags.
+## 1. GCC 2.95 Compatibility & Portability Layer
+- Established architecture-independent portability layer in `scheduler_common.h`.
+- Implemented portable `scheduler_ctz`, `scheduler_popcount`, and `scheduler_ffs64`.
+- Normalized template-based `atomic_pointer_get/set/test_and_set` signatures for consistency and removed redundant `volatile` qualifiers from members.
 
-## Key Findings and Fixes
+## 2. Race Condition & Logic Fixes
+- **ICI Dispatch Fix (scheduler.cpp):** Corrected a logic error where an early return skipped mandatory IPI (ICI) notifications for woken threads, resolving potential scheduling delays.
+- **Authoritative RemoveCPU (scheduler_cpu.cpp):** Refined the removal process to verify the CPU's idle state via the authoritative heap key while holding the core lock.
+- **Atomic Pointer Safety:** Fixed multiple TOCTOU vulnerabilities by snapshotting pointers (e.g., `fCore` in `ThreadData::GoesAway`, `fBest` in `RunQueue`).
+- **Bitmask Core Indexing:** Replaced fragile counters with an atomic bitmask (`fLocalIndices`) in `CoreEntry`.
 
-### 1. Load Average Recalibration (Issue 16)
-- **Problem:** Load average frequency was 5 seconds, leading to poor visibility of sub-second load spikes.
-- **Fix:** Increased update frequency to 1 second in `scheduler_load.cpp`. Recalibrated EMA decay constants (`sCExp`) to {2014, 2041, 2046} for 1s ticks.
+## 3. Performance & Architecture
+- **Timestamp Propagation:** Capture `system_time()` once at the start of the `reschedule()` hot path and propagate it through the call stack (accounting, load tracking, quantum calculation). This eliminates redundant hardware timer reads in the kernel's most frequent execution path.
+- **3-Phase Work Stealing:** Implemented a hierarchical strategy (Sibling -> Node -> Global) to improve cache locality and reduce lock contention.
+- **64-bit Atomic Alignment:** Enforced 8-byte alignment for all 64-bit variables used in atomic operations (e.g., `gIdleMask`, `fCombinedLoad`), ensuring stability on 32-bit platforms.
+- **Improved RNG Entropy:** Enhanced `CPUEntry` RNG seeding with a 64-bit mixer and staggered reschedule counts.
 
-### 2. IRQ Drain Safety (Issue 15)
-- **Problem:** The IRQ drain loop in `CPUEntry::Stop` used a hardcoded loop count.
-- **Fix:** Refined logic to include a progress check. If `assign_io_interrupt_to_cpu` fails to move an IRQ from the head of the list, the loop aborts early with a diagnostic warning.
+## 4. Concurrency & Safety Refinements
+- **Lock Hierarchy Standardization:** Established and enforced a strict Core RunQueue -> CPU RunQueue locking order to prevent potential deadlocks.
+- **Thread Selection Race Fix:** Hardened `CPUEntry::ChooseNextThread` to ensure peeked threads are removed from queues while holding necessary locks, preventing they being stolen between peeking and removal.
+- **Hot-Unplug Hardening:** Added explicit `NULL` guards for topology dereferences (`Package()`, `Node()`) in core-selection and rebalancing routines to prevent kernel panics during CPU hot-unplug events.
+- **Priority Boost Correctness:** Fixed a regression where effective priority was not recalculated after a boost reset, ensuring immediate impact on scheduling decisions.
+- **Enhanced Serialization (Issue 89):** Added explicit serialization via `fCoreLock` to `CoreGoesIdle` and `CoreWakesUp` to prevent races during package state transitions.
 
-### 3. Node Limit Guards (Issue 74)
-- **Problem:** On systems with >64 nodes, `gIdleNodeMask` (uint64) could be accessed out of bounds.
-- **Fix:** Added explicit `fNodeID < 64` guards in `scheduler_cpu.h` for `PackageGoesIdle` and `PackageWakesUp`.
+## 5. 2025 Audit Improvements
+- **Sub-second Load Visibility (Issue 16):** Increased load average resolution from 5 seconds to 1 second and recalibrated EMA decay constants to improve responsiveness for interactive workloads.
+- **IRQ Draining Refinement (Issue 15):** Refined the IRQ draining logic in `CPUEntry::Stop` with progress verification and enhanced documentation, ensuring all vectors are reassigned without risking infinite loops.
+- **Lock Ordering Verification (Issue 91):** Formally verified the `scheduler_lock` vs. `fCPULock` hierarchy and documented the lack of hazards in the current implementation.
 
-### 4. Lock Hierarchy Documentation (Issue 91)
-- **Problem:** Potential for deadlock between `scheduler_lock` and core run-queue locks.
-- **Fix:** Added comprehensive documentation in `scheduler.cpp` explaining the serialization requirements and the decoupling of the team-foreground path.
-
-### 5. Atomic Safety and Alignment
-- **Fix:** Applied `__attribute__((aligned(8)))` to all 64-bit atomic members (e.g., `fCombinedLoad`, `fStolenTime`) to ensure safety on 32-bit platforms.
-
-## Conclusion
-All 100 documented "Issues" have been either resolved or verified as correct behavior. The codebase is now free of active technical debt markers.
+## 6. Documentation & Maintenance
+- Restored and updated all "Issue XX" fix documentation and technical commentary in source files to maintain historical context and explain complex synchronization patterns.
+- Addressed documented future improvements by completing timestamp propagation (Issue 72), improved package state serialization (Issue 89), and refined IRQ draining (Issue 15).

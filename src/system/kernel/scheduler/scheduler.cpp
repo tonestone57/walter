@@ -189,7 +189,7 @@ scheduler_update_interaction_state(bigtime_t now)
 		//     harmless.  No code change required.
 		return;
 
-	 // Issue 28: Cache gDeadlineBucketSize once — it is read twice below and
+	 // Issue 28: Deadline bucket caching. Cache gDeadlineBucketSize once — it is read twice below and
 	// the two reads could observe different values if a concurrent DPC is
 	// updating it.  A single cached read is also cheaper on the hot path.
 	int64 currentBucketSize = atomic_get64(&gDeadlineBucketSize);
@@ -386,7 +386,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu, bigtime_t now = 0)
 	if (now == 0)
 		now = system_time();
 
-	// Issue 40: This mask is recomputed from a compile-time constant on every
+	// Issue 40: Mask computation optimization. This mask is recomputed from a compile-time constant on every
 	// reschedule.  Hoist it to a static const so the compiler evaluates it
 	// once at startup.
 	static const uint32 kTopWordMask =
@@ -416,7 +416,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu, bigtime_t now = 0)
 	// only the CPU whose (boost_epoch % cpuCount) matches its modular index
 	// within the core performs the scan.
 	int32 coreCPUCount = max_c(1, core->CPUCount());
-	// Issue 24: when fRescheduleCount wraps UINT32_MAX → 0, the post-
+	// Issue 24: Counter wrap-around safety. when fRescheduleCount wraps UINT32_MAX → 0, the post-
 	// increment is 0, so (0 % 10 == 0) fires and preCount becomes UINT32_MAX,
 	// making boostEpoch ≈ 429M.  This causes all CPUs to satisfy the modular
 	// ownership check simultaneously, producing a correlated scan burst.
@@ -958,7 +958,7 @@ reschedule(int32 nextState)
 	if (nextThread != oldThread || oldThread->cpu->preempted) {
 		// Dynamic Quantum Scaling:
 		// Reduce quantum if the core is crowded to maintain interactivity.
-		// Issue 35: ThreadCount() can transiently return 0 during a remove
+		// Issue 35: Transient counter state safety. ThreadCount() can transiently return 0 during a remove
 		// race.  If load == 1, (load - 1) == 0 causes division by zero.
 		// Clamp divisor to at least 1.
 		int32 load = core->ThreadCount();
@@ -1441,7 +1441,7 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 						packageCount++;
 						sPackageToNode[packageCount] = currentNodeID;
 					}
-		// Issue 19: when the guard above prevents a new package from being
+		// Issue 19: Package limit guard documentation. when the guard above prevents a new package from being
 		// created, the remaining CPUs in this cluster are folded into the
 		// current package.  No sPackageToNode write is needed since the
 		// current package's node was already written at cluster start.

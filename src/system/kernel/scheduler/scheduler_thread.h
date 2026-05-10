@@ -787,7 +787,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		} else
 			core->PushBack(this, priority);
 	}
-	// Issue 3: gTotalRunnableThreads is incremented AFTER the CPUCount == 0
+	// Issue 3: Global run-queue counter update. gTotalRunnableThreads is incremented AFTER the CPUCount == 0
 	// guards in both the pinned and non-pinned paths.  There is no return-false
 	// path after the increment; PushFront/PushBack are infallible.  The counter
 	// is therefore always matched by either a GoesAway/Dies decrement (when the

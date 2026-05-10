@@ -916,7 +916,7 @@ CoreEntry::GetCore(int32 cpu)
 inline native_cpu_mask_t
 PackageEntry::IdleCoreMask() const
 {
-	// Issue 6: GetIdleCorePacking uses rotation arithmetic on this mask.
+	// Issue 6: Packing rotation logic documentation. GetIdleCorePacking uses rotation arithmetic on this mask.
 	// The un-rotation formula origIdx = (pos + shift) % kMaxCoresPerPackage
 	// is correct only when kMaxCoresPerPackage is a power of 2, which it is
 	// on all supported platforms (32 on 32-bit, 64 on 64-bit).  This
