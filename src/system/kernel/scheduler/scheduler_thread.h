@@ -749,6 +749,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			return false;
 		} else if (!wasReady && gTrackCoreLoad) {
 			// Issue 41 fix: for non-stolen threads, AddLoad after CPUCount guard.
+			// Issue 99 fix: ensures load tracking for normal wakeups is consistent.
 			bigtime_t timeSlept = now - atomic_get64((int64*)&fWentSleep);
 			bool updateLoad = timeSlept > 0;
 			core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad, now);

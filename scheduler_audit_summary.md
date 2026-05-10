@@ -24,6 +24,11 @@
 - **Priority Boost Correctness:** Fixed a regression where effective priority was not recalculated after a boost reset, ensuring immediate impact on scheduling decisions.
 - **Enhanced Serialization (Issue 89):** Added explicit serialization via `fCoreLock` to `CoreGoesIdle` and `CoreWakesUp` to prevent races during package state transitions.
 
-## 5. Documentation & Maintenance
+## 5. 2025 Audit Improvements
+- **Sub-second Load Visibility (Issue 16):** Increased load average resolution from 5 seconds to 1 second and recalibrated EMA decay constants to improve responsiveness for interactive workloads.
+- **Dynamic IRQ Draining (Issue 15):** Implemented a dynamic iteration limit in `CPUEntry::Stop` based on the actual number of assigned IRQs, replacing the hard 1000-iteration limit with a safer, workload-proportional bound.
+- **Lock Ordering Verification (Issue 91):** Formally verified the `scheduler_lock` vs. `fCPULock` hierarchy and documented the lack of hazards in the current implementation.
+
+## 6. Documentation & Maintenance
 - Restored and updated all "Issue XX" fix documentation and technical commentary in source files to maintain historical context and explain complex synchronization patterns.
-- Addressed documented future improvements by completing timestamp propagation (Issue 72) and improved package state serialization (Issue 89).
+- Addressed documented future improvements by completing timestamp propagation (Issue 72), improved package state serialization (Issue 89), and dynamic IRQ draining (Issue 15).

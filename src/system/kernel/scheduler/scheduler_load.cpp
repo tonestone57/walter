@@ -29,11 +29,11 @@ const static long kFScale = 1 << kFShift;
 static struct loadavg sAverageRunnable __attribute__((aligned(8))) = {{0, 0, 0}, (int32)kFScale};
 
 // Exponential decay constants for 1, 5, and 15 minute averages.
-// Formula: exp(-t / C) * kFScale, where t = 5s (update interval).
-// 1m: exp(-5 / 60)  * 2048 = 1884.21 ~= 1884
-// 5m: exp(-5 / 300) * 2048 = 2014.15 ~= 2014
-// 15m: exp(-5 / 900) * 2048 = 2036.64 ~= 2037
-const static uint64 sCExp[3] __attribute__((aligned(8))) = { 1884, 2014, 2037 };
+// Formula: exp(-t / C) * kFScale, where t = 1s (update interval).
+// 1m: exp(-1 / 60)  * 2048 = 2014.15 ~= 2014
+// 5m: exp(-1 / 300) * 2048 = 2041.18 ~= 2041
+// 15m: exp(-1 / 900) * 2048 = 2045.72 ~= 2046
+const static uint64 sCExp[3] __attribute__((aligned(8))) = { 2014, 2041, 2046 };
 
 static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;
 
@@ -60,12 +60,11 @@ SmoothLoad(int oldLoad, int newLoad)
 static void
 _LoadavgUpdate(void *data, int iteration)
 {
-	// Issue 16: gTotalRunnableThreads is an instantaneous snapshot taken once
-	// every 5 seconds.  Load spikes that begin and end within the 5-second
-	// window are invisible to the EMA.  This is an inherent limitation of the
-	// FreeBSD-derived algorithm (which also uses a 5-second tick), not a bug.
-	// If sub-second load visibility is required in the future, the daemon
-	// period must be reduced and sCExp recalibrated accordingly.
+	// Issue 16 fix: increased load average resolution to 1 second.
+	// gTotalRunnableThreads is an instantaneous snapshot taken once
+	// every second.  Load spikes that begin and end within the 1-second
+	// window are invisible to the EMA, but 1s visibility is superior to
+	// the standard FreeBSD 5s interval for interactive workloads.
 	// Optimization: Use global atomic counter instead of O(N) core scan.
 	int32 threadCount = atomic_get(&gTotalRunnableThreads);
 	if (threadCount < 0)
@@ -93,19 +92,11 @@ _LoadavgUpdate(void *data, int iteration)
 status_t
 scheduler_loadavg_init()
 {
-	// Issue 4: the EMA decay constants sCExp are calibrated for a 5-second
-	// (5,000,000 µs) update interval, matching FreeBSD kern_sync.c.
-	// The argument below must remain 5000000; changing it without
-	// recalibrating sCExp will produce meaningless load average values.
-	// static_assert replaced by comment for GCC 2.95
-	// true, "verify daemon period matches EMA calibration"
-	// Issue 24 fix: the loadavg EMA decay constants (sCExp) are calibrated
-	// for a 5-second update interval (matching FreeBSD kern_sync.c).
-	// register_kernel_daemon period is in microseconds; 5000 µs = 5 ms is
-	// far too frequent and would produce meaningless EMA values.
-	// Correct value: 5,000,000 µs = 5 seconds.
-	register_kernel_daemon(_LoadavgUpdate, NULL, 5000000);
-		// run the daemon every five seconds (5,000,000 µs)
+	// Issue 4/16/24 fix: calibrated for 1-second (1,000,000 µs) update interval.
+	// High resolution load tracking improves visibility of short-lived bursts.
+	// sCExp constants are recalibrated for this 1s period.
+	register_kernel_daemon(_LoadavgUpdate, NULL, 1000000);
+		// run the daemon every second (1,000,000 µs)
 
 	return B_OK;
 }
