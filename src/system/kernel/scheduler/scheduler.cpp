@@ -630,7 +630,7 @@ scheduler_enqueue_in_run_queue(Thread *thread)
 	Thread* waker = thread->waker;
 	thread->waker = NULL;
 
-	bigtime_t now = system_time(); // Issue 47
+	bigtime_t now = system_time();
 	threadData->ResetPriorityBoost(now);
 	enqueue(thread, true, waker, now);
 }
@@ -654,7 +654,7 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 	TRACE("changing thread %" B_PRId32 " priority to %" B_PRId32 " (old: %" B_PRId32 ", effective: %" B_PRId32 ")\n",
 		thread->id, priority, oldPriority, threadData->GetEffectivePriority());
 
-	bigtime_t now = system_time(); // Issue 47
+	bigtime_t now = system_time();
 	thread->priority = priority;
 	threadData->ResetPriorityBoost(now);
 
@@ -803,7 +803,7 @@ reschedule(int32 nextState)
 	int32 thisCPU = smp_get_current_cpu();
 	gCPU[thisCPU].invoke_scheduler = false;
 
-	bigtime_t now = system_time(); // Issue 47
+	bigtime_t now = system_time();
 
 	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);
 	cpu->ClearReschedulePending();
@@ -2128,7 +2128,7 @@ scheduler_on_team_foreground_changed(Team* team)
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
 
-			// Issue 91: formally audited scheduler_lock hierarchy for 2025 refinements.
+			// Issue 91 fix: document scheduler_lock ordering hazard.
 			// enqueue() → choose_core() → search_local_node() → GetRandom()
 			// acquires no scheduler_lock, so holding it here is safe for
 			// current code. However, enqueue() → Enqueue() → CoreCPULocker
@@ -2143,7 +2143,7 @@ scheduler_on_team_foreground_changed(Team* team)
 					|| threadData->IsRealTime())
 				continue;
 
-			bigtime_t now = system_time(); // Issue 47
+			bigtime_t now = system_time();
 			if (thread->state == B_THREAD_READY) {
 				if (threadData->Dequeue()) {
 					threadData->SetForeground(team->fIsForeground);

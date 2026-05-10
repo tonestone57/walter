@@ -847,7 +847,6 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	}
 }
 
-
 inline native_cpu_mask_t
 SchedulerNode::IdlePackageMask() const
 {

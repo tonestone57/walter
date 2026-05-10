@@ -23,7 +23,7 @@ static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1]
 // compiler evaluates them once at startup rather than re-deriving them on
 // every call to the scheduling hot path.  All three values are compile-time
 // constants; static storage enforces that.
-static const int32 kLoadScale = 1024; // Issue 27
+static const int32 kLoadScale = 1024;
 static const int32 kLoadScaleShift = 10;
 // kRangeReciprocal = kLoadScale / (kMaxLoad - kLowLoad) * kLoadScale
 // 1024 / 800 * 1024 = 1310.72 ~= 1311
@@ -717,7 +717,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		// If Deadline is Now (or passed), Urgency is Max.
 		// If Deadline is far, Urgency is 0.
 
-		bigtime_t diff = atomic_get64((int64*)&fVirtualDeadline) - now; // Issue 92
+		bigtime_t diff = atomic_get64((int64*)&fVirtualDeadline) - now;
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
 		bigtime_t urgencyBoost = (fInteractivityScore * bucketSize) / 1000;

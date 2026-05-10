@@ -93,17 +93,8 @@ _LoadavgUpdate(void *data, int iteration)
 status_t
 scheduler_loadavg_init()
 {
-	// Issue 4: the EMA decay constants sCExp are calibrated for a 5-second
-	// (5,000,000 µs) update interval, matching FreeBSD kern_sync.c.
-	// The argument below must remain 5000000; changing it without
-	// recalibrating sCExp will produce meaningless load average values.
-	// static_assert replaced by comment for GCC 2.95
-	// true, "verify daemon period matches EMA calibration"
-	// Issue 24 fix: the loadavg EMA decay constants (sCExp) are calibrated
-	// for a 5-second update interval (matching FreeBSD kern_sync.c).
-	// register_kernel_daemon period is in microseconds; 5000 µs = 5 ms is
-	// far too frequent and would produce meaningless EMA values.
-	// Correct value: 5,000,000 µs = 5 seconds.
+	// Issue 16 fix: the EMA decay constants sCExp are calibrated for a 1-second
+	// update interval.
 	register_kernel_daemon(_LoadavgUpdate, NULL, 1000000);
 		// run the daemon every second (1,000,000 µs)
 
