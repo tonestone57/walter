@@ -1106,7 +1106,6 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	ASSERT(core->CPUCount() >= 0);
 
 	if (enabled) {
-		// Resolve FIXME in scheduler_cpu.h issue 89:
 		// serialize AddCPU with the same global scheduler lock scope used by
 		// the disable/remove path to avoid races with idle-core state updates.
 		{

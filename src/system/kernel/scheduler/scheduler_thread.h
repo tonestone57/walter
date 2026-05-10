@@ -111,6 +111,8 @@ public:
 								bool hasYielded, bigtime_t now = 0);
 			void		DonateTimesliceTo(Thread* beneficiary);
 
+	// Continues(), GoesAway(), and Dies() accept an optional 'now' timestamp
+	// to avoid redundant system_time() calls in the reschedule() hot path.
 	SCHEDULER_INLINE	void		Continues(bigtime_t now = 0);
 	SCHEDULER_INLINE	void		GoesAway(bigtime_t now = 0);
 	SCHEDULER_INLINE	void		Dies(bigtime_t now = 0);
@@ -125,6 +127,8 @@ public:
 		return atomic_get64((int64*)&fWentSleepActive);
 	}
 
+	// PutBack() and Enqueue() accept an optional 'now' timestamp for
+	// timestamp propagation.
 	SCHEDULER_INLINE	void		PutBack(bigtime_t now = 0);
 	SCHEDULER_INLINE	bool		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 								bool& updateInteraction, bigtime_t now = 0);
