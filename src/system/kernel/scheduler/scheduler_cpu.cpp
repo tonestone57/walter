@@ -548,7 +548,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 				// Issue 6/23 fix: cache the Thread* once; sharedThread->GetThread()
 				// is called multiple times below and the pointer must be consistent.
 				Thread* const stolenThread = sharedThread->GetThread();
-				if (!enqueue_safe(stolenThread)) {
+				if (!enqueue_safe(stolenThread, now)) {
 					dprintf("scheduler: WARNING: stolen thread %" B_PRId32
 						" lost during hot-unplug — forcing to current CPU\n",
 						stolenThread->id);
@@ -606,7 +606,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
 				updateInteraction, now)) {
 			Thread* const thread = sharedThread->GetThread();
-			if (!enqueue_safe(thread)) {
+			if (!enqueue_safe(thread, now)) {
 				dprintf("scheduler: WARNING: shared thread %" B_PRId32
 					" lost during hot-unplug — forcing to current CPU\n",
 					thread->id);
