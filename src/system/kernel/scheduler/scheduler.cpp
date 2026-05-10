@@ -380,6 +380,9 @@ static int32* sCPUToCluster = NULL;
 static void
 UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu, bigtime_t now = 0)
 {
+	// Scalable Priority Boosting Refinement:
+	// Use the propagated 'now' timestamp to ensure consistent starvation
+	// checks across SMT sibling cores.
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (now == 0)
@@ -800,6 +803,11 @@ reschedule(int32 nextState)
 	int32 thisCPU = smp_get_current_cpu();
 	gCPU[thisCPU].invoke_scheduler = false;
 
+	// Deep Optimization: capture system_time() once at the start of the
+	// reschedule path and propagate it via the 'now' parameter to all
+	// accounting, load tracking, and quantum management functions. This
+	// eliminates redundant hardware timer reads in the kernel's most
+	// frequently executed hot path.
 	bigtime_t now = system_time();
 
 	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);

@@ -492,6 +492,8 @@ ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded, bigtime_t now)
 inline void
 ThreadData::Continues(bigtime_t now)
 {
+	// Timestamp Propagation: use the provided 'now' timestamp to update
+	// the thread's activity and needed load, avoiding a system_time() call.
 	SCHEDULER_ENTER_FUNCTION();
 
 	// Issue 88 fix: fReady is written by GoesAway/Dies without holding the
