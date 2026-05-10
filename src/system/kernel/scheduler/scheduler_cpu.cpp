@@ -280,7 +280,7 @@ CPUEntry::Init(int32 id, CoreEntry* core)
 	{
 		int32 numCPUs = smp_get_num_cpus();
 		int32 staggerMod = (numCPUs > 1 && numCPUs <= 10) ? numCPUs : 10;
-		fRescheduleCount = (uint32)(id % staggerMod); // Issue 43 fix: ensure unique stagger
+		fRescheduleCount = (uint32)(id % staggerMod);
 	}
 }
 
@@ -308,19 +308,17 @@ CPUEntry::Stop()
 
 	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);
-
-	const int32 maxIterations = 1000;
-
-	for (int32 i = 0; i < maxIterations; i++) {
-		irq_assignment* irq = (irq_assignment*)list_get_first_item(&entry->irqs);
+	const int32 kMaxIterations = 1000;
+	for (int32 i = 0; i < kMaxIterations; i++) {
+		irq_assignment* irq
+			= (irq_assignment*)list_get_first_item(&entry->irqs);
 		if (irq == NULL)
 			break;
 
 		int32 irqVector = irq->irq;
 		locker.Unlock();
 
-		// Issue 15 fix: assign_io_interrupt_to_cpu may acquire internal locks.
-		// Issue 21 fix: verified safe to release irqs_lock here.
+		// Issue 15: assign_io_interrupt_to_cpu may acquire internal locks.
 		// We release irqs_lock BEFORE calling it (locker.Unlock() above) to
 		// prevent priority inversion or deadlock against any path that acquires
 		// irqs_lock while holding an internal interrupt-assignment lock.
@@ -338,7 +336,7 @@ CPUEntry::Stop()
 		irq_assignment* currentHead
 			= (irq_assignment*)list_get_first_item(&entry->irqs);
 		if (currentHead != NULL && currentHead->irq == irqVector) {
-			// No progress: abort to prevent burning all 1000 iterations.
+			// No progress: abort to prevent burning all iterations.
 			dprintf("CPUEntry::Stop: interrupt %" B_PRId32 " could not be "
 				"reassigned (driver failure); aborting IRQ drain\n", irqVector);
 			break;
@@ -1345,7 +1343,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
-			// Issue 59 fix: snapshot prevLoad immediately after winning the
+			// Issue 7 fix: snapshot prevLoad immediately after winning the
 			// outer CAS on fCombinedLoad, not before the loop.  The original
 			// code snapshotted prevLoad before the loop, so concurrent
 			// RemoveLoad(force=true) calls that ran between the snapshot and

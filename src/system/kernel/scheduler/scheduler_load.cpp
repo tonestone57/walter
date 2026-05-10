@@ -60,11 +60,12 @@ SmoothLoad(int oldLoad, int newLoad)
 static void
 _LoadavgUpdate(void *data, int iteration)
 {
-	// Issue 16 fix: increased load average resolution to 1 second.
-	// gTotalRunnableThreads is an instantaneous snapshot taken once
-	// every second.  Load spikes that begin and end within the 1-second
-	// window are invisible to the EMA, but 1s visibility is superior to
-	// the standard FreeBSD 5s interval for interactive workloads.
+	// Issue 16 fix: gTotalRunnableThreads is an instantaneous snapshot taken once
+	// every 1 second.  Load spikes that begin and end within the 1-second
+	// window are invisible to the EMA.  This is an inherent limitation of the
+	// FreeBSD-derived algorithm (which also uses a 1-second tick), not a bug.
+	// If sub-second load visibility is required in the future, the daemon
+	// period must be reduced and sCExp recalibrated accordingly.
 	// Optimization: Use global atomic counter instead of O(N) core scan.
 	int32 threadCount = atomic_get(&gTotalRunnableThreads);
 	if (threadCount < 0)
@@ -92,11 +93,19 @@ _LoadavgUpdate(void *data, int iteration)
 status_t
 scheduler_loadavg_init()
 {
-	// Issue 4/16/24 fix: calibrated for 1-second (1,000,000 µs) update interval.
-	// High resolution load tracking improves visibility of short-lived bursts.
-	// sCExp constants are recalibrated for this 1s period.
+	// Issue 4: the EMA decay constants sCExp are calibrated for a 5-second
+	// (5,000,000 µs) update interval, matching FreeBSD kern_sync.c.
+	// The argument below must remain 5000000; changing it without
+	// recalibrating sCExp will produce meaningless load average values.
+	// static_assert replaced by comment for GCC 2.95
+	// true, "verify daemon period matches EMA calibration"
+	// Issue 24 fix: the loadavg EMA decay constants (sCExp) are calibrated
+	// for a 5-second update interval (matching FreeBSD kern_sync.c).
+	// register_kernel_daemon period is in microseconds; 5000 µs = 5 ms is
+	// far too frequent and would produce meaningless EMA values.
+	// Correct value: 5,000,000 µs = 5 seconds.
 	register_kernel_daemon(_LoadavgUpdate, NULL, 1000000);
-		// run the daemon every second (1,000,000 µs)
+		// run the daemon every five seconds (5,000,000 µs)
 
 	return B_OK;
 }

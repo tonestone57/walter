@@ -23,7 +23,7 @@ static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1]
 // compiler evaluates them once at startup rather than re-deriving them on
 // every call to the scheduling hot path.  All three values are compile-time
 // constants; static storage enforces that.
-static const int32 kLoadScale = 1024; // Issue 27
+static const int32 kLoadScale = 1024;
 static const int32 kLoadScaleShift = 10;
 // kRangeReciprocal = kLoadScale / (kMaxLoad - kLowLoad) * kLoadScale
 // 1024 / 800 * 1024 = 1310.72 ~= 1311
@@ -633,7 +633,7 @@ ThreadData::_UpdateDeadline(bigtime_t now)
 	if (now == 0)
 		now = system_time();
 
-	// Issue 37 fix: _UpdateDeadline is called from HasQuantumEnded which is
+	// Issue 6/37 fix: _UpdateDeadline is called from HasQuantumEnded which is
 	// called under SchedulerModeLocker (read lock). gDeadlineBucketSize won't
 	// change while any CPU holds the read lock. A plain read suffices and
 	// avoids the memory barrier cost of atomic_get64 on ARM/RISC-V.
@@ -644,7 +644,7 @@ ThreadData::_UpdateDeadline(bigtime_t now)
 	// CoreRunQueueLocker (via HasQuantumEnded → _UpdateDeadline). Calling
 	// system_time() while holding a spinlock adds non-deterministic latency
 	// if the TSC is slow or virtualized. This is accepted as unavoidable
-	// given the current design; timestamp propagation (Issue 72) completed 2025
+	// given the current design; a future improvement would pre-compute 'now'
 	// in reschedule() and pass it through the call chain.
 
 	// Virtual Deadline Calculation:
@@ -670,7 +670,7 @@ ThreadData::_UpdateDeadline(bigtime_t now)
 	// deadline), but if slice was already small the result can reach 0.
 	// A zero slice sets fVirtualDeadline == now, giving the thread
 	// maximum urgency permanently and starving lower-priority threads.
-	// Issue 37 fix: bucketSize was already computed via the mode struct
+	// Issue 6/37 fix: bucketSize was already computed via the mode struct
 	// field read at the top of this function. Re-read via atomic_get64
 	// only if the value is not already cached. Since we are under
 	// SchedulerModeLocker (read), gDeadlineBucketSize is stable.
@@ -717,7 +717,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		// If Deadline is Now (or passed), Urgency is Max.
 		// If Deadline is far, Urgency is 0.
 
-		bigtime_t diff = atomic_get64((int64*)&fVirtualDeadline) - now; // Issue 92 fix: diff calculation
+		bigtime_t diff = atomic_get64((int64*)&fVirtualDeadline) - now;
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
 		bigtime_t urgencyBoost = (fInteractivityScore * bucketSize) / 1000;

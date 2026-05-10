@@ -770,8 +770,9 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 		// node goes idle (first package)
 		// Issue 8 fix: guard gIdleNodeMask update; nodes >= 64 cannot
 		// be tracked for idleness but must still exist.
-		if (fNodeID < 64) { // Issue 74 fix: node limit
+		if (fNodeID < 64) {
 			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
+		}
 	}
 }
 
@@ -795,7 +796,7 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	// (bit was set in oldMask) AND it was the last idle package in this node
 	// (mask is now zero).
 	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == (native_cpu_mask_t)0) {
-		if (fNodeID < 64) { // Issue 74 fix: node limit
+		if (fNodeID < 64) {
 			// Issue 12 fix: a plain re-read + atomic_and64 is still racy.
 			// Between the re-read returning 0 and the atomic_and64, a
 			// concurrent PackageGoesIdle can set a bit in fIdlePackageMask
