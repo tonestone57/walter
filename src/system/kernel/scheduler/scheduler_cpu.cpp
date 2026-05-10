@@ -304,9 +304,8 @@ CPUEntry::Stop()
 	// assigned to one CPU the excess interrupts are not reassigned and
 	// a warning is logged.  The limit is intentional (prevents an
 	// infinite loop if assign_io_interrupt_to_cpu silently fails) and
-	// the warning below makes the truncation visible.  A future
-	// improvement could query the IRQ count first and use a tighter
-	// limit, but the current bound is safe in all real configurations.
+	// the warning below makes the truncation visible.  The current bound
+	// is safe in all real configurations.
 
 	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);
@@ -565,7 +564,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 
 			// Issue 20 fix: call while NOT holding run-queue locks.
 			if (updateInteraction)
-				scheduler_update_interaction_state();
+				scheduler_update_interaction_state(now);
 		}
 		return oldThread;
 	}
@@ -621,7 +620,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 		}
 
 		if (updateInteraction)
-			scheduler_update_interaction_state();
+			scheduler_update_interaction_state(now);
 	}
 
 	return nextThread;
@@ -686,7 +685,7 @@ CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now)
 	if (gTrackCPULoad) {
 		if (!cpuEntry->disabled)
 			ComputeLoad(now);
-		_RequestPerformanceLevel(nextThreadData);
+		_RequestPerformanceLevel(nextThreadData, now);
 	}
 }
 
@@ -869,7 +868,7 @@ CPUEntry::StartQuantumTimer(ThreadData* thread, bool wasPreempted)
 
 
 void
-CPUEntry::_RequestPerformanceLevel(ThreadData* threadData)
+CPUEntry::_RequestPerformanceLevel(ThreadData* threadData, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -877,6 +876,9 @@ CPUEntry::_RequestPerformanceLevel(ThreadData* threadData)
 		decrease_cpu_performance(kCPUPerformanceScaleMax);
 		return;
 	}
+
+	if (now == 0)
+		now = system_time();
 
 	int32 load = max_c(threadData->GetLoad(), GetLoad());
 	ASSERT_PRINT(load >= 0 && load <= kMaxLoad + kSMTPenalty, "load is out of range %"

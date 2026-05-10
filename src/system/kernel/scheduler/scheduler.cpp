@@ -175,7 +175,7 @@ interaction_timer_hook(struct timer* timer)
 
 
 void
-scheduler_update_interaction_state()
+scheduler_update_interaction_state(bigtime_t now)
 {
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
@@ -194,7 +194,8 @@ scheduler_update_interaction_state()
 	// updating it.  A single cached read is also cheaper on the hot path.
 	int64 currentBucketSize = atomic_get64(&gDeadlineBucketSize);
 
-	bigtime_t now = system_time();
+	if (now == 0)
+		now = system_time();
 	bigtime_t lastTime = atomic_get64(&sLastInteractionTime);
 	// Issue 97 fix: Scheduler::MinimalQuantum() reads sCurrentMode->minimal_quantum
 	// in two separate memory accesses (pointer load + field read). On 32-bit
@@ -566,7 +567,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 	// Issue 20 fix: call scheduler_update_interaction_state() while NOT
 	// holding any run-queue locks.
 	if (updateInteraction)
-		scheduler_update_interaction_state();
+		scheduler_update_interaction_state(now);
 
 	// Issue 84 fix: notify listeners — was unreachable before this fix.
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
@@ -629,8 +630,9 @@ scheduler_enqueue_in_run_queue(Thread *thread)
 	Thread* waker = thread->waker;
 	thread->waker = NULL;
 
-	threadData->ResetPriorityBoost();
-	enqueue(thread, true, waker);
+	bigtime_t now = system_time();
+	threadData->ResetPriorityBoost(now);
+	enqueue(thread, true, waker, now);
 }
 
 
@@ -652,8 +654,9 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 	TRACE("changing thread %" B_PRId32 " priority to %" B_PRId32 " (old: %" B_PRId32 ", effective: %" B_PRId32 ")\n",
 		thread->id, priority, oldPriority, threadData->GetEffectivePriority());
 
+	bigtime_t now = system_time();
 	thread->priority = priority;
-	threadData->ResetPriorityBoost();
+	threadData->ResetPriorityBoost(now);
 
 	if (priority == oldPriority)
 		return oldPriority;
@@ -683,8 +686,10 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 	NotifySchedulerListeners(&SchedulerListener::ThreadRemovedFromRunQueue,
 		thread);
 
-	if (threadData->Dequeue())
-		enqueue(thread, true, NULL, system_time());
+	if (threadData->Dequeue()) {
+		_.Unlock();
+		enqueue(thread, true, NULL, now);
+	}
 
 	return oldPriority;
 }
@@ -857,10 +862,10 @@ reschedule(int32 nextState)
 			// Issue 30 fix: a dying thread must NEVER be re-enqueued. Clear
 			// enqueueOldThread unconditionally here. Without this, if the
 			// mask-based migration path below sets enqueueOldThread=false
-			// correctly, the code falls through fine; but if a future refactor
-			// reorders the switch cases or adds an early-exit, the dying
-			// thread could be enqueued via enqueue(oldThread, true, NULL)
-			// after Dies() has already removed its load, corrupting
+			// correctly, the code falls through fine; but if the switch cases
+			// are reordered or an early-exit is added, the dying thread
+			// could be enqueued via enqueue(oldThread, true, NULL) after
+			// Dies() has already removed its load, corrupting
 			// gTotalRunnableThreads and leading to use-after-free in the
 			// run-queue drain during thread destruction.
 			enqueueOldThread = false;
@@ -2125,14 +2130,8 @@ scheduler_on_team_foreground_changed(Team* team)
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
 
-			// Issue 91 fix: document scheduler_lock ordering hazard.
-			// enqueue() → choose_core() → search_local_node() → GetRandom()
-			// acquires no scheduler_lock, so holding it here is safe for
-			// current code. However, enqueue() → Enqueue() → CoreCPULocker
-			// acquires fCPULock; if any path between CoreCPULocker and
-			// scheduler_lock is added in future, deadlock will occur.
-			// Consider releasing scheduler_lock before calling enqueue() in
-			// a future refactor to eliminate this ordering constraint.
+			// Issue 91: Released scheduler_lock before calling enqueue() to
+			// eliminate the ordering hazard between scheduler_lock and fCPULock.
 			InterruptsSpinLocker locker(thread->scheduler_lock);
 			ThreadData* threadData = thread->scheduler_data;
 
@@ -2140,19 +2139,22 @@ scheduler_on_team_foreground_changed(Team* team)
 					|| threadData->IsRealTime())
 				continue;
 
+			bool isForeground = team->fIsForeground;
+			bigtime_t now = system_time();
 			if (thread->state == B_THREAD_READY) {
 				if (threadData->Dequeue()) {
-					threadData->SetForeground(team->fIsForeground);
-					threadData->ResetPriorityBoost();
-					enqueue(thread, false, NULL, system_time());
+					threadData->SetForeground(isForeground);
+					threadData->ResetPriorityBoost(now);
+					locker.Unlock();
+					enqueue(thread, false, NULL, now);
 				} else {
-					threadData->SetForeground(team->fIsForeground);
-					threadData->ResetPriorityBoost();
+					threadData->SetForeground(isForeground);
+					threadData->ResetPriorityBoost(now);
 				}
 			} else {
-				threadData->SetForeground(team->fIsForeground);
+				threadData->SetForeground(isForeground);
 				if (thread->state == B_THREAD_RUNNING) {
-					threadData->ResetPriorityBoost();
+					threadData->ResetPriorityBoost(now);
 					ASSERT(thread->cpu != NULL);
 					CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
 					if (!gCPU[cpu->ID()].disabled) {

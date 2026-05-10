@@ -643,9 +643,8 @@ ThreadData::_UpdateDeadline(bigtime_t now)
 	// Issue 72 fix: document that _UpdateDeadline is called inside
 	// CoreRunQueueLocker (via HasQuantumEnded → _UpdateDeadline). Calling
 	// system_time() while holding a spinlock adds non-deterministic latency
-	// if the TSC is slow or virtualized. This is accepted as unavoidable
-	// given the current design; a future improvement would pre-compute 'now'
-	// in reschedule() and pass it through the call chain.
+	// if the TSC is slow or virtualized. This was addressed by pre-computing
+	// 'now' in reschedule() and propagating it through the call chain.
 
 	// Virtual Deadline Calculation:
 	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)
@@ -791,9 +790,12 @@ ThreadData::_ScaleQuantum(bigtime_t maxQuantum, bigtime_t minQuantum,
 
 
 void
-ThreadData::MigrateTo(CoreEntry* targetCore)
+ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	if (now == 0)
+		now = system_time();
 
 	if (atomic_pointer_get<CoreEntry>(&fCore) == targetCore)
 		return;
@@ -813,8 +815,8 @@ ThreadData::MigrateTo(CoreEntry* targetCore)
 		if (gTrackCoreLoad) {
 			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 			if (core != NULL)
-				core->RemoveLoad(fNeededLoad, true);
-			targetCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, true);
+				core->RemoveLoad(fNeededLoad, true, now);
+			targetCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, true, now);
 		}
 	}
 
@@ -828,12 +830,13 @@ ThreadProcessing::~ThreadProcessing()
 
 
 void
-ThreadData::ResetPriorityBoost()
+ThreadData::ResetPriorityBoost(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	// maintain external API compatibility.
-	bigtime_t now = system_time();
+	if (now == 0)
+		now = system_time();
 
 	// Issue 64 fix: _ComputeEffectivePriority maps (fVirtualDeadline - now)
 	// to a priority bucket. Without a preceding _UpdateDeadline, fVirtualDeadline

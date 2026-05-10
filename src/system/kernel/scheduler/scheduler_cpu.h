@@ -157,7 +157,8 @@ public:
 
 private:
 						void			_RequestPerformanceLevel(
-											ThreadData* threadData);
+											ThreadData* threadData,
+											bigtime_t now = 0);
 						ThreadData*		_TryStealWork();
 
 	static				int32			_RescheduleEvent(timer* /* unused */);
@@ -710,18 +711,15 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	WriteSpinLocker coreLocker(fCoreLock);
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
 		(native_cpu_mask_t)1 << core->PackageIndex());
 	atomic_add(&fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
-		// (clarification): The race between AddIdleCore (which holds
-		// fCoreLock) and CoreGoesIdle (which does not hold fCoreLock) on the
-		// oldMask==0 → PackageGoesIdle path is benign in practice: both paths
-		// are guarded by the InterruptsBigSchedulerLocker at their call sites
-		// (CPU enable/disable vs normal scheduling), so they cannot truly
-		// execute concurrently.  A future refactoring that removes that
-		// guarantee MUST add explicit serialisation here.
+		// Issue 89 fix: Added explicit serialization via fCoreLock to ensure
+		// that PackageGoesIdle is called only once and does not race with
+		// AddIdleCore or CoreWakesUp.
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
@@ -733,6 +731,7 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	WriteSpinLocker coreLocker(fCoreLock);
 	// Clear the mask bit BEFORE decrementing the count, matching the logic
 	// in RemoveIdleCore to prevent GetIdleCore from returning a
 	// "dangling-ish" core reference.
@@ -744,8 +743,8 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	// Detect the transition from fully-idle to partially-active:
 	// the package wakes up when the *last* idle core becomes active, i.e.
 	// after clearing this core's bit the mask becomes zero.
-	if ((oldMask & ~clearBit) == 0) {
-		// package wakes up (last idle core becomes active)
+	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == 0) {
+		// package wakes up (last idle core became active)
 		if (fNode != NULL)
 			fNode->PackageWakesUp(this);
 	}

@@ -22,6 +22,8 @@
 - **Thread Selection Race Fix:** Hardened `CPUEntry::ChooseNextThread` to ensure peeked threads are removed from queues while holding necessary locks, preventing they being stolen between peeking and removal.
 - **Hot-Unplug Hardening:** Added explicit `NULL` guards for topology dereferences (`Package()`, `Node()`) in core-selection and rebalancing routines to prevent kernel panics during CPU hot-unplug events.
 - **Priority Boost Correctness:** Fixed a regression where effective priority was not recalculated after a boost reset, ensuring immediate impact on scheduling decisions.
+- **Enhanced Serialization:** Added explicit serialization via `fCoreLock` to `CoreGoesIdle` and `CoreWakesUp` to prevent races during package state transitions.
 
 ## 5. Documentation & Maintenance
 - Restored and updated all "Issue XX" fix documentation and technical commentary in source files to maintain historical context and explain complex synchronization patterns.
+- Addressed documented future improvements by completing timestamp propagation and resolving the `scheduler_lock` ordering hazard in team foreground changes.

@@ -94,7 +94,7 @@ public:
 	SCHEDULER_INLINE	void		StopCPUTime(bigtime_t now);
 	SCHEDULER_INLINE	void		StopCPUTime() { StopCPUTime(system_time()); }
 
-			void		ResetPriorityBoost();
+			void		ResetPriorityBoost(bigtime_t now = 0);
 
 			bool		ChooseCoreAndCPU(CoreEntry*& targetCore,
 							CPUEntry*& targetCPU);
@@ -175,7 +175,7 @@ public:
 			const_cast<CoreEntry* volatile*>(&fCore));
 	}
 			void		UnassignCore(bool running = false);
-			void		MigrateTo(CoreEntry* targetCore);
+			void		MigrateTo(CoreEntry* targetCore, bigtime_t now = 0);
 
 	static	void		ComputeQuantumLengths();
 
@@ -562,7 +562,7 @@ ThreadData::GoesAway(bigtime_t now)
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(&fCore);
 		atomic_set64((int64*)&fWentSleepActive, (snap != NULL) ? snap->GetActiveTime() : 0);
 		if (gTrackCoreLoad && snap != NULL)
-			fLoadMeasurementEpoch = snap->RemoveLoad(fNeededLoad, false);
+			fLoadMeasurementEpoch = snap->RemoveLoad(fNeededLoad, false, now);
 	}
 	fReady = false;
 }
@@ -596,7 +596,7 @@ ThreadData::Dies(bigtime_t now)
 	if (gTrackCoreLoad) {
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(&fCore);
 		if (snap != NULL)
-			snap->RemoveLoad(fNeededLoad, true);
+			snap->RemoveLoad(fNeededLoad, true, now);
 	}
 	fReady = false;
 }
