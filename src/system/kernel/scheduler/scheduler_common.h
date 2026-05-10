@@ -409,7 +409,7 @@ extern bool gHasStandardCores;
 
 void init_debug_commands();
 void scheduler_update_interaction_state();
-bool enqueue_safe(struct Thread* thread);
+bool enqueue_safe(struct Thread* thread, bigtime_t now = 0);
 
 
 class Scheduler {

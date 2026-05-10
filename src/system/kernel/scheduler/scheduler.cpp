@@ -598,12 +598,14 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 
 
 bool
-enqueue_safe(Thread* thread)
+enqueue_safe(Thread* thread, bigtime_t now)
 {
 	// Use the same safety logic as ChooseNextThread retry loop
 	// Issue 5 fix: return the result of enqueue() which is more reliable
 	// than checking IsEnqueued() if enqueue() gave up.
-	return enqueue(thread, false, NULL, system_time());
+	if (now == 0)
+		now = system_time();
+	return enqueue(thread, false, NULL, now);
 }
 
 
