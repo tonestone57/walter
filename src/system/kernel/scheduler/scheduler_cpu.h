@@ -857,11 +857,11 @@ SchedulerNode::IdlePackageMask() const
 }
 
 
-// Issue 89: AddCPU calls fPackage->AddIdleCore(this) which acquires
-// fCoreLock (write). CoreGoesIdle calls PackageEntry::CoreGoesIdle which
-// does NOT acquire fCoreLock. These two paths are now serialized by
-// holding InterruptsBigSchedulerLocker in scheduler_set_cpu_enabled
-// for the AddCPU call, matching the serialization level of RemoveCPU.
+// Issue 89 fix: AddCPU calls fPackage->AddIdleCore(this) which acquires
+// fCoreLock (write). CoreGoesIdle calls PackageEntry::CoreGoesIdle, which
+// now also acquires fCoreLock (write) for explicit serialization. This
+// ensures package-level state transitions are atomic even when triggered
+// outside of the global InterruptsBigSchedulerLocker path.
 inline void
 CoreEntry::CPUGoesIdle(CPUEntry* cpu)
 {
