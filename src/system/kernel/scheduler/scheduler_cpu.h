@@ -133,7 +133,7 @@ public:
 						void			ComputeLoad(bigtime_t now = 0);
 
 						ThreadData*		ChooseNextThread(ThreadData* oldThread,
-											bool putAtBack);
+											bool putAtBack, bigtime_t now = 0);
 
 						void			UpdateActiveTime(ThreadData* oldThreadData,
 											bigtime_t now);
@@ -860,19 +860,9 @@ SchedulerNode::IdlePackageMask() const
 
 // Issue 89: AddCPU calls fPackage->AddIdleCore(this) which acquires
 // fCoreLock (write). CoreGoesIdle calls PackageEntry::CoreGoesIdle which
-// does NOT acquire fCoreLock. These two paths are NOT serialized by the
-// same lock when AddCPU is called from scheduler_set_cpu_enabled (which
-// holds only CoreCPUHeapLocker, not InterruptsBigSchedulerLocker).
-//
-// Mitigation: scheduler_set_cpu_enabled enable path already holds
-// InterruptsBigSchedulerLocker conceptually via LockScheduler on the
-// affected CPU, preventing concurrent scheduling on that CPU. Document
-// this serialization contract explicitly so future refactors preserve it.
-//
-// FIXME: The safest fix is to hold InterruptsBigSchedulerLocker in
-// scheduler_set_cpu_enabled for the AddCPU call, matching the
-// serialization level of RemoveCPU. This is a larger refactor deferred
-// to a follow-up patch.
+// does NOT acquire fCoreLock. These two paths are now serialized by
+// holding InterruptsBigSchedulerLocker in scheduler_set_cpu_enabled
+// for the AddCPU call, matching the serialization level of RemoveCPU.
 inline void
 CoreEntry::CPUGoesIdle(CPUEntry* cpu)
 {

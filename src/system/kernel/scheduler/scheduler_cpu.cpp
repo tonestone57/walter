@@ -498,7 +498,7 @@ CPUEntry::ComputeLoad(bigtime_t now)
 
 
 ThreadData*
-CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
+CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -544,7 +544,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 			bool requestPreemption;
 			bool updateInteraction;
 			if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
-					updateInteraction)) {
+					updateInteraction, now)) {
 				// Issue 6/23 fix: cache the Thread* once; sharedThread->GetThread()
 				// is called multiple times below and the pointer must be consistent.
 				Thread* const stolenThread = sharedThread->GetThread();
@@ -555,7 +555,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 					sharedThread->MigrateTo(fCore);
 					bool dummy1, dummy2;
 					// Issue 6 fix: check return value; log if the last-resort also fails.
-					if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction)) {
+					if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction, now)) {
 						dprintf("scheduler: CRITICAL: thread %" B_PRId32
 							" could not be re-enqueued after forced migration;"
 							" scheduler state is inconsistent\n", stolenThread->id);
@@ -604,7 +604,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 		bool requestPreemption;
 		bool updateInteraction;
 		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
-				updateInteraction)) {
+				updateInteraction, now)) {
 			Thread* const thread = sharedThread->GetThread();
 			if (!enqueue_safe(thread)) {
 				dprintf("scheduler: WARNING: shared thread %" B_PRId32
@@ -612,7 +612,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack)
 					thread->id);
 				sharedThread->MigrateTo(fCore);
 				bool dummy1, dummy2;
-				if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction)) {
+				if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction, now)) {
 					dprintf("scheduler: CRITICAL: thread %" B_PRId32
 						" could not be re-enqueued after forced migration;"
 						" scheduler state is inconsistent\n", thread->id);

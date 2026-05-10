@@ -112,8 +112,8 @@ public:
 			void		DonateTimesliceTo(Thread* beneficiary);
 
 	SCHEDULER_INLINE	void		Continues(bigtime_t now = 0);
-	SCHEDULER_INLINE	void		GoesAway();
-	SCHEDULER_INLINE	void		Dies();
+	SCHEDULER_INLINE	void		GoesAway(bigtime_t now = 0);
+	SCHEDULER_INLINE	void		Dies(bigtime_t now = 0);
 
 	SCHEDULER_INLINE	bigtime_t	WentSleep() const
 	{
@@ -125,9 +125,9 @@ public:
 		return atomic_get64((int64*)&fWentSleepActive);
 	}
 
-	SCHEDULER_INLINE	void		PutBack();
+	SCHEDULER_INLINE	void		PutBack(bigtime_t now = 0);
 	SCHEDULER_INLINE	bool		Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
-								bool& updateInteraction);
+								bool& updateInteraction, bigtime_t now = 0);
 	SCHEDULER_INLINE	bool		Dequeue();
 
 	// Accept an optional pre-computed 'now' timestamp.  The caller
@@ -507,11 +507,14 @@ ThreadData::Continues(bigtime_t now)
 
 
 inline void
-ThreadData::GoesAway()
+ThreadData::GoesAway(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(fReady);
+
+	if (now == 0)
+		now = system_time();
 
 	if (!IsIdle()) {
 		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
@@ -534,17 +537,13 @@ ThreadData::GoesAway()
 	// boost-scan decision (one missed scan quantum is acceptable) but callers
 	// must not rely on ThreadCount() == 0 meaning the core is definitively empty.
 
-	if (!HasQuantumEnded(false, false)) {
+	if (!HasQuantumEnded(false, false, now)) {
 		fQuickStartCredit = true;
 		fInteractivityScore = min_c(fInteractivityScore + 10, 1000);
 	}
 
 	atomic_set64((int64*)&fLastInterruptTime, 0);
 
-	// Cache system_time() once; calling it twice gives slightly
-	// different timestamps under heavy interrupt load, skewing sleep-time
-	// accounting.
-	bigtime_t now = system_time();
 	atomic_set64((int64*)&fWentSleep, now);
 	// Issue 7 fix: fCore can be set to NULL by a concurrent MigrateTo() call.
 	// The original code checked for NULL once then called GetActiveTime() and
@@ -566,11 +565,14 @@ ThreadData::GoesAway()
 
 
 inline void
-ThreadData::Dies()
+ThreadData::Dies(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(fReady);
+
+	if (now == 0)
+		now = system_time();
 
 	if (!IsIdle()) {
 		int32 prev = atomic_add(&gTotalRunnableThreads, -1);
@@ -597,11 +599,14 @@ ThreadData::Dies()
 
 
 inline void
-ThreadData::PutBack()
+ThreadData::PutBack(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	_ComputeEffectivePriority(system_time());
+	if (now == 0)
+		now = system_time();
+
+	_ComputeEffectivePriority(now);
 	int32 priority = GetEffectivePriority();
 
 	if (fThread->pinned_to_cpu > 0) {
@@ -634,9 +639,12 @@ ThreadData::PutBack()
 
 inline bool
 ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
-	bool& updateInteraction)
+	bool& updateInteraction, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	if (now == 0)
+		now = system_time();
 
 	updateInteraction = false;
 
@@ -656,7 +664,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			pinned = false; // float
 		} else {
 			if (!wasReady && !IsRealTime())
-				_UpdateDeadline();
+				_UpdateDeadline(now);
 
 			// defer the gTotalRunnableThreads increment until after the
 			// CPUCount guard in the non-pinned path (see below).  For the pinned
@@ -722,12 +730,13 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			}
 			// Issue 41 fix: AddLoad happens here, after all early-return guards.
 			if (gTrackCoreLoad && !wasReady) {
-				bigtime_t timeSlept = system_time() - atomic_get64((int64*)&fWentSleep);
+				bigtime_t timeSlept = now - atomic_get64((int64*)&fWentSleep);
 				bool updateLoad = timeSlept > 0;
-				core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
+				core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad,
+					now);
 				if (updateLoad) {
 					atomic_add64((int64*)&fMeasureAvailableTime, timeSlept);
-					_ComputeNeededLoad();
+					_ComputeNeededLoad(now);
 				}
 			}
 			core->DecrementTotalThreadCount();
@@ -736,17 +745,17 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			return false;
 		} else if (!wasReady && gTrackCoreLoad) {
 			// Issue 41 fix: for non-stolen threads, AddLoad after CPUCount guard.
-			bigtime_t timeSlept = system_time() - atomic_get64((int64*)&fWentSleep);
+			bigtime_t timeSlept = now - atomic_get64((int64*)&fWentSleep);
 			bool updateLoad = timeSlept > 0;
-			core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad);
+			core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad, now);
 			if (updateLoad) {
 				atomic_add64((int64*)&fMeasureAvailableTime, timeSlept);
-				_ComputeNeededLoad();
+				_ComputeNeededLoad(now);
 			}
 		}
 
 		if (!wasReady && !IsRealTime())
-			_UpdateDeadline();
+			_UpdateDeadline(now);
 
 		// defer the gTotalRunnableThreads increment until after the
 		// CPUCount guard in the non-pinned path.

@@ -832,6 +832,7 @@ ThreadData::ResetPriorityBoost()
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// maintain external API compatibility.
 	bigtime_t now = system_time();
 
 	// Issue 64 fix: _ComputeEffectivePriority maps (fVirtualDeadline - now)

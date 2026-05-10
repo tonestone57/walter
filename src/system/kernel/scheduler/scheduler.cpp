@@ -269,13 +269,14 @@ scheduler_update_interaction_state()
 struct RunQueueScanner {
 		uint32 kTopWordMask;
 		int kMaxThreadsToCheckPerQueue;
+		bigtime_t now;
 
-		RunQueueScanner(uint32 topWordMask, int maxThreads)
-			: kTopWordMask(topWordMask), kMaxThreadsToCheckPerQueue(maxThreads) {}
+		RunQueueScanner(uint32 topWordMask, int maxThreads, bigtime_t now)
+			: kTopWordMask(topWordMask), kMaxThreadsToCheckPerQueue(maxThreads),
+			  now(now) {}
 
 		void operator()(const ThreadRunQueue* runQueue) const {
 			const uint32* bitmap = runQueue->GetBitmap();
-			bigtime_t now = system_time();
 
 			for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
 				uint32 val = bitmap[i];
@@ -377,9 +378,12 @@ static int32* sCPUToCluster = NULL;
 
 
 static void
-UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
+UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu, bigtime_t now = 0)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	if (now == 0)
+		now = system_time();
 
 	// Issue 40: This mask is recomputed from a compile-time constant on every
 	// reschedule.  Hoist it to a static const so the compiler evaluates it
@@ -402,7 +406,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 
 	const int kMaxThreadsToCheckPerQueue = 5;
 
-	RunQueueScanner scanRunQueue(kTopWordMask, kMaxThreadsToCheckPerQueue);
+	RunQueueScanner scanRunQueue(kTopWordMask, kMaxThreadsToCheckPerQueue, now);
 
 	// Check Core RunQueue first to maintain Core -> CPU lock ordering
 	// On an N-way SMT core, all N CPUs previously scanned the shared
@@ -464,7 +468,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu)
 }
 
 
-static bool enqueue(Thread* thread, bool newOne, Thread* waker);
+static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now = 0);
 
 
 void
@@ -485,9 +489,12 @@ scheduler_dump_thread_data(Thread* thread)
 
 
 static bool
-enqueue(Thread* thread, bool newOne, Thread* waker)
+enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
+
+	if (now == 0)
+		now = system_time();
 
 	ThreadData* threadData = thread->scheduler_data;
 
@@ -532,7 +539,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 			thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
 
 		if (!threadData->Enqueue(wasRunQueueEmpty, requestPreemption,
-				updateInteraction)) {
+				updateInteraction, now)) {
 			targetCore = NULL;
 			targetCPU = NULL;
 			if (++enqueueAttempts >= kMaxRetries) {
@@ -576,7 +583,6 @@ enqueue(Thread* thread, bool newOne, Thread* waker)
 		} else {
 			// Issue 84 fix: this IPI dispatch was unreachable before; now
 			// correctly wakes the target CPU when a thread is enqueued.
-			bigtime_t now = system_time();
 			if (ShouldReschedule(now, atomic_get64(&targetCPU->lastReschedule),
 					kRescheduleCooldown)) {
 				if (targetCPU->SetReschedulePending()) {
@@ -597,7 +603,7 @@ enqueue_safe(Thread* thread)
 	// Use the same safety logic as ChooseNextThread retry loop
 	// Issue 5 fix: return the result of enqueue() which is more reliable
 	// than checking IsEnqueued() if enqueue() gave up.
-	return enqueue(thread, false, NULL);
+	return enqueue(thread, false, NULL, system_time());
 }
 
 
@@ -676,7 +682,7 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 		thread);
 
 	if (threadData->Dequeue())
-		enqueue(thread, true, NULL);
+		enqueue(thread, true, NULL, system_time());
 
 	return oldPriority;
 }
@@ -828,9 +834,9 @@ reschedule(int32 nextState)
 			fetchedOldThreadMask = true;
 
 			if (!oldThreadData->IsIdle() && (!useOldThreadMask || oldThreadMask.GetBit(thisCPU))) {
-				oldThreadData->Continues();
+				oldThreadData->Continues(now);
 				if (oldThreadData->HasQuantumEnded(oldThread->cpu->preempted,
-						oldThread->has_yielded)) {
+						oldThread->has_yielded, now)) {
 					TRACE("enqueueing thread %ld into run queue priority ="
 						" %ld\n", oldThread->id,
 						oldThreadData->GetEffectivePriority());
@@ -845,7 +851,7 @@ reschedule(int32 nextState)
 
 			break;
 		case THREAD_STATE_FREE_ON_RESCHED:
-			oldThreadData->Dies();
+			oldThreadData->Dies(now);
 			// Issue 30 fix: a dying thread must NEVER be re-enqueued. Clear
 			// enqueueOldThread unconditionally here. Without this, if the
 			// mask-based migration path below sets enqueueOldThread=false
@@ -858,7 +864,7 @@ reschedule(int32 nextState)
 			enqueueOldThread = false;
 			break;
 		default:
-			oldThreadData->GoesAway();
+			oldThreadData->GoesAway(now);
 			TRACE("not enqueueing thread %ld into run queue next_state = %ld\n",
 				oldThread->id, nextState);
 			break;
@@ -893,12 +899,12 @@ reschedule(int32 nextState)
 
 		nextThreadData
 			= cpu->ChooseNextThread(enqueueOldThread ? oldThreadData : NULL,
-				putOldThreadAtBack);
+				putOldThreadAtBack, now);
 
 		cpu->UpdateActiveTime(oldThreadData, now);
 
 		if (oldThreadShouldMigrate) {
-			enqueue(oldThread, true, NULL);
+			enqueue(oldThread, true, NULL, now);
 			// replace with the idle thread, if no other thread could be found
 			if (oldThreadData == nextThreadData) {
 				nextThreadData = cpu->PeekIdleThread();
@@ -912,7 +918,7 @@ reschedule(int32 nextState)
 		cpu->UpdatePriority(nextThreadData->GetEffectivePriority());
 	}
 
-	UpdatePriorityBoostScalable(core, cpu);
+	UpdatePriorityBoostScalable(core, cpu, now);
 
 	Thread* nextThread = nextThreadData->GetThread();
 	ASSERT(!gCPU[thisCPU].disabled || nextThreadData->IsIdle());
@@ -920,9 +926,9 @@ reschedule(int32 nextState)
 	if (nextThread != oldThread) {
 		if (enqueueOldThread) {
 			if (putOldThreadAtBack)
-				enqueue(oldThread, false, NULL);
+				enqueue(oldThread, false, NULL, now);
 			else
-				oldThreadData->PutBack();
+				oldThreadData->PutBack(now);
 		}
 
 		acquire_spinlock(&nextThread->scheduler_lock);
@@ -2137,7 +2143,7 @@ scheduler_on_team_foreground_changed(Team* team)
 				if (threadData->Dequeue()) {
 					threadData->SetForeground(team->fIsForeground);
 					threadData->ResetPriorityBoost();
-					enqueue(thread, false, NULL);
+					enqueue(thread, false, NULL, system_time());
 				} else {
 					threadData->SetForeground(team->fIsForeground);
 					threadData->ResetPriorityBoost();
