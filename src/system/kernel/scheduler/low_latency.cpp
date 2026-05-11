@@ -5,7 +5,6 @@
  * Audit fixes applied 2025.
  */
 
-
 #include <util/AutoLock.h>
 #include <util/Random.h>
 
@@ -15,7 +14,6 @@
 #include "scheduler_profiler.h"
 #include "scheduler_thread.h"
 #include "scheduler_topology.h"
-
 
 namespace Scheduler {
 
@@ -35,29 +33,23 @@ struct MinimumLoadAction {
 	}
 };
 
-
-
-
 // --- Scheduler tuning (low latency mode improvements) ---
 static const int kMigrationThreshold = 2;
 static const bigtime_t kMigrationCooldown __attribute__((aligned(8))) = 1000;
 static const int kMaxCPUsToScan = 8;
-
 
 static void
 switch_to_mode()
 {
 }
 
-
 static void
 set_cpu_enabled(int32 /* cpu */, bool /* enabled */)
 {
 }
 
-
 static bool
-has_cache_expired(const ThreadData* threadData)
+has_cache_expired(const ThreadData* threadData, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	if (threadData->WentSleepActive() == 0)
@@ -73,13 +65,6 @@ has_cache_expired(const ThreadData* threadData)
 	bigtime_t activeTime = core->GetActiveTime();
 	return activeTime - threadData->WentSleepActive() > kCacheExpire;
 }
-
-
-
-
-
-
-
 
 static CoreEntry*
 choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
@@ -100,7 +85,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	// redundant syscalls and ensure a consistent view within one scheduling
 	// decision.
 	const bool cacheExpired = (previousCore != NULL)
-		? has_cache_expired(threadData) : true;
+		? has_cache_expired(threadData, now) : true;
 
 	// Stage 0: Hot-Idle Fast Path
 	// If the core we previously ran on is idle and in the same package,
@@ -527,9 +512,6 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	return core;
 }
 
-
-
-
 static CoreEntry*
 rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 {
@@ -707,7 +689,6 @@ rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	return other;
 }
 
-
 static void
 rebalance_irqs(bool idle)
 {
@@ -824,7 +805,6 @@ rebalance_irqs(bool idle)
 	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
 }
-
 
 scheduler_mode_operations gSchedulerLowLatencyMode = {
 	"low latency",

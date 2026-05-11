@@ -446,9 +446,9 @@ public:
 		GetCurrentMode()->set_cpu_enabled(cpu, enabled);
 	}
 
-	static inline bool HasCacheExpired(const ThreadData* threadData)
+	static inline bool HasCacheExpired(const ThreadData* threadData, bigtime_t now)
 	{
-		return GetCurrentMode()->has_cache_expired(threadData);
+		return GetCurrentMode()->has_cache_expired(threadData, now);
 	}
 
 	static inline CoreEntry* ChooseCore(const ThreadData* threadData,

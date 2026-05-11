@@ -79,7 +79,7 @@ ThreadData::_ChooseCore(const CPUSet& mask, bigtime_t now) const
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(!gSingleCore);
-	return Scheduler::ChooseCore(this, mask);
+	return Scheduler::ChooseCore(this, mask, now);
 }
 
 
@@ -800,6 +800,19 @@ ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now)
 
 	if (atomic_pointer_get<CoreEntry>(&fCore) == targetCore)
 		return;
+
+	// Defensive null guard: ChooseCoreAndCPU can return NULL if all
+	// cores are disabled.  Assigning NULL core effectively parks the
+	// thread until a core becomes available.
+	if (targetCore == NULL) {
+		if (fReady && gTrackCoreLoad) {
+			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+			if (core != NULL)
+				core->RemoveLoad(fNeededLoad, true, now);
+		}
+		atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
+		return;
+	}
 
 	// Issue 77 fix: document the intentional unsigned underflow when epoch==0.
 	// LoadMeasurementEpoch() returns uint32; subtracting 1 from 0 wraps to

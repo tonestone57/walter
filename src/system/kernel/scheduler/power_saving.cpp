@@ -5,7 +5,6 @@
  * Audit fixes applied 2025.
  */
 
-
 #include <util/atomic.h>
 #include <util/AutoLock.h>
 #include <util/Random.h>
@@ -17,19 +16,16 @@
 #include "scheduler_thread.h"
 #include "scheduler_topology.h"
 
-
 namespace Scheduler {
 
 static void
 check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
 	int32& bestScore);
 
-
 static void
 check_package_packing(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 	CoreEntry*& other, int32& bestScore, bool& foundNonOverloaded,
 	CoreType type = CORE_TYPE_UNKNOWN);
-
 
 struct MinimumLoadAction {
 	CPUEntry* cpu;
@@ -102,17 +98,12 @@ struct PackagePackingAction {
 	}
 };
 
-
-
-
 // --- Scheduler tuning (power saving mode improvements) ---
 static const int kConsolidationThreshold = 2;
 static const int kMaxCPUsToScan = 8;
 static const bigtime_t kIdleConsolidationCooldown __attribute__((aligned(8))) = 2000;
 
-
 static CoreEntry** sSmallTaskCore;
-
 
 static void
 switch_to_mode()
@@ -128,7 +119,6 @@ switch_to_mode()
 	}
 }
 
-
 static void
 set_cpu_enabled(int32 cpu, bool enabled)
 {
@@ -138,9 +128,8 @@ set_cpu_enabled(int32 cpu, bool enabled)
 	}
 }
 
-
 static bool
-has_cache_expired(const ThreadData* threadData)
+has_cache_expired(const ThreadData* threadData, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	if (threadData->WentSleepActive() == 0)
@@ -152,12 +141,6 @@ has_cache_expired(const ThreadData* threadData)
 	bigtime_t activeTime = core->GetActiveTime();
 	return activeTime - threadData->WentSleepActive() > kCacheExpire;
 }
-
-
-
-
-
-
 
 static void
 check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
@@ -204,7 +187,6 @@ check_package_small_task(CPUEntry* cpu, PackageEntry* entry, CoreEntry*& core,
 		}
 	}
 }
-
 
 static CoreEntry*
 choose_small_task_core(CPUEntry* cpu)
@@ -378,7 +360,6 @@ choose_small_task_core(CPUEntry* cpu)
 	return core;
 }
 
-
 static CoreEntry*
 choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL)
 {
@@ -421,9 +402,6 @@ choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL)
 		return package->GetIdleCorePacking(cpu, mask);
 	return NULL;
 }
-
-
-
 
 static void
 check_package_packing(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
@@ -475,7 +453,6 @@ check_package_packing(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 	}
 }
 
-
 static void
 check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 	CoreEntry*& other, int32& bestScore, bool& foundNonOverloaded,
@@ -510,9 +487,6 @@ check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 		}
 	}
 }
-
-
-
 
 static CoreEntry*
 choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
@@ -629,7 +603,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 			CoreEntry* previousCore = threadData->PreviousCore();
 
 			// Phase 1: L3 Domain (Sibling in previous package)
-			if (previousCore != NULL && !has_cache_expired(threadData)) {
+			if (previousCore != NULL && !has_cache_expired(threadData, now)) {
 				PackageEntry* package = previousCore->Package();
 				if (package != NULL) {
 					CheckPackageMinimumLoad(cpu, package, NULL, bestCore,
@@ -739,7 +713,6 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	ASSERT(core != NULL);
 	return core;
 }
-
 
 static CoreEntry*
 rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
@@ -932,7 +905,6 @@ rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 		? smallTaskCore : core;
 }
 
-
 static void
 rebalance_irqs(bool idle)
 {
@@ -1083,7 +1055,6 @@ rebalance_irqs(bool idle)
 	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
 }
-
 
 scheduler_mode_operations gSchedulerPowerSavingMode = {
 	"power saving",

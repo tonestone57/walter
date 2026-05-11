@@ -82,7 +82,7 @@ public:
 	SCHEDULER_INLINE	bool		IsRealTime() const;
 	SCHEDULER_INLINE	bool		IsIdle() const;
 
-	SCHEDULER_INLINE	bool		HasCacheExpired() const;
+	SCHEDULER_INLINE	bool		HasCacheExpired(bigtime_t now = 0) const;
 	SCHEDULER_INLINE	int32		HomePackage() const { return fHomePackage; }
 	SCHEDULER_INLINE	CoreEntry*	PreviousCore() const;
 	SCHEDULER_INLINE	CoreEntry*	Rebalance(const CPUSet& mask, bigtime_t now) const;
@@ -252,10 +252,11 @@ ThreadData::IsIdle() const
 
 
 inline bool
-ThreadData::HasCacheExpired() const
+ThreadData::HasCacheExpired(bigtime_t now) const
 {
 	SCHEDULER_ENTER_FUNCTION();
-	return Scheduler::HasCacheExpired(this);
+	if (now == 0) now = system_time();
+	return Scheduler::HasCacheExpired(this, now);
 }
 
 

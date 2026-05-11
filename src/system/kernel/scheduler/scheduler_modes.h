@@ -22,7 +22,7 @@ struct scheduler_mode_operations {
 	void					(*switch_to_mode)();
 	void					(*set_cpu_enabled)(int32 cpu, bool enabled);
 	bool					(*has_cache_expired)(
-								const Scheduler::ThreadData* threadData);
+								const Scheduler::ThreadData* threadData, bigtime_t now);
 	Scheduler::CoreEntry*	(*choose_core)(
 								const Scheduler::ThreadData* threadData,
 								const CPUSet& mask, bigtime_t now);

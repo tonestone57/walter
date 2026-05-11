@@ -519,7 +519,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 		if (wakerCore != NULL && wakerCore->CPUCount() > 0)
 			targetCore = wakerCore;
 	} else if (threadData->Core() != NULL
-		&& (!newOne || !threadData->HasCacheExpired())) {
+		&& (!newOne || !threadData->HasCacheExpired(now))) {
 		CPUSet mask = threadData->GetCPUMask();
 		targetCore = threadData->Rebalance(mask, now);
 	}
@@ -2129,14 +2129,11 @@ scheduler_on_team_foreground_changed(Team* team)
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
 
-			// Issue 91 fix: document scheduler_lock ordering hazard.
-			// enqueue() → choose_core() → search_local_node() → GetRandom()
-			// acquires no scheduler_lock, so holding it here is safe for
-			// current code. However, enqueue() → Enqueue() → CoreCPULocker
-			// acquires fCPULock; if any path between CoreCPULocker and
-			// scheduler_lock is added in future, deadlock will occur.
-			// Consider releasing scheduler_lock before calling enqueue() in
-			// a future refactor to eliminate this ordering constraint.
+			// Issue 91 fix: Decouple scheduler_lock from the enqueue() path.
+			// enqueue() → Enqueue() → CoreCPULocker acquires fCPULock;
+			// holding scheduler_lock across this call creates a lock-ordering
+			// hazard (fCPULock/fQueueLock → scheduler_lock). This hazard has
+			// been eliminated by releasing the lock before calling enqueue().
 			InterruptsSpinLocker locker(thread->scheduler_lock);
 			ThreadData* threadData = thread->scheduler_data;
 
