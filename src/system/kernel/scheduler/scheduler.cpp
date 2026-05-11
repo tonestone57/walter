@@ -521,12 +521,17 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 			targetCPU = NULL;
 			if (++enqueueAttempts >= kMaxRetries) {
 				dprintf("scheduler: enqueue giving up after %d attempts "
-					"for thread %" B_PRId32 "\n", enqueueAttempts, thread->id);
+					"for thread %" B_PRId32 "; forcing to current CPU\n", enqueueAttempts, thread->id);
 
-				if (threadData->IsReady() && !threadData->IsIdle())
-					atomic_add(&gTotalRunnableThreads, -1);
-
-				return false;
+				targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
+				targetCore = targetCPU->Core();
+				if (targetCore == NULL || gCPU[targetCPU->ID()].disabled) {
+					if (threadData->IsReady() && !threadData->IsIdle())
+						atomic_add(&gTotalRunnableThreads, -1);
+					return false;
+				}
+				// Forced fallback; Reset retry count and try one more time on a known-alive CPU
+				enqueueAttempts = kMaxRetries - 1;
 			}
 		} else {
 			// Issue 16/84 fix: DO NOT return here. The original early return
@@ -2075,7 +2080,7 @@ scheduler_on_team_foreground_changed(Team* team)
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
 
-			// Issue 91 fix: document scheduler_lock ordering hazard.
+			// Issue 91 fix: Decouple scheduler_lock from the enqueue() path.
 			// enqueue() → Enqueue() → CoreCPULocker acquires fCPULock;
 			// holding scheduler_lock across this call creates a lock-ordering
 			// hazard (fCPULock/fQueueLock → scheduler_lock). This hazard has
@@ -2090,6 +2095,7 @@ scheduler_on_team_foreground_changed(Team* team)
 				if (threadData->Dequeue()) {
 					threadData->SetForeground(team->fIsForeground);
 					threadData->ResetPriorityBoost(now);
+					locker.Unlock();
 					enqueue(thread, false, NULL, now);
 				} else {
 					threadData->SetForeground(team->fIsForeground);
