@@ -32,7 +32,7 @@ struct CACHE_LINE_ALIGN ThreadData : public DoublyLinkedListLinkImpl<ThreadData>
 private:
 	inline	void		_InitBase();
 
-	SCHEDULER_INLINE	CoreEntry*	_ChooseCore(const CPUSet& mask) const;
+	SCHEDULER_INLINE	CoreEntry*	_ChooseCore(const CPUSet& mask, bigtime_t now) const;
 	SCHEDULER_INLINE	CPUEntry*	_ChooseCPU(CoreEntry* core,
 							bool& rescheduleNeeded) const;
 
@@ -85,7 +85,7 @@ public:
 	SCHEDULER_INLINE	bool		HasCacheExpired() const;
 	SCHEDULER_INLINE	int32		HomePackage() const { return fHomePackage; }
 	SCHEDULER_INLINE	CoreEntry*	PreviousCore() const;
-	SCHEDULER_INLINE	CoreEntry*	Rebalance(const CPUSet& mask) const;
+	SCHEDULER_INLINE	CoreEntry*	Rebalance(const CPUSet& mask, bigtime_t now) const;
 
 	SCHEDULER_INLINE	int32		GetEffectivePriority() const;
 
@@ -97,7 +97,7 @@ public:
 			void		ResetPriorityBoost(bigtime_t now = 0);
 
 			bool		ChooseCoreAndCPU(CoreEntry*& targetCore,
-							CPUEntry*& targetCPU);
+							CPUEntry*& targetCPU, bigtime_t now = 0);
 
 	SCHEDULER_INLINE	void		SetLastInterruptTime(bigtime_t interruptTime)
 							{ atomic_set64((int64*)&fLastInterruptTime, interruptTime); }
@@ -279,12 +279,12 @@ ThreadData::PreviousCore() const
 
 
 inline CoreEntry*
-ThreadData::Rebalance(const CPUSet& mask) const
+ThreadData::Rebalance(const CPUSet& mask, bigtime_t now) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(!gSingleCore);
-	return Scheduler::Rebalance(this, mask);
+	return Scheduler::Rebalance(this, mask, now);
 }
 
 

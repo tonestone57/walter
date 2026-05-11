@@ -521,7 +521,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 	} else if (threadData->Core() != NULL
 		&& (!newOne || !threadData->HasCacheExpired())) {
 		CPUSet mask = threadData->GetCPUMask();
-		targetCore = threadData->Rebalance(mask);
+		targetCore = threadData->Rebalance(mask, now);
 	}
 
 	bool wasRunQueueEmpty = false;
@@ -534,7 +534,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 	const int32 kMaxRetries = smp_get_num_cpus() * 2 + 8;
 	int32 enqueueAttempts = 0;
 	do {
-		rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU);
+		rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU, now);
 
 		TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32 " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
 			thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
@@ -2124,6 +2124,7 @@ scheduler_on_team_foreground_changed(Team* team)
 		} // thread_list_lock released here
 
 		// Second pass: process collected threads without holding list lock.
+		bigtime_t now = system_time();
 		for (int i = 0; i < count; i++) {
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
@@ -2142,12 +2143,11 @@ scheduler_on_team_foreground_changed(Team* team)
 			if (threadData == NULL || threadData->IsIdle()
 					|| threadData->IsRealTime())
 				continue;
-
-			bigtime_t now = system_time();
 			if (thread->state == B_THREAD_READY) {
 				if (threadData->Dequeue()) {
 					threadData->SetForeground(team->fIsForeground);
 					threadData->ResetPriorityBoost(now);
+					locker.Unlock();
 					enqueue(thread, false, NULL, now);
 				} else {
 					threadData->SetForeground(team->fIsForeground);

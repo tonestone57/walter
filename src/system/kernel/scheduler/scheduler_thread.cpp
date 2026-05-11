@@ -74,7 +74,7 @@ ThreadData::_InitBase()
 
 
 inline CoreEntry*
-ThreadData::_ChooseCore(const CPUSet& mask) const
+ThreadData::_ChooseCore(const CPUSet& mask, bigtime_t now) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -248,7 +248,7 @@ ThreadData::Dump() const
 
 
 bool
-ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
+ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -282,7 +282,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 		}
 
 		if (targetCore == NULL && targetCPU == NULL) {
-			targetCore = _ChooseCore(mask);
+			targetCore = _ChooseCore(mask, now);
 			// Issue 3 fix: _ChooseCore() (which delegates to choose_core in
 			// low_latency.cpp / power_saving.cpp) can return NULL when all
 			// cores are filtered out by the affinity mask or when the topology
@@ -299,7 +299,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 					continue;
 				}
 				if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
-					MigrateTo(targetCore);
+					MigrateTo(targetCore, now);
 				return false;
 			}
 			ASSERT(!useMask || mask.Matches(targetCore->CPUMask()));
@@ -326,7 +326,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 			fHomePackage = targetCore->Package()->ID();
 
 		if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
-			MigrateTo(targetCore);
+			MigrateTo(targetCore, now);
 		return rescheduleNeeded;
 	}
 
@@ -352,7 +352,7 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 	}
 
 	if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
-		MigrateTo(targetCore);
+		MigrateTo(targetCore, now);
 	return false;
 }
 
@@ -618,7 +618,7 @@ ThreadData::_ComputeNeededLoad(bigtime_t now)
 
 	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 	if (core != NULL)
-		core->ChangeLoad(fNeededLoad - oldLoad);
+		core->ChangeLoad(fNeededLoad - oldLoad, now);
 }
 
 

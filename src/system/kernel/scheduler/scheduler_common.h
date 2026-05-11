@@ -452,15 +452,15 @@ public:
 	}
 
 	static inline CoreEntry* ChooseCore(const ThreadData* threadData,
-		const CPUSet& mask)
+		const CPUSet& mask, bigtime_t now)
 	{
-		return GetCurrentMode()->choose_core(threadData, mask);
+		return GetCurrentMode()->choose_core(threadData, mask, now);
 	}
 
 	static inline CoreEntry* Rebalance(const ThreadData* threadData,
-		const CPUSet& mask)
+		const CPUSet& mask, bigtime_t now)
 	{
-		return GetCurrentMode()->rebalance(threadData, mask);
+		return GetCurrentMode()->rebalance(threadData, mask, now);
 	}
 
 	static inline void RebalanceIRQs(bool idle)

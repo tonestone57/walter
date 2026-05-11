@@ -47,10 +47,11 @@ struct LocalNodeStealAction {
 	PackageEntry* package;
 	ThreadData** stolen;
 	const CPUSet& enabled;
+	bigtime_t now;
 
 	LocalNodeStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s,
-		const CPUSet& e)
-		: cpu(c), package(p), stolen(s), enabled(e) {}
+		const CPUSet& e, bigtime_t n)
+		: cpu(c), package(p), stolen(s), enabled(e), now(n) {}
 
 	bool operator()(PackageEntry* entry) const {
 		if (*stolen != NULL)
@@ -80,7 +81,7 @@ struct LocalNodeStealAction {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
-					(*stolen)->MigrateTo(cpu->Core());
+					(*stolen)->MigrateTo(cpu->Core(), now);
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
 					victim->UnlockRunQueue();
@@ -105,10 +106,11 @@ struct GlobalRandomStealAction {
 	PackageEntry* package;
 	ThreadData** stolen;
 	const CPUSet& enabled;
+	bigtime_t now;
 
 	GlobalRandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s,
-		const CPUSet& e)
-		: cpu(c), package(p), stolen(s), enabled(e) {}
+		const CPUSet& e, bigtime_t n)
+		: cpu(c), package(p), stolen(s), enabled(e), now(n) {}
 
 	bool operator()(PackageEntry* entry) const {
 		if (*stolen != NULL)
@@ -141,7 +143,7 @@ struct GlobalRandomStealAction {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
-					(*stolen)->MigrateTo(cpu->Core());
+					(*stolen)->MigrateTo(cpu->Core(), now);
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
 					victim->UnlockRunQueue();
@@ -520,7 +522,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 	ThreadData* sharedThread = core->PeekThread();
 	if (sharedThread == NULL && pinnedThread == NULL) {
 		// try to steal work from other cores in the same package
-		sharedThread = _TryStealWork();
+		sharedThread = _TryStealWork(now);
 	}
 
 	bool sharedThreadIsFloating = sharedThread != NULL
@@ -552,7 +554,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 					dprintf("scheduler: WARNING: stolen thread %" B_PRId32
 						" lost during hot-unplug — forcing to current CPU\n",
 						stolenThread->id);
-					sharedThread->MigrateTo(fCore);
+					sharedThread->MigrateTo(fCore, now);
 					bool dummy1, dummy2;
 					// Issue 6 fix: check return value; log if the last-resort also fails.
 					if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction, now)) {
@@ -610,7 +612,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 				dprintf("scheduler: WARNING: shared thread %" B_PRId32
 					" lost during hot-unplug — forcing to current CPU\n",
 					thread->id);
-				sharedThread->MigrateTo(fCore);
+				sharedThread->MigrateTo(fCore, now);
 				bool dummy1, dummy2;
 				if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction, now)) {
 					dprintf("scheduler: CRITICAL: thread %" B_PRId32
@@ -713,7 +715,7 @@ CPUEntry::GetRandom()
 
 
 ThreadData*
-CPUEntry::_TryStealWork()
+CPUEntry::_TryStealWork(bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -783,7 +785,7 @@ CPUEntry::_TryStealWork()
 				const CPUSet& threadMask = stolen->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber)) {
 					CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
-					stolen->MigrateTo(core);
+					stolen->MigrateTo(core, now);
 					stolen->fStolen = true;
 					core->IncrementTotalThreadCount();
 				} else {
@@ -818,7 +820,7 @@ CPUEntry::_TryStealWork()
 		goto phase3;
 
 	search_local_node(node, LocalNodeStealAction(this, package, &stolen,
-		enabled));
+		enabled, now));
 
 	if (stolen != NULL)
 		return stolen;
@@ -837,7 +839,7 @@ phase3:
 	// the high cost to steal from a remote socket to avoid sleeping.
 
 	search_global_random(GlobalRandomStealAction(this, package, &stolen,
-		enabled));
+		enabled, now));
 
 	if (stolen != NULL)
 		return stolen;

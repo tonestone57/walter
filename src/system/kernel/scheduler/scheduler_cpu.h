@@ -159,7 +159,7 @@ private:
 						void			_RequestPerformanceLevel(
 											ThreadData* threadData,
 											bigtime_t now = 0);
-						ThreadData*		_TryStealWork();
+						ThreadData*		_TryStealWork(bigtime_t now = 0);
 
 	static				int32			_RescheduleEvent(timer* /* unused */);
 	static				int32			_UpdateLoadEvent(timer* /* unused */);

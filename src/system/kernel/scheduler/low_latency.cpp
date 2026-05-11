@@ -82,7 +82,7 @@ has_cache_expired(const ThreadData* threadData)
 
 
 static CoreEntry*
-choose_core(const ThreadData* threadData, const CPUSet& mask)
+choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -531,7 +531,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask)
 
 
 static CoreEntry*
-rebalance(const ThreadData* threadData, const CPUSet& mask)
+rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -699,7 +699,7 @@ rebalance(const ThreadData* threadData, const CPUSet& mask)
 	if (coreNewScore - otherNewScore < threshold)
 		return core;
 
-	bigtime_t now = system_time();
+
 	if (now - threadData->GetThread()->lastMigrationTime < kMigrationCooldown)
 		return core;
 

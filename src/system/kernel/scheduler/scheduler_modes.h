@@ -25,10 +25,10 @@ struct scheduler_mode_operations {
 								const Scheduler::ThreadData* threadData);
 	Scheduler::CoreEntry*	(*choose_core)(
 								const Scheduler::ThreadData* threadData,
-								const CPUSet& mask);
+								const CPUSet& mask, bigtime_t now);
 	Scheduler::CoreEntry*	(*rebalance)(
 								const Scheduler::ThreadData* threadData,
-								const CPUSet& mask);
+								const CPUSet& mask, bigtime_t now);
 	void					(*rebalance_irqs)(bool idle);
 };
 
