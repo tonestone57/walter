@@ -689,6 +689,9 @@ CoreEntry::ChangeLoad(int32 delta, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	if (now == 0)
+		now = system_time();
+
 	ASSERT(gTrackCoreLoad);
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 

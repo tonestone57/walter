@@ -284,6 +284,9 @@ ThreadData::Rebalance(const CPUSet& mask, bigtime_t now) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	if (now == 0)
+		now = system_time();
+
 	ASSERT(!gSingleCore);
 	return Scheduler::Rebalance(this, mask, now);
 }

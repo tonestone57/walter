@@ -78,6 +78,9 @@ ThreadData::_ChooseCore(const CPUSet& mask, bigtime_t now) const
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	if (now == 0)
+		now = system_time();
+
 	ASSERT(!gSingleCore);
 	return Scheduler::ChooseCore(this, mask, now);
 }
@@ -250,6 +253,8 @@ ThreadData::Dump() const
 bool
 ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU, bigtime_t now)
 {
+	if (now == 0)
+		now = system_time();
 	SCHEDULER_ENTER_FUNCTION();
 
 	CPUSet mask = GetCPUMask();
@@ -644,8 +649,8 @@ ThreadData::_UpdateDeadline(bigtime_t now)
 	// CoreRunQueueLocker (via HasQuantumEnded → _UpdateDeadline). Calling
 	// system_time() while holding a spinlock adds non-deterministic latency
 	// if the TSC is slow or virtualized. This is accepted as unavoidable
-	// given the current design; a future improvement would pre-compute 'now'
-	// in reschedule() and pass it through the call chain.
+	// given the current design; this has been implemented by pre-computing 'now'
+	// in reschedule() and propagating it through the call chain.
 
 	// Virtual Deadline Calculation:
 	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)

@@ -489,7 +489,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	// If the selected core is not much better than previousCore, prefer
 	// previousCore for cache locality.
 	// We use the cached cacheExpired result instead of re-reading
-	// system_time() to ensure consistency and avoid unnecessary syscalls.
+	// system_time() (passed as now) to ensure consistency and avoid unnecessary syscalls.
 	if (previousCore != NULL && !cacheExpired) {
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
 			if (core != previousCore) {

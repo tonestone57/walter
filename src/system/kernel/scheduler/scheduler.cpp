@@ -536,10 +536,12 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 	do {
 		rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU, now);
 
-		TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32 " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
-			thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
+		if (targetCPU != NULL && targetCore != NULL) {
+			TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32 " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
+				thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
+		}
 
-		if (!threadData->Enqueue(wasRunQueueEmpty, requestPreemption,
+		if (targetCPU == NULL || targetCore == NULL || !threadData->Enqueue(wasRunQueueEmpty, requestPreemption,
 				updateInteraction, now)) {
 			targetCore = NULL;
 			targetCPU = NULL;
@@ -568,6 +570,9 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 	// holding any run-queue locks.
 	if (updateInteraction)
 		scheduler_update_interaction_state(now);
+
+	if (targetCPU == NULL)
+		return false;
 
 	// Issue 84 fix: notify listeners — was unreachable before this fix.
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
