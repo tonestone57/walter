@@ -13,9 +13,7 @@
  * Distributed under the terms of the NewOS License.
  */
 
-
 /*! The thread scheduler */
-
 
 #include <OS.h>
 
@@ -47,9 +45,7 @@
 #include "scheduler_topology.h"
 #include "scheduler_tracing.h"
 
-
 namespace Scheduler {
-
 
 class ThreadEnqueuer : public ThreadProcessing {
 public:
@@ -76,7 +72,6 @@ uint64 gIdleMask __attribute__((aligned(8))) = 0;
 
 spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
 
-
 static timer sInteractionTimer;
 static int64 sLastInteractionTime __attribute__((aligned(8)));
 static int32 sDPCPending = 0;
@@ -89,7 +84,6 @@ static int32 sDPCPending = 0;
 static int32 sTimerArmed = 0;
 static int32 sPendingDPCTarget = 0;  // 1000 or 5000
 
-
 // --- Safe snapshot for load balancing decisions ---
 static SchedulerSnapshot TakeSnapshot()
 {
@@ -99,13 +93,11 @@ static SchedulerSnapshot TakeSnapshot()
 static const int kLoadBalanceThreshold = 2;
 static const bigtime_t kRescheduleCooldown = 500;
 
-
 extern "C" void
 AcquireSchedulerSpinlock()
 {
 	acquire_spinlock(&gSchedulerLock);
 }
-
 
 extern "C" void
 ReleaseSchedulerSpinlock()
@@ -113,13 +105,11 @@ ReleaseSchedulerSpinlock()
 	release_spinlock(&gSchedulerLock);
 }
 
-
 static void
 UpdateDeadlineScalingScalable()
 {
 	ThreadData::ComputeQuantumLengths();
 }
-
 
 static void
 update_quantum_lengths_dpc(void* /*arg*/)
@@ -138,7 +128,6 @@ update_quantum_lengths_dpc(void* /*arg*/)
 
 	atomic_set(&sDPCPending, 0);
 }
-
 
 static status_t
 interaction_timer_hook(struct timer* timer)
@@ -172,7 +161,6 @@ interaction_timer_hook(struct timer* timer)
 
 	return B_HANDLED_INTERRUPT;
 }
-
 
 void
 scheduler_update_interaction_state(bigtime_t now)
@@ -265,8 +253,6 @@ scheduler_update_interaction_state(bigtime_t now)
 	}
 }
 
-
-
 struct RunQueueScanner {
 		uint32 kTopWordMask;
 		int kMaxThreadsToCheckPerQueue;
@@ -309,7 +295,6 @@ struct RunQueueScanner {
 		}
 	};
 
-
 struct TopologyComparator {
 		bool distinctTopology;
 		TopologyComparator(bool distinct) : distinctTopology(distinct) {}
@@ -328,9 +313,6 @@ struct TopologyComparator {
 			return a < b;
 		}
 	};
-
-
-
 
 static int32 sSchedulerEnabled;
 
@@ -376,7 +358,6 @@ topology_validation_error(status_t strictStatus, const char* message)
 }
 static int32* sPackageToNode;
 static int32* sCPUToCluster = NULL;
-
 
 static void
 UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu, bigtime_t now = 0)
@@ -468,9 +449,7 @@ UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu, bigtime_t now = 0)
 	}
 }
 
-
 static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now = 0);
-
 
 void
 ThreadEnqueuer::operator()(ThreadData* thread)
@@ -478,16 +457,11 @@ ThreadEnqueuer::operator()(ThreadData* thread)
 	enqueue(thread->GetThread(), false, NULL);
 }
 
-
 void
 scheduler_dump_thread_data(Thread* thread)
 {
 	thread->scheduler_data->Dump();
 }
-
-
-
-
 
 static bool
 enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
@@ -602,7 +576,6 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 	return true;
 }
 
-
 bool
 enqueue_safe(Thread* thread, bigtime_t now)
 {
@@ -613,7 +586,6 @@ enqueue_safe(Thread* thread, bigtime_t now)
 		now = system_time();
 	return enqueue(thread, false, NULL, now);
 }
-
 
 /*!	Enqueues the thread into the run queue.
 	Note: thread lock must be held when entering this function
@@ -639,7 +611,6 @@ scheduler_enqueue_in_run_queue(Thread *thread)
 	threadData->ResetPriorityBoost(now);
 	enqueue(thread, true, waker, now);
 }
-
 
 /*!	Sets the priority of a thread.
 */
@@ -697,7 +668,6 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 	return oldPriority;
 }
 
-
 void
 scheduler_reschedule_ici()
 {
@@ -705,7 +675,6 @@ scheduler_reschedule_ici()
 	// Make sure the reschedule() is invoked.
 	get_cpu_struct()->invoke_scheduler = true;
 }
-
 
 static inline void
 stop_cpu_timers(Thread* fromThread, Thread* toThread)
@@ -719,7 +688,6 @@ stop_cpu_timers(Thread* fromThread, Thread* toThread)
 	}
 }
 
-
 static inline void
 continue_cpu_timers(Thread* thread, cpu_ent* cpu)
 {
@@ -731,7 +699,6 @@ continue_cpu_timers(Thread* thread, cpu_ent* cpu)
 		user_timer_continue_cpu_timers(thread, cpu->previous_thread);
 	}
 }
-
 
 static void
 thread_resumes(Thread* thread)
@@ -754,7 +721,6 @@ thread_resumes(Thread* thread)
 		user_debug_thread_scheduled(thread);
 }
 
-
 void
 scheduler_new_thread_entry(Thread* thread)
 {
@@ -763,7 +729,6 @@ scheduler_new_thread_entry(Thread* thread)
 	SpinLocker locker(thread->time_lock);
 	thread->last_time = system_time();
 }
-
 
 /*!	Switches the currently running thread.
 	This is a service function for scheduler implementations.
@@ -797,7 +762,6 @@ switch_thread(Thread* fromThread, Thread* toThread)
 	// first time the same is done in thread.cpp:common_thread_entry().
 	thread_resumes(fromThread);
 }
-
 
 static void
 reschedule(int32 nextState)
@@ -992,7 +956,6 @@ reschedule(int32 nextState)
 	}
 }
 
-
 /*!	Runs the scheduler.
 	Note: expects thread spinlock to be held
 */
@@ -1012,7 +975,6 @@ scheduler_reschedule(int32 nextState)
 	reschedule(nextState);
 }
 
-
 status_t
 scheduler_on_thread_create(Thread* thread, bool idleThread)
 {
@@ -1023,7 +985,6 @@ scheduler_on_thread_create(Thread* thread, bool idleThread)
 	thread->scheduler_data = new(buffer) ThreadData(thread);
 	return B_OK;
 }
-
 
 void
 scheduler_on_thread_init(Thread* thread)
@@ -1042,7 +1003,6 @@ scheduler_on_thread_init(Thread* thread)
 		thread->scheduler_data->Init();
 }
 
-
 void
 scheduler_on_thread_destroy(Thread* thread)
 {
@@ -1052,7 +1012,6 @@ scheduler_on_thread_destroy(Thread* thread)
 		thread->scheduler_data = NULL;
 	}
 }
-
 
 /*!	This starts the scheduler. Must be run in the context of the initial idle
 	thread. Interrupts must be disabled and will be disabled when returning.
@@ -1065,7 +1024,6 @@ scheduler_start()
 
 	reschedule(B_THREAD_READY);
 }
-
 
 status_t
 scheduler_set_operation_mode(scheduler_mode mode)
@@ -1086,7 +1044,6 @@ scheduler_set_operation_mode(scheduler_mode mode)
 
 	return B_OK;
 }
-
 
 void
 scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
@@ -1200,7 +1157,6 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	}
 }
 
-
 static void
 traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
 	int32& coreIndex, int32 cpuCount)
@@ -1247,7 +1203,6 @@ traverse_topology_tree(const cpu_topology_node* node, int packageID, int coreID,
 	}
 }
 
-
 static int32
 get_topology_id(int32 cpuID)
 {
@@ -1259,7 +1214,6 @@ get_topology_id(int32 cpuID)
 		return sCPUToPackage[cpuID];
 	return gCPU[cpuID].cache_id[gCPUCacheLevelCount - 1];
 }
-
 
 static status_t
 build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
@@ -1490,7 +1444,6 @@ build_topology_mappings(int32& cpuCount, int32& coreCount, int32& packageCount,
 	packageToNodeDeleter.Detach();
 	return B_OK;
 }
-
 
 static status_t
 init()
@@ -1915,7 +1868,6 @@ init()
 	return B_OK;
 }
 
-
 void
 scheduler_init()
 {
@@ -1955,14 +1907,12 @@ scheduler_init()
 #endif
 }
 
-
 void
 scheduler_enable_scheduling()
 {
 	// use atomic store so all CPUs observe the flag immediately.
 	atomic_set(&sSchedulerEnabled, 1);
 }
-
 
 void
 scheduler_update_policy()
@@ -1975,17 +1925,13 @@ scheduler_update_policy()
 		gTrackCoreLoad ? "true" : "false");
 }
 
-
 // #pragma mark - SchedulerListener
-
 
 SchedulerListener::~SchedulerListener()
 {
 }
 
-
 // #pragma mark - kernel private
-
 
 /*!	Add the given scheduler listener. Thread lock must be held.
 */
@@ -1996,7 +1942,6 @@ scheduler_add_listener(struct SchedulerListener* listener)
 	gSchedulerListeners.Add(listener);
 }
 
-
 /*!	Remove the given scheduler listener. Thread lock must be held.
 */
 void
@@ -2006,9 +1951,7 @@ scheduler_remove_listener(struct SchedulerListener* listener)
 	gSchedulerListeners.Remove(listener);
 }
 
-
 // #pragma mark - Syscalls
-
 
 bigtime_t
 _user_estimate_max_scheduling_latency(thread_id id)
@@ -2054,7 +1997,6 @@ _user_estimate_max_scheduling_latency(thread_id id)
 		Scheduler::MaximumLatency());
 }
 
-
 status_t
 _user_set_scheduler_mode(int32 mode)
 {
@@ -2064,7 +2006,6 @@ _user_set_scheduler_mode(int32 mode)
 		cpu_set_scheduler_mode(schedulerMode);
 	return error;
 }
-
 
 int32
 _user_get_scheduler_mode()
@@ -2134,7 +2075,7 @@ scheduler_on_team_foreground_changed(Team* team)
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
 
-			// Issue 91 fix: Decouple scheduler_lock from the enqueue() path.
+			// Issue 91 fix: document scheduler_lock ordering hazard.
 			// enqueue() → Enqueue() → CoreCPULocker acquires fCPULock;
 			// holding scheduler_lock across this call creates a lock-ordering
 			// hazard (fCPULock/fQueueLock → scheduler_lock). This hazard has
@@ -2149,7 +2090,6 @@ scheduler_on_team_foreground_changed(Team* team)
 				if (threadData->Dequeue()) {
 					threadData->SetForeground(team->fIsForeground);
 					threadData->ResetPriorityBoost(now);
-					locker.Unlock();
 					enqueue(thread, false, NULL, now);
 				} else {
 					threadData->SetForeground(team->fIsForeground);

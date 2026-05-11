@@ -493,6 +493,9 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	if (now == 0)
+		now = system_time();
+
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	CoreEntry* core = NULL;
 
@@ -719,6 +722,9 @@ rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	if (now == 0)
+		now = system_time();
+
 	ASSERT(!gSingleCore);
 
 	// Real-time threads bypass rebalancing to ensure zero jitter
@@ -876,7 +882,6 @@ rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 
 		if (coreNewScore - otherNewScore < threshold)
 			return core;
-
 
 		if (now - threadData->GetThread()->lastMigrationTime < kIdleConsolidationCooldown)
 			return core;

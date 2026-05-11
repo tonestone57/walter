@@ -71,6 +71,9 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	if (now == 0)
+		now = system_time();
+
 	// useMask must be computed before Stage 0 so the
 	// hot-idle fast path can honour CPU affinity constraints.
 	bool useMask = !mask.IsEmpty();
@@ -517,6 +520,9 @@ rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
+	if (now == 0)
+		now = system_time();
+
 	// Real-time threads bypass rebalancing to ensure zero jitter
 	if (threadData->IsRealTime())
 		return threadData->Core();
@@ -680,7 +686,6 @@ rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 
 	if (coreNewScore - otherNewScore < threshold)
 		return core;
-
 
 	if (now - threadData->GetThread()->lastMigrationTime < kMigrationCooldown)
 		return core;

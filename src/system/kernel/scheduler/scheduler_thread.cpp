@@ -11,13 +11,10 @@
 
 #include <util/atomic.h>
 
-
 using namespace Scheduler;
-
 
 static bigtime_t sQuantumLengths[THREAD_MAX_SET_PRIORITY + 1]
 	__attribute__((aligned(8)));
-
 
 // ComputeQuantum load-scaling constants.  Placed at file scope so the
 // compiler evaluates them once at startup rather than re-deriving them on
@@ -33,7 +30,6 @@ static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1]
 	__attribute__((aligned(8)));
 
 bigtime_t ThreadData::sMaxLatency __attribute__((aligned(8)));
-
 
 void
 ThreadData::_InitBase()
@@ -72,7 +68,6 @@ ThreadData::_InitBase()
 	fStolen = false;
 }
 
-
 inline CoreEntry*
 ThreadData::_ChooseCore(const CPUSet& mask, bigtime_t now) const
 {
@@ -84,7 +79,6 @@ ThreadData::_ChooseCore(const CPUSet& mask, bigtime_t now) const
 	ASSERT(!gSingleCore);
 	return Scheduler::ChooseCore(this, mask, now);
 }
-
 
 inline CPUEntry*
 ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
@@ -151,13 +145,11 @@ ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
 	return cpu;
 }
 
-
 ThreadData::ThreadData(Thread* thread)
 	:
 	fThread(thread)
 {
 }
-
 
 void
 ThreadData::Init()
@@ -203,7 +195,6 @@ ThreadData::Init()
 		_ComputeEffectivePriority(system_time());
 }
 
-
 void
 ThreadData::Init(CoreEntry* core)
 {
@@ -214,7 +205,6 @@ ThreadData::Init(CoreEntry* core)
 	fReady = true;
 	fNeededLoad = 0;
 }
-
 
 void
 ThreadData::Dump() const
@@ -249,13 +239,13 @@ ThreadData::Dump() const
 		kprintf("\tenqueued in Core run queue\n");
 }
 
-
 bool
 ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU, bigtime_t now)
 {
+	SCHEDULER_ENTER_FUNCTION();
+
 	if (now == 0)
 		now = system_time();
-	SCHEDULER_ENTER_FUNCTION();
 
 	CPUSet mask = GetCPUMask();
 	const bool useMask = !mask.IsEmpty();
@@ -360,7 +350,6 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU, bigti
 		MigrateTo(targetCore, now);
 	return false;
 }
-
 
 bigtime_t
 ThreadData::ComputeQuantum() const
@@ -495,7 +484,6 @@ ThreadData::ComputeQuantum() const
 	return min_c(max_c(quantum, kResultFloor), maxAllowed);
 }
 
-
 void
 ThreadData::UnassignCore(bool running)
 {
@@ -507,7 +495,6 @@ ThreadData::UnassignCore(bool running)
 	if (!fReady)
 		atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
 }
-
 
 /* static */ void
 ThreadData::ComputeQuantumLengths()
@@ -541,7 +528,6 @@ ThreadData::ComputeQuantumLengths()
 		}
 	}
 }
-
 
 void
 ThreadData::DonateTimesliceTo(Thread* beneficiary)
@@ -584,7 +570,6 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 	atomic_set64((int64*)&fTimeUsed, quantum);
 }
 
-
 void
 ThreadData::_ComputeNeededLoad(bigtime_t now)
 {
@@ -625,7 +610,6 @@ ThreadData::_ComputeNeededLoad(bigtime_t now)
 	if (core != NULL)
 		core->ChangeLoad(fNeededLoad - oldLoad, now);
 }
-
 
 void
 ThreadData::_UpdateDeadline(bigtime_t now)
@@ -692,7 +676,6 @@ ThreadData::_UpdateDeadline(bigtime_t now)
 
 	_ComputeEffectivePriority(now);
 }
-
 
 void
 ThreadData::_ComputeEffectivePriority(bigtime_t now) const
@@ -776,7 +759,6 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 		atomic_get64(&sQuantumLengths[GetEffectivePriority()]));
 }
 
-
 /* static */ bigtime_t
 ThreadData::_ScaleQuantum(bigtime_t maxQuantum, bigtime_t minQuantum,
 	int32 maxPriority, int32 minPriority, int32 priority)
@@ -793,7 +775,6 @@ ThreadData::_ScaleQuantum(bigtime_t maxQuantum, bigtime_t minQuantum,
 	result /= maxPriority - minPriority;
 	return maxQuantum - result;
 }
-
 
 void
 ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now)
@@ -842,11 +823,9 @@ ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now)
 	atomic_pointer_set<CoreEntry>(&fCore, targetCore);
 }
 
-
 ThreadProcessing::~ThreadProcessing()
 {
 }
-
 
 void
 ThreadData::ResetPriorityBoost(bigtime_t now)
