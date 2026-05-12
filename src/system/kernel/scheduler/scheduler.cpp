@@ -356,6 +356,8 @@ topology_validation_error(status_t strictStatus, const char* message)
 	dprintf("scheduler: topology validation: %s\n", message);
 	return topology_validation_is_strict() ? strictStatus : B_OK;
 }
+
+
 static int32* sPackageToNode;
 static int32* sCPUToCluster = NULL;
 
@@ -503,8 +505,6 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 	bool rescheduleNeeded = false;
 	bool updateInteraction = false;
 
-	// bound the retry loop so that a total hot-unplug (all cores
-	// disabled simultaneously during shutdown) cannot spin forever.
 	const int32 kMaxRetries = smp_get_num_cpus() * 2 + 8;
 	int32 enqueueAttempts = 0;
 	do {
@@ -519,10 +519,14 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 				updateInteraction, now)) {
 			targetCore = NULL;
 			targetCPU = NULL;
-			if (++enqueueAttempts >= kMaxRetries) {
-				dprintf("scheduler: enqueue giving up after %d attempts "
-					"for thread %" B_PRId32 "; forcing to current CPU\n", enqueueAttempts, thread->id);
 
+			if (++enqueueAttempts > kMaxRetries) {
+				if (threadData->IsReady() && !threadData->IsIdle())
+					atomic_add(&gTotalRunnableThreads, -1);
+				return false;
+			}
+
+			if (enqueueAttempts == kMaxRetries) {
 				targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
 				targetCore = targetCPU->Core();
 				if (targetCore == NULL || gCPU[targetCPU->ID()].disabled) {
@@ -530,8 +534,6 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 						atomic_add(&gTotalRunnableThreads, -1);
 					return false;
 				}
-				// Forced fallback; Reset retry count and try one more time on a known-alive CPU
-				enqueueAttempts = kMaxRetries - 1;
 			}
 		} else {
 			// Issue 16/84 fix: DO NOT return here. The original early return
@@ -2080,11 +2082,6 @@ scheduler_on_team_foreground_changed(Team* team)
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
 
-			// Issue 91 fix: Decouple scheduler_lock from the enqueue() path.
-			// enqueue() → Enqueue() → CoreCPULocker acquires fCPULock;
-			// holding scheduler_lock across this call creates a lock-ordering
-			// hazard (fCPULock/fQueueLock → scheduler_lock). This hazard has
-			// been eliminated by releasing the lock before calling enqueue().
 			InterruptsSpinLocker locker(thread->scheduler_lock);
 			ThreadData* threadData = thread->scheduler_data;
 
@@ -2095,7 +2092,6 @@ scheduler_on_team_foreground_changed(Team* team)
 				if (threadData->Dequeue()) {
 					threadData->SetForeground(team->fIsForeground);
 					threadData->ResetPriorityBoost(now);
-					locker.Unlock();
 					enqueue(thread, false, NULL, now);
 				} else {
 					threadData->SetForeground(team->fIsForeground);

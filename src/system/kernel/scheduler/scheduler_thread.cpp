@@ -152,7 +152,7 @@ ThreadData::ThreadData(Thread* thread)
 }
 
 void
-ThreadData::Init()
+ThreadData::Init(bigtime_t now)
 {
 	_InitBase();
 	atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
@@ -191,8 +191,11 @@ ThreadData::Init()
 		atomic_set(&fHomePackage, -1);
 	}
 
-	if (!IsRealTime())
-		_ComputeEffectivePriority(system_time());
+	if (!IsRealTime()) {
+		if (now == 0)
+			now = system_time();
+		_ComputeEffectivePriority(now);
+	}
 }
 
 void
@@ -530,7 +533,7 @@ ThreadData::ComputeQuantumLengths()
 }
 
 void
-ThreadData::DonateTimesliceTo(Thread* beneficiary)
+ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -541,7 +544,9 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary)
 	if (beneficiaryData == NULL)
 		return;
 
-	bigtime_t now = system_time();
+	if (now == 0)
+		now = system_time();
+
 	bigtime_t timeUsed = now - atomic_get64((int64*)&fQuantumStart);
 	ASSERT(timeUsed >= 0);
 	atomic_add64((int64*)&fTimeUsed, timeUsed);

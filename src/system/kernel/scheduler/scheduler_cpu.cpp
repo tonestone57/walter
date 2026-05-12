@@ -552,7 +552,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 				Thread* const stolenThread = sharedThread->GetThread();
 				if (!enqueue_safe(stolenThread, now)) {
 					dprintf("scheduler: WARNING: stolen thread %" B_PRId32
-						" lost during hot-unplug — forcing to current CPU\n",
+						" lost during hot-unplug -- forcing to current CPU\n",
 						stolenThread->id);
 					sharedThread->MigrateTo(fCore, now);
 					bool dummy1, dummy2;
@@ -610,7 +610,7 @@ CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack, bigtime_t now)
 			Thread* const thread = sharedThread->GetThread();
 			if (!enqueue_safe(thread, now)) {
 				dprintf("scheduler: WARNING: shared thread %" B_PRId32
-					" lost during hot-unplug — forcing to current CPU\n",
+					" lost during hot-unplug -- forcing to current CPU\n",
 					thread->id);
 				sharedThread->MigrateTo(fCore, now);
 				bool dummy1, dummy2;
@@ -730,7 +730,7 @@ CPUEntry::_TryStealWork(bigtime_t now)
 	// (clarification): The subtraction-wrap "index -= registeredCores"
 	// is safe because startIndex < registeredCores and i < registeredCores,
 	// so startIndex + i < 2 * registeredCores, requiring at most one subtraction.
-	// (clarification): GetIdleCorePacking shift guard — when shift==0
+	// (clarification): GetIdleCorePacking shift guard - when shift==0
 	// the left-shift by kMaxCoresPerPackage is already guarded by "if (shift > 0)"
 	// in PackageEntry::GetIdleCorePacking; no undefined behaviour occurs.
 
@@ -768,7 +768,7 @@ CPUEntry::_TryStealWork(bigtime_t now)
 		// a lock. Between this read and TryLockRunQueue(), the victim core may
 		// have transitioned from idle to active. The skip is a best-effort
 		// optimisation, not a guarantee. The comment "guaranteed empty" was
-		// incorrect — replace with accurate description.
+		// incorrect - replace with accurate description.
 		// The TryLockRunQueue() + PeekOption() predicate below is the actual
 		// correctness barrier; this skip only avoids a redundant lock attempt.
 		if ((package->IdleCoreMask()
@@ -1192,7 +1192,7 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		int32 residual = atomic_get(&fThreadCount);
 		if (residual != 0) {
 			dprintf("CoreEntry::RemoveCPU: fThreadCount=%" B_PRId32
-				" after drain (expected 0) — resetting\n", residual);
+				" after drain (expected 0) - resetting\n", residual);
 			atomic_set(&fThreadCount, 0);
 		}
 	}
@@ -1686,7 +1686,7 @@ PackageEntry::RegisterCore(int32 index, CoreEntry* core)
 	// fields on release builds.
 	if (index < 0 || index >= kMaxCoresPerPackage) {
 		dprintf("PackageEntry::RegisterCore: index %" B_PRId32 " out of range"
-			" [0, %" B_PRId32 ") — core registration skipped\n",
+			" [0, %" B_PRId32 ") - core registration skipped\n",
 			index, (int32)kMaxCoresPerPackage);
 		return;
 	}
@@ -1863,7 +1863,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	// the modulus for startBit. For a 4-core package, using kMaxCoresPerPackage
 	// (64) as the modulus produces startBit values 0–63; bits 4–63 make
 	// upperMask zero (no enabled bits above index 3), forcing the fallback
-	// that sets upperMask = lowerMask — the randomisation becomes a no-op.
+	// that sets upperMask = lowerMask - the randomisation becomes a no-op.
 	// Using fRegisteredCoreCount ensures startBit is always within the
 	// valid index range [0, fRegisteredCoreCount), making the split effective.
 	int32 startBit = 0;

@@ -39,7 +39,7 @@ private:
 public:
 						ThreadData(Thread* thread);
 
-			void		Init();
+			void		Init(bigtime_t now = 0);
 			void		Init(CoreEntry* core);
 
 			void		Dump() const;
@@ -109,7 +109,8 @@ public:
 	SCHEDULER_INLINE	void		StartQuantum() { StartQuantum(system_time()); }
 	SCHEDULER_INLINE	bool		HasQuantumEnded(bool wasPreempted,
 								bool hasYielded, bigtime_t now = 0);
-			void		DonateTimesliceTo(Thread* beneficiary);
+			void		DonateTimesliceTo(Thread* beneficiary,
+								bigtime_t now = 0);
 
 	// Continues(), GoesAway(), and Dies() accept an optional 'now' timestamp
 	// to avoid redundant system_time() calls in the reschedule() hot path.
