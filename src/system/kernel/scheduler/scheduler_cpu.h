@@ -769,13 +769,8 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdlePackageMask,
 		(native_cpu_mask_t)1 << package->NodeIndex());
 
-	if (oldMask == 0) {
-		// node goes idle (first package)
-		// Issue 8 fix: guard gIdleNodeMask update; nodes >= 64 cannot
-		// be tracked for idleness but must still exist.
-		if (fNodeID < 64) { // Issue 74 fix: node limit
-			atomic_or64((int64*)&gIdleNodeMask, 1ULL << fNodeID);
-		}
+	if (oldMask == 0 && fNodeID < 64) {
+		scheduler_atomic_or64(&gIdleNodeMask, 1ULL << fNodeID);
 	}
 }
 

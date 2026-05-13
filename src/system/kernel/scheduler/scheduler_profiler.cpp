@@ -116,7 +116,7 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 	stackEntry->fOthersTime = 0;
 
 	nanotime_t stop = system_time_nsecs();
-	stackEntry->fProfilerTime = stop - start;
+	stackEntry->fProfilerTime = (stop - start);
 
 	return true;
 }
@@ -147,9 +147,11 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 	nanotime_t timeSpent = start - stackEntry->fEntryTime;
 	timeSpent -= stackEntry->fProfilerTime;
 
-	atomic_add64(&stackEntry->fFunction->fTimeInclusive, timeSpent / 1000);
+	// Optimization: Store in nanoseconds to maintain precision for low-latency tasks.
+	// Division by 1000 moved to the _Dump function.
+	atomic_add64(&stackEntry->fFunction->fTimeInclusive, timeSpent);
 	atomic_add64(&stackEntry->fFunction->fTimeExclusive,
-		(timeSpent - stackEntry->fOthersTime) / 1000);
+		(timeSpent - stackEntry->fOthersTime));
 
 	nanotime_t profilerTime = stackEntry->fProfilerTime;
 	if (stackDepth > 0) {
@@ -267,12 +269,7 @@ Profiler::Initialize()
 uint32
 Profiler::_FunctionCount() const
 {
-	uint32 count;
-	for (count = 0; count < kMaxFunctionEntries; count++) {
-		if (fFunctionData[count].fFunction == NULL)
-			break;
-	}
-	return count;
+	return fNextFunctionSlot;
 }
 
 
@@ -285,17 +282,17 @@ Profiler::_Dump(FunctionData* data, uint32 count)
 	for (uint32 i = 0; i < count; i++) {
 		FunctionData* function = &data[i];
 		int32 called = function->fCalled;
-		bigtime_t inclusive = function->fTimeInclusive;
-		bigtime_t exclusive = function->fTimeExclusive;
+		bigtime_t inclusive = function->fTimeInclusive / 1000;
+		bigtime_t exclusive = function->fTimeExclusive / 1000;
 
 		kprintf("%10" B_PRId32 " %14" B_PRId64 " %8" B_PRId64 ".%02" B_PRId64
 			" %14" B_PRId64 " %8" B_PRId64 ".%02" B_PRId64 " %s\n",
 			called, inclusive,
 			called > 0 ? inclusive / called : 0,
-			called > 0 ? (inclusive % called) * 100 / called : 0,
+			called > 0 ? ((function->fTimeInclusive / 10) % (called * 100)) / called : 0,
 			exclusive,
 			called > 0 ? exclusive / called : 0,
-			called > 0 ? (exclusive % called) * 100 / called : 0,
+			called > 0 ? ((function->fTimeExclusive / 10) % (called * 100)) / called : 0,
 			function->fFunction);
 	}
 }

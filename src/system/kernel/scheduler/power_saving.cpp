@@ -1073,6 +1073,7 @@ scheduler_mode_operations gSchedulerPowerSavingMode = {
 	switch_to_mode,
 	set_cpu_enabled,
 	has_cache_expired,
+	NULL,
 	choose_core,
 	rebalance,
 	rebalance_irqs,

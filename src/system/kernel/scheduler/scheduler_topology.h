@@ -47,7 +47,7 @@ search_local_node(SchedulerNode* node, Action action)
 	// hot read-mostly cache line.  The per-CPU field is private to one CPU so
 	// no cross-CPU invalidation occurs.
 	if (packagesInNode <= 8) {
-		int32 lastIndex = atomic_get(&cpu->fLastLocalPackageIndex);
+		int32 lastIndex = cpu->fLastLocalPackageIndex;
 		int32 start = (lastIndex + 1) % packagesInNode;
 		for (int32 i = 0; i < packagesInNode; i++) {
 			// (clarification): fLastLocalPackageIndex is per-CPU.
@@ -60,10 +60,10 @@ search_local_node(SchedulerNode* node, Action action)
 			int32 index = nodeBaseIndex + offset;
 			if (index >= gPackageCount)
 				continue;
-			// update fLastLocalPackageIndex on every iteration.
-			// Issue 6 fix: use atomic_set for consistency and to avoid
-			// confusion, even though it's a per-CPU field.
-			atomic_set(&cpu->fLastLocalPackageIndex, offset);
+
+			// Update per-CPU field; plain store is sufficient as this
+			// state is private to the current CPU's search context.
+			cpu->fLastLocalPackageIndex = offset;
 			if (action(&gPackageEntries[index]))
 				break;
 		}
@@ -169,7 +169,7 @@ search_global_random(Action action)
 	// under-sampling large systems.  gPackageCount is capped at 4096, so a
 	// 512-byte (4096-bit) bitmask covers the entire valid range without any
 	// stripe approximation.  512 bytes is acceptable on a kernel stack that
-	// is at least 8 KB.
+	// is usually 16 KB.
 	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
@@ -256,12 +256,13 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 
 	// Issue 19 fix already present in original. Additional fix for
 	// gPackageCount > 128 fallback: consecutive-duplicate suppression
-	// misses non-adjacent duplicates. Add a secondary hash-bucket check
-	// for medium-sized systems (129-512 packages).
-	const bool useMediumBitmask = (!useVisitedBitmask && gPackageCount <= 512); // Issue 78: use a medium-sized bitmask for package deduplication to improve search speed.
-	// Use a simple modular hash into a 64-bit word for 129-512 packages.
-	// Collisions are possible but acceptable - this is a best-effort guard.
-	uint64 mediumVisited = 0;
+	// misses non-adjacent duplicates.
+	// Issue 78 optimization: Extend bitmask to 512 packages.
+	// This covers virtually all server hardware precisely.
+	const bool useExtendedBitmask = (!useVisitedBitmask && gPackageCount <= 512);
+	uint64 extendedVisited[8]; // 8 * 64 = 512 bits
+	if (useExtendedBitmask)
+		memset(extendedVisited, 0, sizeof(extendedVisited));
 
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
 		uint32 bits = mask.Bits(i);
@@ -291,20 +292,25 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 							else
 								visitedPackages[word] |= bitMask;
 						}
-					} else if (useMediumBitmask) {
-						// Hash package ID into 64 buckets.
-						int32 slot = package->ID() % 64;
-						uint64 bit = 1ULL << slot;
-						alreadyVisited = (mediumVisited & bit) != 0;
-						if (!alreadyVisited)
-							mediumVisited |= bit;
+					} else if (useExtendedBitmask) {
+						int32 idx = package->ID();
+						if (idx >= 0 && idx < 512) {
+							int32 word = idx / 64;
+							uint64 bitMask = 1ULL << (idx % 64);
+							if (extendedVisited[word] & bitMask)
+								alreadyVisited = true;
+							else
+								extendedVisited[word] |= bitMask;
+						}
 					} else {
 						// Fallback: consecutive-duplicate suppression only.
 						alreadyVisited = (package == lastPackage);
 					}
 					if (!alreadyVisited) {
-						CheckPackageMinimumLoad(cpu, package, &mask, bestCore,
-							bestLoad, type);
+						if (CheckPackageMinimumLoad(cpu, package, &mask,
+								bestCore, bestLoad, type)) {
+							return; // Short-circuit: found a core with very low load.
+						}
 						lastPackage = package;
 					}
 				}

@@ -77,7 +77,7 @@ private:
 			const uint32	kMaxFunctionStackEntries;
 
 			FunctionEntry*	fFunctionStacks[SMP_MAX_CPUS];
-			uint32			fFunctionStackPointers[SMP_MAX_CPUS];
+			int32			fFunctionStackPointers[SMP_MAX_CPUS];
 
 			FunctionData*	fFunctionData;
 			FunctionData*	fSortBuffer;
@@ -100,6 +100,7 @@ public:
 
 private:
 			const char*		fFunctionName;
+			int32			fCPU;
 			bool			fEntered;
 };
 
@@ -107,10 +108,12 @@ private:
 Function::Function(const char* functionName)
 	:
 	fFunctionName(functionName),
+	fCPU(smp_get_current_cpu()),
 	fEntered(false)
 {
-	fEntered = Profiler::Get()->EnterFunction(smp_get_current_cpu(),
-		fFunctionName);
+	Profiler* profiler = Profiler::Get();
+	if (profiler != NULL)
+		fEntered = profiler->EnterFunction(fCPU, fFunctionName);
 }
 
 
@@ -125,7 +128,9 @@ void
 Function::Exit()
 {
 	if (fEntered) {
-		Profiler::Get()->ExitFunction(smp_get_current_cpu(), fFunctionName);
+		// Use the CPU ID captured at entry to maintain stack integrity
+		// even if the thread migrated during execution.
+		Profiler::Get()->ExitFunction(fCPU, fFunctionName);
 		fEntered = false;
 	}
 	fFunctionName = NULL;

@@ -21,12 +21,8 @@ extern "C" void ReleaseSchedulerSpinlock();
 inline bool
 SchedulerLockHeld()
 {
-#ifdef DEBUG_SCHEDULER
-	Thread* thread = thread_get_current_thread();
-	return thread != NULL && thread->scheduler_lock_depth > 0;
-#else
-	return true; // assume correct in release
-#endif
+	Thread* thread = get_cpu_struct()->running_thread;
+	return thread == NULL || thread->scheduler_lock_depth > 0;
 }
 
 
@@ -121,20 +117,17 @@ inline void ReleaseLockOrder(int) {}
 class InterruptGuard {
 public:
 	InterruptGuard()
+		: fStatus(disable_interrupts())
 	{
-		fWasEnabled = are_interrupts_enabled();
-		if (fWasEnabled)
-			disable_interrupts();
 	}
 
 	~InterruptGuard()
 	{
-		if (fWasEnabled)
-			enable_interrupts();
+		restore_interrupts(fStatus);
 	}
 
 private:
-	bool fWasEnabled;
+	cpu_status fStatus;
 };
 
 
@@ -304,14 +297,17 @@ public:
 	bool Lock(int* lockable)
 	{
 		*lockable = disable_interrupts();
-		for (int32 i = 0; i < smp_get_num_cpus(); i++)
+		// Optimization: Cache cpuCount to avoid repeated function calls in O(N) loop
+		int32 cpuCount = smp_get_num_cpus();
+		for (int32 i = 0; i < cpuCount; i++)
 			CPUEntry::GetCPU(i)->LockScheduler();
 		return true;
 	}
 
 	void Unlock(int* lockable)
 	{
-		for (int32 i = 0; i < smp_get_num_cpus(); i++)
+		int32 cpuCount = smp_get_num_cpus();
+		for (int32 i = 0; i < cpuCount; i++)
 			CPUEntry::GetCPU(i)->UnlockScheduler();
 		restore_interrupts(*lockable);
 	}

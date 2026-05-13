@@ -101,6 +101,13 @@ scheduler_atomic_or(native_cpu_mask_t* value, native_cpu_mask_t orValue)
 }
 
 
+static inline uint64
+scheduler_atomic_or64(uint64 volatile* value, uint64 orValue)
+{
+	return (uint64)atomic_or64((int64 volatile*)value, (int64)orValue);
+}
+
+
 static inline native_cpu_mask_t
 scheduler_atomic_and(native_cpu_mask_t* value, native_cpu_mask_t andValue)
 {

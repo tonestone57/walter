@@ -137,26 +137,29 @@ public:
 	virtual const char* Name() const;
 
 	thread_id PreviousThreadID() const		{ return fPreviousID; }
-	uint8 PreviousState() const				{ return fPreviousState; }
-	uint16 PreviousWaitObjectType() const	{ return fPreviousWaitObjectType; }
-	const void* PreviousWaitObject() const	{ return fPreviousWaitObject; }
+	uint8 PreviousState() const				{ return (uint8)fPreviousState; }
+	uint16 PreviousWaitObjectType() const	{ return (uint16)fPreviousWaitObjectType; }
+	const void* PreviousWaitObject() const	{ return fWait.fPreviousWaitObject; }
 
 private:
+	char*				fName;
 	thread_id			fPreviousID;
 	int32				fCPU;
-	char*				fName;
 	int32				fPriority;
-	uint8				fPreviousState;
 	uint16				fPreviousWaitObjectType;
+	uint8				fPreviousState;
 	union {
 		const void*		fPreviousWaitObject;
 		void*			fPreviousPC;
-	};
+	} fWait;
 };
 
 }	// namespace SchedulerTracing
 
-#	define T(x) new(std::nothrow) SchedulerTracing::x;
+#	define T(x) \
+		if (tracing_is_enabled()) { \
+			new(std::nothrow) SchedulerTracing::x; \
+		}
 #else
 #	define T(x) ;
 #endif

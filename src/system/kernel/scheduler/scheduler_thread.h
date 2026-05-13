@@ -135,6 +135,10 @@ public:
 								bool& updateInteraction, bigtime_t now = 0);
 	SCHEDULER_INLINE	bool		Dequeue();
 
+	SCHEDULER_INLINE	void		UpdateVirtualRuntime(bigtime_t delta,
+										bigtime_t now = 0,
+										bigtime_t maxLatency = 0);
+
 	// Accept an optional pre-computed 'now' timestamp.  The caller
 	// (CPUEntry::UpdateActiveTime) already holds a fresh system_time() result
 	// and can pass it here to eliminate a redundant syscall.  Passing 0 (the
@@ -342,6 +346,9 @@ ThreadData::_UpdatePriorityBoost(bigtime_t now)
 					// Migration occurred; abandon and let the new core handle it.
 					return;
 				}
+				// Set state BEFORE removing to ensure no one sees a
+				// ready-but-not-enqueued thread.
+				fEnqueued = false;
 				core->Remove(this);
 				core->PushBack(this, newPriority);
 				fEnqueued = true;
@@ -840,6 +847,49 @@ RunQueueTraits<ThreadData>::SetInRunQueue(ThreadData* element, bool inQueue)
 
 
 inline void
+ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
+	bigtime_t maxLatency)
+{
+	if (delta <= 0 || IsRealTime())
+		return;
+
+	// Optimization: Pre-calculate lookahead horizon
+	if (maxLatency == 0)
+		maxLatency = atomic_get64(&sMaxLatency);
+	const bigtime_t kLookahead = maxLatency * 1000LL;
+
+	if (now == 0) {
+		now = system_time();
+		if (now == 0)
+			return;
+	}
+
+	bigtime_t ceiling = (now > B_INT64_MAX - kLookahead)
+		? B_INT64_MAX : now + kLookahead;
+
+	const bigtime_t threshold = ceiling - delta;
+	bigtime_t vRuntime = atomic_get64((int64*)&fVirtualRuntime);
+
+	while (true) {
+		bigtime_t next;
+		if (vRuntime < threshold)
+			next = vRuntime + delta;
+		else if (vRuntime < ceiling)
+			next = ceiling;
+		else
+			break;
+
+		// Optimization: Reuse the value returned by the CAS if it fails
+		bigtime_t old = atomic_test_and_set64((int64*)&fVirtualRuntime,
+			next, vRuntime);
+		if (old == vRuntime)
+			break;
+		vRuntime = old;
+	}
+}
+
+
+inline void
 ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
@@ -847,52 +897,10 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 	if (!IsRealTime()) {
 		int32 priority = max_c((int32)1, GetEffectivePriority());
 		bigtime_t delta = (active * B_URGENT_DISPLAY_PRIORITY) / priority;
-		// Cap virtual runtime to a forward-looking ceiling rather than
-		// B_INT64_MAX. A thread saturated at B_INT64_MAX would be permanently
-		// starved because every new thread starts at fVirtualRuntime == 0.
-		// With this ceiling the gap between a saturated thread and a new
-		// thread is at most MaximumLatency()*1000 in virtual-time units,
-		// after which they are scheduled fairly again as real time advances.
-		// Use a monotonic base to prevent clock skew from causing starvation.
-		const bigtime_t maxLatency = atomic_get64(&sMaxLatency);
-		const bigtime_t kLookahead = maxLatency * 1000LL;
 
-		if (now == 0) {
-			now = system_time();
-			if (now == 0) {
-				// Issue 58 fix: when system_time()==0 (very early boot), skip
-				// fVirtualRuntime update entirely rather than accumulating uncapped.
-				// During this phase fairness is not critical and fVirtualRuntime==0
-				// for all threads is a better starting state than skewed values.
-				goto track_core_load;
-			}
-		}
-
-		// Issue 58 fix: the goto below is inside the if (!IsRealTime()) block.
-
-		bigtime_t ceiling __attribute__((aligned(8)));
-		if (now > B_INT64_MAX - kLookahead)
-			ceiling = B_INT64_MAX;
-		else
-			ceiling = now + kLookahead;
-
-		bigtime_t vRuntime __attribute__((aligned(8)));
-		bigtime_t next __attribute__((aligned(8)));
-		do {
-			vRuntime = atomic_get64((int64*)&fVirtualRuntime);
-			if (vRuntime < ceiling - delta)
-				next = vRuntime + delta;
-			else if (vRuntime < ceiling)
-				next = ceiling;
-			else
-				break;
-		} while (atomic_test_and_set64((int64*)&fVirtualRuntime, next, vRuntime) != vRuntime);
-		// If fVirtualRuntime is already at or above ceiling (e.g. ceiling moved
-		// backward due to clock skew), leave it unchanged rather than reducing
-		// it, which would spuriously boost the thread's scheduling priority.
+		UpdateVirtualRuntime(delta, now);
 	}
 
-track_core_load:
 	if (!gTrackCoreLoad)
 		return;
 
