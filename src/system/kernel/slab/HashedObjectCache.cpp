@@ -173,7 +173,10 @@ void
 HashedObjectCache::_ResizeHashTableIfNeeded(uint32 flags)
 {
 	size_t hashSize = hash_table.ResizeNeeded();
-	if (hashSize == 0)
+	// Optimization: Only resize if the change is significant (e.g., > 25%)
+	// to prevent thrashing during rapid slab creation/destruction.
+	if (hashSize == 0 || (hashSize > hash_table.TableSize() * 0.75
+		&& hashSize < hash_table.TableSize() * 1.25))
 		return;
 
 	Unlock();

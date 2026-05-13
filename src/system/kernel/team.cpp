@@ -4619,3 +4619,9 @@ _user_get_extended_team_info(team_id teamID, uint32 flags, void* buffer,
 
 	return B_OK;
 }
+
+uid_t
+get_current_user()
+{
+	return team_geteuid(team_get_current_team_id());
+}

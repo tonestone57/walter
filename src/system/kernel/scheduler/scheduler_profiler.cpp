@@ -37,6 +37,10 @@ Profiler::Profiler()
 
 	if (fFunctionData == NULL || fSortBuffer == NULL) {
 		fStatus = B_NO_MEMORY;
+		delete[] fFunctionData;
+		delete[] fSortBuffer;
+		fFunctionData = NULL;
+		fSortBuffer = NULL;
 		return;
 	}
 	memset(fFunctionData, 0, sizeof(FunctionData) * kMaxFunctionEntries);

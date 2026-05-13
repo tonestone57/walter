@@ -19,7 +19,8 @@ struct HashedSlab : slab {
 };
 
 
-struct HashedObjectCache final : ObjectCache {
+// Removed 'final' for GCC 2.95 compatibility
+struct HashedObjectCache : ObjectCache {
 								HashedObjectCache();
 
 	static	HashedObjectCache*	Create(const char* name, size_t object_size,

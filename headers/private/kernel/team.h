@@ -51,6 +51,7 @@ void team_set_controlling_tty(void* tty);
 void* team_get_controlling_tty();
 status_t team_set_foreground_process_group(void *tty, pid_t processGroup);
 uid_t team_geteuid(team_id id);
+uid_t get_current_user();
 
 status_t start_watching_team(team_id team, void (*hook)(team_id, void *),
 			void *data);

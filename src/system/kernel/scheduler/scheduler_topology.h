@@ -60,12 +60,12 @@ search_local_node(SchedulerNode* node, Action action)
 			int32 index = nodeBaseIndex + offset;
 			if (index >= gPackageCount)
 				continue;
-			// update fLastLocalPackageIndex on every iteration.
-			// Issue 6 fix: use atomic_set for consistency and to avoid
-			// confusion, even though it's a per-CPU field.
-			atomic_set(&cpu->fLastLocalPackageIndex, offset);
-			if (action(&gPackageEntries[index]))
+
+			if (action(&gPackageEntries[index])) {
+				// Update only on success or after loop to reduce atomic overhead
+				atomic_set(&cpu->fLastLocalPackageIndex, offset);
 				break;
+			}
 		}
 		return;
 	}

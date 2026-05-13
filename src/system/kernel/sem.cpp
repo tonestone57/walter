@@ -1263,6 +1263,8 @@ _user_get_sem_info(sem_id id, struct sem_info *userInfo, size_t size)
 	if (userInfo == NULL || !IS_USER_ADDRESS(userInfo))
 		return B_BAD_ADDRESS;
 
+	// Clamp size to prevent kernel stack information leak
+	size = min_c(size, sizeof(struct sem_info));
 	status = _get_sem_info(id, &info, size);
 	if (status == B_OK && user_memcpy(userInfo, &info, size) < B_OK)
 		return B_BAD_ADDRESS;
@@ -1284,6 +1286,8 @@ _user_get_next_sem_info(team_id team, int32 *userCookie, struct sem_info *userIn
 		|| user_memcpy(&cookie, userCookie, sizeof(int32)) < B_OK)
 		return B_BAD_ADDRESS;
 
+	// Clamp size to prevent kernel stack information leak
+	size = min_c(size, sizeof(struct sem_info));
 	status = _get_next_sem_info(team, &cookie, &info, size);
 
 	if (status == B_OK) {

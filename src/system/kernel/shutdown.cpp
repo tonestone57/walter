@@ -18,14 +18,10 @@ system_shutdown(bool reboot)
 	gKernelShutdown = true;
 	
 	// Now shutdown all system services!
-	// TODO: Once we are sure we can shutdown the system on all hardware
-	// checking reboot may not be necessary anymore.
-	if (reboot) {
-		while (get_next_team_info(&cookie, &info) == B_OK) {
-			if (info.team == B_SYSTEM_TEAM)
-				continue;
-			kill_team(info.team);
-		}
+	while (get_next_team_info(&cookie, &info) == B_OK) {
+		if (info.team == B_SYSTEM_TEAM)
+			continue;
+		kill_team(info.team);
 	}
 	
 	sync();
@@ -40,7 +36,7 @@ system_shutdown(bool reboot)
 status_t
 _user_shutdown(bool reboot)
 {
-	if (geteuid() != 0)
+	if (get_current_user() != 0)
 		return B_NOT_ALLOWED;
 	return system_shutdown(reboot);
 }

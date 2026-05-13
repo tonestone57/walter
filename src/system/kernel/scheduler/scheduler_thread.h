@@ -178,6 +178,8 @@ public:
 			void		UnassignCore(bool running = false);
 			void		MigrateTo(CoreEntry* targetCore, bigtime_t now = 0);
 
+			void		ApplySMTAwareness(CoreEntry*& targetCore);
+
 	static	void		ComputeQuantumLengths();
 
 private:
