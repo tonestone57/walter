@@ -382,7 +382,7 @@ public:
 	inline				void				SetPackageCount(int32 count)
 											{ fPackageCount = count; }
 
-	// SetPackageIdle removed — it was never called from any
+	// SetPackageIdle removed - it was never called from any
 	// translation unit.  All idle-mask updates go through PackageGoesIdle /
 	// PackageWakesUp.  Leaving dead code here invited future callers to
 	// bypass the node-level gIdleNodeMask updates performed by those methods.
@@ -790,7 +790,7 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= kMaxPackagesPerNode)
 		return;
 
-	// same fix — use scheduler_atomic_and for 32-bit safety.
+	// same fix - use scheduler_atomic_and for 32-bit safety.
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << package->NodeIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdlePackageMask, ~clearBit);
 
@@ -809,7 +809,7 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 			// Fix: use a CAS loop that re-checks fIdlePackageMask atomically
 			// with the gIdleNodeMask update.  If fIdlePackageMask is no longer
 			// zero when we re-read it, a concurrent PackageGoesIdle has fired
-			// and will (or has already) re-set the node bit — we must not
+			// and will (or has already) re-set the node bit - we must not
 			// clear it.
 			const int64 nodeBit = (int64)(1ULL << fNodeID);
 			int64 nodeMask __attribute__((aligned(8)));
@@ -954,7 +954,7 @@ PackageEntry::GetLeastIdlePackage()
 
 	if (gPackageCount > kRandomSearchThreshold) {
 		// (clarification): CoreCPULocker and CoreRunQueueLocker in
-		// ThreadData::Enqueue use fCPULock and fQueueLock respectively — they
+		// ThreadData::Enqueue use fCPULock and fQueueLock respectively - they
 		// are DISTINCT spinlocks and do NOT deadlock.  No code change needed.
 
 		// For all practical package counts (33-4096) the log2 formula always
@@ -976,7 +976,7 @@ PackageEntry::GetLeastIdlePackage()
 			}
 		}
 	} else {
-		// Small system: full linear scan — every package is cheap to check.
+		// Small system: full linear scan - every package is cheap to check.
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* current = &gPackageEntries[i];
 			// Issue 73 fix: skip packages with NULL fNode (partially init'd).
@@ -1017,7 +1017,7 @@ CoreEntry::HasHighPriorityThread() const
 	// done under the run-queue lock but we read without it.  On x86 aligned
 	// 32-bit loads are indivisible; on other supported architectures the
 	// worst case is a stale read that causes one extra-long quantum before
-	// the next reschedule corrects it — acceptable for this hint.
+	// the next reschedule corrects it - acceptable for this hint.
 	const uint32* bitmap = fRunQueue.GetBitmap();
 	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
 		uint32 val = (uint32)atomic_get((int32*)&bitmap[i]);

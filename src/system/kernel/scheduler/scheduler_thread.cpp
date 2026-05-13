@@ -560,7 +560,7 @@ ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now)
 		// → thread scheduler_lock) and risks deadlock.
 		// Issue 50 fix: DonateTimesliceTo is only called with interrupts
 		// disabled. InterruptsSpinLocker calls disable_interrupts() again,
-		// then restore_interrupts() in its destructor — which would re-enable
+		// then restore_interrupts() in its destructor - which would re-enable
 		// interrupts prematurely if the outer context expects them disabled.
 		// Use plain SpinLocker (no interrupt manipulation) since interrupts
 		// are already disabled by the caller's contract.
@@ -717,7 +717,7 @@ ThreadData::_ComputeEffectivePriority(bigtime_t now) const
 
 		// Issue 56 fix: clamp subtractions to prevent signed underflow.
 		// If diff wraps to a large positive, urgency clamps to 0, giving
-		// a foreground thread minimum priority — the opposite of intended.
+		// a foreground thread minimum priority - the opposite of intended.
 		if (urgencyBoost > 0) {
 			if (diff > B_INT64_MIN + (bigtime_t)urgencyBoost)
 				diff -= urgencyBoost;

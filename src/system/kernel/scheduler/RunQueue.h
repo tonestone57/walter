@@ -824,7 +824,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 
 			// 'break' only exits the inner while(val!=0) loop.
 			// Return NULL to terminate the outer for-loop immediately when
-			// the budget is exhausted — remaining bitmap words are skipped.
+			// the budget is exhausted - remaining bitmap words are skipped.
 			if (totalBudget <= 0)
 				return NULL;
 		}

@@ -61,7 +61,7 @@ has_cache_expired(const ThreadData* threadData, bigtime_t now)
 	// for a thread that has migrated far away from its warm cache.
 	CoreEntry* core = threadData->PreviousCore();
 	if (core == NULL)
-		return true; // no previous core — treat as expired
+		return true; // no previous core - treat as expired
 	bigtime_t activeTime = core->GetActiveTime();
 	return activeTime - threadData->WentSleepActive() > kCacheExpire;
 }
@@ -341,7 +341,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 		}
 	}
 
-	// wake new package/core — skipped when thread coloring or home-package
+	// wake new package/core - skipped when thread coloring or home-package
 	// search already found a suitable core.
 	int scannedCount = 0;
 	while (!skipIdleScan && idleNodeMask != 0) {
@@ -386,7 +386,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 
 					// Issue 65 fix: only accept the candidate if it truly
 					// matches. Do not set core and then break only to have the
-					// outer loop reset it — test the full condition here so
+					// outer loop reset it - test the full condition here so
 					// that a mismatched candidate does not prevent scanning
 					// remaining bits in idleMask.
 					core = candidate;

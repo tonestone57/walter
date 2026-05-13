@@ -134,7 +134,7 @@ has_cache_expired(const ThreadData* threadData, bigtime_t now)
 	SCHEDULER_ENTER_FUNCTION();
 	if (threadData->WentSleepActive() == 0)
 		return false;
-// Issue 34 fix (power_saving): same as low_latency — use PreviousCore().
+// Issue 34 fix (power_saving): same as low_latency - use PreviousCore().
 	CoreEntry* core = threadData->PreviousCore();
 	if (core == NULL)
 		return true;
@@ -547,7 +547,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 			}
 		}
 
-		// Issue 5 fix (power_saving): same as low_latency — use GetLoad().
+		// Issue 5 fix (power_saving): same as low_latency - use GetLoad().
 		if (preferMin && core != NULL && core->GetLoad() > kHighLoad)
 			core = NULL;
 
@@ -749,7 +749,7 @@ rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	// return NULL during topology teardown. Guard all dereference sites.
 	if (core->Package() == NULL) {
 		// Core exists but has no package (partially initialised or being
-		// disabled). Return the current core — no rebalancing possible.
+		// disabled). Return the current core - no rebalancing possible.
 		return core;
 	}
 

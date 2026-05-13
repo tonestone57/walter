@@ -84,7 +84,7 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 	// (clarification): fFunctionStackPointers[cpu] is incremented
 	// with a plain ++.  This is safe because:
 	//   1. InterruptsLocker disables interrupts, preventing preemption on this
-	//      CPU — no other thread on this CPU can enter concurrently.
+	//      CPU - no other thread on this CPU can enter concurrently.
 	//   2. The 'cpu' argument equals smp_get_current_cpu(); two distinct CPUs
 	//      always have different cpu_num values so they access different array
 	//      slots.  No atomic operation is required.
@@ -313,7 +313,7 @@ Profiler::_FindFunction(const char* function)
 	// or reused during the lifetime of the Profiler object (fNextFunctionSlot
 	// only increases). Therefore a pointer read from fHashTable[index] via
 	// atomic_pointer_get<FunctionData>() cannot become dangling or be reused for a
-	// different function while we dereference it — the "ABA problem" cannot
+	// different function while we dereference it - the "ABA problem" cannot
 	// occur here. The lockless search is safe for the current design.
 	//
 	// WARNING: if function slot reclamation is ever added (e.g. to support

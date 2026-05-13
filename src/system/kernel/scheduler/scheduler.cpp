@@ -137,7 +137,7 @@ interaction_timer_hook(struct timer* timer)
 	// sTimerArmed after the DPCQueue::Add call. In the window between Add
 	// returning and sTimerArmed being cleared, another CPU executing
 	// scheduler_update_interaction_state could see sTimerArmed==1, skip
-	// arming, and then the callback clears it — leaving no armed timer and
+	// arming, and then the callback clears it - leaving no armed timer and
 	// no pending DPC for the next interaction cycle.
 	//
 	// By clearing sTimerArmed first we allow re-arming immediately if needed,
@@ -170,14 +170,14 @@ scheduler_update_interaction_state(bigtime_t now)
 	if (cpu->fInteractionUpdateCounter++ % 32 != 0)
 		// fInteractionUpdateCounter is a
 		// plain uint32 incremented without atomics.  This is safe because:
-		// (a) it is a per-CPU field — only the current CPU accesses it here
+		// (a) it is a per-CPU field - only the current CPU accesses it here
 		//     (cpu == GetCPU(smp_get_current_cpu())), and
 		// (b) it is purely a throttle counter; a torn or missed increment
 		//     merely shifts the phase of the 32-call window, which is
 		//     harmless.  No code change required.
 		return;
 
-	 // Issue 28: Deadline bucket caching. Cache gDeadlineBucketSize once — it is read twice below and
+	 // Issue 28: Deadline bucket caching. Cache gDeadlineBucketSize once - it is read twice below and
 	// the two reads could observe different values if a concurrent DPC is
 	// updating it.  A single cached read is also cheaper on the hot path.
 	int64 currentBucketSize = atomic_get64(&gDeadlineBucketSize);
@@ -555,7 +555,7 @@ enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now)
 	if (targetCPU == NULL)
 		return false;
 
-	// Issue 84 fix: notify listeners — was unreachable before this fix.
+	// Issue 84 fix: notify listeners - was unreachable before this fix.
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
 		thread);
 
@@ -1147,8 +1147,8 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 				// Lock ordering: fCPULock → fCoreLock.
 				// Verify no other path acquires these in reverse order.
 				// AddIdleCore() acquires fCoreLock then is called from AddCPU
-				// under fCPULock — same ordering, safe.
-				// CoreGoesIdle calls PackageEntry::CoreGoesIdle (no fCoreLock) —
+				// under fCPULock - same ordering, safe.
+				// CoreGoesIdle calls PackageEntry::CoreGoesIdle (no fCoreLock) -
 				// no ordering conflict.
 				core->RemoveCPU(cpu, enqueuer);
 			}
@@ -1788,7 +1788,7 @@ init()
 	// heterogeneity (detectedHeterogeneous == true) but left some cores
 	// unclassified (cpu_frequency() returned 0 for them). If the API
 	// reported identical frequencies for every core, this is a genuinely
-	// homogeneous system and the heuristic must not fire — it would
+	// homogeneous system and the heuristic must not fire - it would
 	// incorrectly split a 16-core Xeon or 64-core EPYC into fake P/E
 	// clusters, causing artificial load imbalance and misguided thread
 	// coloring with no performance benefit.

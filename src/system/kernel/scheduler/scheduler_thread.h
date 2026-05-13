@@ -399,7 +399,7 @@ ThreadData::SetStolenInterruptTime(bigtime_t interruptTime)
 		atomic_add64((int64*)&fStolenTime, delta);
 	} else if (delta < 0) {
 		// Clock went backward; reset baseline to avoid permanent suppression.
-		// Do not add the negative delta — the time is simply unaccountable.
+		// Do not add the negative delta - the time is simply unaccountable.
 		dprintf("scheduler: interrupt_time went backward for thread %" B_PRId32
 			" (delta %" B_PRId64 "); resetting baseline\n",
 			fThread->id, delta);
@@ -506,7 +506,7 @@ ThreadData::Continues(bigtime_t now)
 	// a hard ASSERT, which would panic in this rare but legitimate race.
 	if (!fReady) {
 		dprintf("scheduler: Continues() called with fReady=false for thread %"
-			B_PRId32 " — possible GoesAway/reschedule race, skipping load update\n",
+			B_PRId32 " - possible GoesAway/reschedule race, skipping load update\n",
 			fThread->id);
 		return;
 	}
@@ -556,7 +556,7 @@ ThreadData::GoesAway(bigtime_t now)
 	atomic_set64((int64*)&fWentSleep, now);
 	// Issue 7 fix: fCore can be set to NULL by a concurrent MigrateTo() call.
 	// The original code checked for NULL once then called GetActiveTime() and
-	// RemoveLoad() in separate statements — if fCore became NULL between the
+	// RemoveLoad() in separate statements - if fCore became NULL between the
 	// check and either call, both would dereference NULL.
 	// Fix: take ONE snapshot under a read of fCore, then use only the snapshot.
 	// MigrateTo() is only called from ChooseCoreAndCPU which holds
@@ -716,7 +716,7 @@ ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		CoreCPULocker cpuLocker(coreSnapshot);
 		CoreRunQueueLocker locker(coreSnapshot);
 
-		// Issue 1 fix: re-check under the lock — fCore may have been set to
+		// Issue 1 fix: re-check under the lock - fCore may have been set to
 		// NULL between the guard above and lock acquisition.  The explicit
 		// Unlock() calls were redundant: AutoLocker's destructor checks
 		// fLocked and will not double-unlock.  RAII handles cleanup correctly.
