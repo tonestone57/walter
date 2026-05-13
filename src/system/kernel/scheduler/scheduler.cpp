@@ -2091,14 +2091,29 @@ scheduler_on_team_foreground_changed(Team* team)
 			if (thread->state == B_THREAD_READY) {
 				if (threadData->Dequeue()) {
 					threadData->SetForeground(team->fIsForeground);
+						if (Scheduler::GetCurrentMode()->update_thread_timeslice
+								!= NULL) {
+							Scheduler::GetCurrentMode()->update_thread_timeslice(
+								threadData);
+						}
 					threadData->ResetPriorityBoost(now);
 					enqueue(thread, false, NULL, now);
 				} else {
 					threadData->SetForeground(team->fIsForeground);
+						if (Scheduler::GetCurrentMode()->update_thread_timeslice
+								!= NULL) {
+							Scheduler::GetCurrentMode()->update_thread_timeslice(
+								threadData);
+						}
 					threadData->ResetPriorityBoost(now);
 				}
 			} else {
 				threadData->SetForeground(team->fIsForeground);
+					if (Scheduler::GetCurrentMode()->update_thread_timeslice
+							!= NULL) {
+						Scheduler::GetCurrentMode()->update_thread_timeslice(
+							threadData);
+					}
 				if (thread->state == B_THREAD_RUNNING) {
 					threadData->ResetPriorityBoost(now);
 					ASSERT(thread->cpu != NULL);
