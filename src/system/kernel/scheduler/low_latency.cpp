@@ -174,7 +174,7 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	CoreEntry* core = NULL;
 
 	// Thread Coloring: Search for a core of the preferred type first
-	uint64 idleNodeMask = atomic_get64((int64*)&gIdleNodeMask);
+	uint64 idleNodeMask = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&gIdleNodeMask)));
 
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
@@ -602,8 +602,7 @@ rebalance(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	// Issue 53 fix: document both bounds explicitly. The lower bound prevents
 	// subtraction underflow; the upper bound prevents addition overflow.
 	// Both are required and neither can be safely removed.
-	// static_assert replaced by comment for GCC 2.95
-	// sizeof(bigtime_t) == 8
+	static_assert(sizeof(bigtime_t) == 8, "bigtime_t must be 64-bit");
 	bool congested = (coreVRuntime >= (bigtime_t)(B_INT64_MIN + 20000LL))
 		&& (coreVRuntime <= (bigtime_t)(B_INT64_MAX - 20000LL))
 		&& (otherVRuntime > coreVRuntime + 20000LL);

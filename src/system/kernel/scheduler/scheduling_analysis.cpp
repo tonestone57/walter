@@ -310,25 +310,25 @@ public:
 		size = (size + 7) & ~(size_t)7;
 		for (int32 i = 0; i < 1000; i++) {
 #if B_HAIKU_64_BIT
-			int64 current = (int64)atomic_get64((int64*)&fNextAllocation);
+			int64 current = (int64)atomic_get64(reinterpret_cast<int64 volatile*>(&fNextAllocation));
 			int64 newAlloc = current + (int64)size;
 			int64 hashTableAddr = (int64)(uintptr_t)fHashTable;
 			if (newAlloc > hashTableAddr)
 				return NULL;
-			if (atomic_test_and_set64((int64*)&fNextAllocation, newAlloc, current)
+			if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&fNextAllocation), newAlloc, current)
 					== current) {
-				atomic_add64((int64*)&fRemainingBytes, -(int64)size);
+				atomic_add64(reinterpret_cast<int64 volatile*>(&fRemainingBytes), -(int64)size);
 				return (void*)(uintptr_t)current;
 			}
 #else
-			int32 current32 = atomic_get((int32*)&fNextAllocation);
+			int32 current32 = atomic_get(reinterpret_cast<int32 volatile*>(&fNextAllocation));
 			int32 newAlloc32 = current32 + (int32)size;
 			int32 hashTableAddr32 = (int32)(uintptr_t)fHashTable;
 			if (size > (size_t)B_INT32_MAX || newAlloc32 > hashTableAddr32)
 				return NULL;
-			if (atomic_test_and_set((int32*)&fNextAllocation, newAlloc32, current32)
+			if (atomic_test_and_set(reinterpret_cast<int32 volatile*>(&fNextAllocation), newAlloc32, current32)
 					== current32) {
-				atomic_add((int32*)&fRemainingBytes, -(int32)size);
+				atomic_add(reinterpret_cast<int32 volatile*>(&fRemainingBytes), -(int32)size);
 				return (void*)(uintptr_t)current32;
 			}
 #endif

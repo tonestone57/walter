@@ -61,9 +61,8 @@ const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
 // assert compared kMaxCoresPerPackage to itself (tautological). This one
 // checks that kMaxCoresPerPackage does not exceed a hard platform ceiling
 // and that native_cpu_mask_t is wide enough to represent all core bits.
-// static_assert replaced by comment for GCC 2.95
-// kMaxCoresPerPackage <= 64
-// kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8)
+static_assert(kMaxCoresPerPackage <= 64, "kMaxCoresPerPackage exceeds platform ceiling");
+static_assert(kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8), "native_cpu_mask_t too narrow");
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
@@ -146,12 +145,12 @@ public:
 						uint32			GetRandom();
 
 	inline				int32			ThreadCount() const
-											{ return atomic_get(const_cast<int32*>(&fThreadCount)); }
+											{ return atomic_get(const_cast<int32 volatile*>(&fThreadCount)); }
 
 						bool			SetReschedulePending()
-											{ return atomic_set(&fReschedulePending, 1) == 0; }
+											{ return atomic_set(reinterpret_cast<int32 volatile*>(&fReschedulePending), 1) == 0; }
 						void			ClearReschedulePending()
-											{ atomic_set(&fReschedulePending, 0); }
+											{ atomic_set(reinterpret_cast<int32 volatile*>(&fReschedulePending), 0); }
 
 	static inline		CPUEntry*		GetCPU(int32 cpu);
 
@@ -221,7 +220,7 @@ public:
 	inline				int32			PackageIndex() const
 											{ return fPackageIndex; }
 	inline				int32			CPUCount() const
-											{ return atomic_get(const_cast<int32*>(&fCPUCount)); }
+											{ return atomic_get(const_cast<int32 volatile*>(&fCPUCount)); }
 	inline				const CPUSet&	CPUMask() const
 											{ return fCPUSet; }
 
@@ -237,20 +236,20 @@ public:
 	inline				CPUPriorityHeap*	CPUHeap();
 
 	inline				int32			ThreadCount() const
-											{ return atomic_get(const_cast<int32*>(&fTotalThreadCount)); }
+											{ return atomic_get(const_cast<int32 volatile*>(&fTotalThreadCount)); }
 	inline				void			IncrementTotalThreadCount()
-											{ atomic_add(&fTotalThreadCount, 1); }
+											{ atomic_add(reinterpret_cast<int32 volatile*>(&fTotalThreadCount), 1); }
 	inline				void			DecrementTotalThreadCount()
-											{ atomic_add(&fTotalThreadCount, -1); }
+											{ atomic_add(reinterpret_cast<int32 volatile*>(&fTotalThreadCount), -1); }
 
 	inline				int32			DisplayThreadCount() const
-											{ return atomic_get(const_cast<int32*>(&fDisplayThreadCount)); }
+											{ return atomic_get(const_cast<int32 volatile*>(&fDisplayThreadCount)); }
 	inline				void			IncrementDisplayThreadCount()
-											{ atomic_add(&fDisplayThreadCount, 1); }
+											{ atomic_add(reinterpret_cast<int32 volatile*>(&fDisplayThreadCount), 1); }
 	inline				void			DecrementDisplayThreadCount()
-											{ atomic_add(&fDisplayThreadCount, -1); }
+											{ atomic_add(reinterpret_cast<int32 volatile*>(&fDisplayThreadCount), -1); }
 	inline				int32			CoreRunQueueThreadCount() const
-											{ return atomic_get(const_cast<int32*>(&fThreadCount)); }
+											{ return atomic_get(const_cast<int32 volatile*>(&fThreadCount)); }
 
 	inline				void			LockRunQueue();
 	inline				bool			TryLockRunQueue();
@@ -288,9 +287,9 @@ public:
 	inline				uint32			ScoreFactor() const { return fScoreFactor; }
 						bigtime_t		GetMinVirtualRuntime() const;
 	inline				uint32			LoadMeasurementEpoch() const
-											{ return (uint32)atomic_get64((int64*)&fCombinedLoad); }
+											{ return (uint32)atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fCombinedLoad))); }
 	inline				int32			CurrentLoad() const
-											{ return (int32)(atomic_get64((int64*)&fCombinedLoad) >> 32); }
+											{ return (int32)(atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fCombinedLoad))) >> 32); }
 
 	inline				void			AddLoad(int32 load, uint32 epoch,
 											bool updateLoad, bigtime_t now = 0);
@@ -541,7 +540,7 @@ CPUEntry::GetCPU(int32 cpu)
 inline int32
 CPUEntry::GetLoad() const
 {
-	int32 load = atomic_get(const_cast<int32*>(&fLoad));
+	int32 load = atomic_get(const_cast<int32 volatile*>(&fLoad));
 
 	// Penalize SMT siblings to prefer physical cores
 	CoreEntry* core = atomic_pointer_get<CoreEntry>(
@@ -624,21 +623,21 @@ inline void
 CoreEntry::IncreaseActiveTime(bigtime_t activeTime)
 {
 	SCHEDULER_ENTER_FUNCTION();
-	atomic_add64((int64*)&fActiveTime, activeTime);
+	atomic_add64(reinterpret_cast<int64 volatile*>(&fActiveTime), activeTime);
 }
 
 
 inline bigtime_t
 CoreEntry::GetActiveTime() const
 {
-	return atomic_get64((int64*)&fActiveTime);
+	return atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fActiveTime)));
 }
 
 
 inline int32
 CoreEntry::GetLoad() const
 {
-	return atomic_get(const_cast<int32*>(&fLoad));
+	return atomic_get(const_cast<int32 volatile*>(&fLoad));
 }
 
 
@@ -657,9 +656,9 @@ CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad, bigtime_t now)
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = atomic_add64(&fCombinedLoad, (int64)load << 32);
+	int64 oldCombined = atomic_add64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), (int64)load << 32);
 	if ((uint32)oldCombined != epoch)
-		atomic_add(&fLoad, load);
+		atomic_add(reinterpret_cast<int32 volatile*>(&fLoad), load);
 
 	if (updateLoad)
 		_UpdateLoad(true, now);
@@ -674,9 +673,9 @@ CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now)
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = atomic_add64(&fCombinedLoad, (int64)(-load) << 32);
+	int64 oldCombined = atomic_add64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), (int64)(-load) << 32);
 	if (force) {
-		atomic_add(&fLoad, -load);
+		atomic_add(reinterpret_cast<int32 volatile*>(&fLoad), -load);
 
 		_UpdateLoad(true, now);
 	}
@@ -696,8 +695,8 @@ CoreEntry::ChangeLoad(int32 delta, bigtime_t now)
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 
 	if (delta != 0) {
-		atomic_add64(&fCombinedLoad, (int64)delta << 32);
-		atomic_add(&fLoad, delta);
+		atomic_add64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), (int64)delta << 32);
+		atomic_add(reinterpret_cast<int32 volatile*>(&fLoad), delta);
 	}
 
 	_UpdateLoad(false, now);
@@ -717,7 +716,7 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	WriteSpinLocker coreLocker(fCoreLock);
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
 		(native_cpu_mask_t)1 << core->PackageIndex());
-	atomic_add(&fIdleCoreCount, 1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCoreCount), 1);
 
 	if (oldMask == 0) {
 		// Issue 89 fix: Added explicit serialization via fCoreLock to ensure
@@ -741,7 +740,7 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
-	atomic_add(&fIdleCoreCount, -1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCoreCount), -1);
 
 	// Detect the transition from fully-idle to partially-active:
 	// the package wakes up when the *last* idle core becomes active, i.e.
@@ -770,7 +769,7 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 		(native_cpu_mask_t)1 << package->NodeIndex());
 
 	if (oldMask == 0 && fNodeID < 64) {
-		scheduler_atomic_or64(&gIdleNodeMask, 1ULL << fNodeID);
+		scheduler_atomic_or64(reinterpret_cast<uint64 volatile*>(&gIdleNodeMask), 1ULL << fNodeID);
 	}
 }
 
@@ -815,7 +814,7 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 			const int kMaxWakeupRetries = 64;
 			int wakeupRetries = 0;
 			while (true) {
-				nodeMask = atomic_get64((int64*)&gIdleNodeMask);
+				nodeMask = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&gIdleNodeMask)));
 				if (!(nodeMask & nodeBit))
 					break; // already cleared by a concurrent PackageWakesUp
 
@@ -826,14 +825,14 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 					break;
 				}
 
-				if (atomic_test_and_set64((int64*)&gIdleNodeMask,
+				if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask),
 						nodeMask & ~nodeBit, nodeMask) == nodeMask) {
 					// Successfully cleared. Re-check for safety to catch the
 					// race where a package went idle between our last check
 					// and the CAS.
 					if (scheduler_atomic_get(&fIdlePackageMask)
 							!= (native_cpu_mask_t)0) {
-						atomic_or64((int64*)&gIdleNodeMask, nodeBit);
+						atomic_or64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask), nodeBit);
 					}
 					break;
 				}
@@ -873,9 +872,9 @@ CoreEntry::CPUGoesIdle(CPUEntry* cpu)
 	// barrier between atomic_add(fIdleCPUCount) and atomic_get(fCPUCount),
 	// the CPU could observe fCPUCount before fIdleCPUCount increment is
 	// globally visible, causing a spurious PackageGoesIdle call.
-	int32 newIdleCount = atomic_add(&fIdleCPUCount, 1) + 1;
+	int32 newIdleCount = atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), 1) + 1;
 	memory_read_barrier();
-	int32 cpuCount = atomic_get(&fCPUCount);
+	int32 cpuCount = atomic_get(const_cast<int32 volatile*>(&fCPUCount));
 	if (cpuCount > 0 && newIdleCount >= cpuCount)
 		fPackage->CoreGoesIdle(this);
 }
@@ -889,7 +888,7 @@ CoreEntry::CPUWakesUp(CPUEntry* cpu)
 
 	ClearCPUIDle(gIdleMask, cpu->ID());
 
-	ASSERT(atomic_get(&fIdleCPUCount) > 0);
+	ASSERT(atomic_get(const_cast<int32 volatile*>(&fIdleCPUCount)) > 0);
 
 	IncrementTotalThreadCount();
 	// Issue 70 fix: read fCPUCount AFTER IncrementTotalThreadCount and
@@ -897,8 +896,8 @@ CoreEntry::CPUWakesUp(CPUEntry* cpu)
 	// fIdleCPUCount; by inserting the barrier we ensure we see the latest
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();
-	int32 cpuCount = atomic_get(&fCPUCount);
-	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
+	int32 cpuCount = atomic_get(const_cast<int32 volatile*>(&fCPUCount));
+	if (atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 
@@ -920,8 +919,8 @@ PackageEntry::IdleCoreMask() const
 	// on all supported platforms (32 on 32-bit, 64 on 64-bit).  This
 	// comment documents the assumption so it is verified if kMaxCoresPerPackage
 	// is ever changed to a non-power-of-2 value.
-	// static_assert replaced by comment for GCC 2.95
-	// (kMaxCoresPerPackage & (kMaxCoresPerPackage - 1)) == 0
+	static_assert((kMaxCoresPerPackage & (kMaxCoresPerPackage - 1)) == 0,
+		"kMaxCoresPerPackage must be a power of 2");
 	SCHEDULER_ENTER_FUNCTION();
 	return scheduler_atomic_get(&fIdleCoreMask);
 }
@@ -964,7 +963,7 @@ PackageEntry::GetLeastIdlePackage()
 			// callers dereference Package()->Node()->ID() on the result.
 			if (current->fNode == NULL)
 				continue;
-			int32 count = atomic_get((int32*)&current->fIdleCoreCount);
+			int32 count = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&current->fIdleCoreCount)));
 			if (count != 0 && (package == NULL || count < bestIdleCount)) {
 				package = current;
 				bestIdleCount = count;
@@ -981,7 +980,7 @@ PackageEntry::GetLeastIdlePackage()
 			// package, but we document it explicitly here.
 			if (current->fNode == NULL)
 				continue;
-			int32 count = atomic_get((int32*)&current->fIdleCoreCount);
+			int32 count = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&current->fIdleCoreCount)));
 			if (count != 0 && (package == NULL || count < bestIdleCount)) {
 				package = current;
 				bestIdleCount = count;
@@ -1015,7 +1014,7 @@ CoreEntry::HasHighPriorityThread() const
 	// the next reschedule corrects it - acceptable for this hint.
 	const uint32* bitmap = fRunQueue.GetBitmap();
 	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = (uint32)atomic_get((int32*)&bitmap[i]);
+		uint32 val = (uint32)atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&bitmap[i])));
 		if (i == ThreadRunQueue::kBitmapSize - 1)
 			val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 		if (val != 0) {

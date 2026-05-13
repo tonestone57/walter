@@ -67,7 +67,7 @@ _LoadavgUpdate(void *data, int iteration)
 	// If sub-second load visibility is required in the future, the daemon
 	// period must be reduced and sCExp recalibrated accordingly.
 	// Optimization: Use global atomic counter instead of O(N) core scan.
-	int32 threadCount = atomic_get(&gTotalRunnableThreads);
+	int32 threadCount = atomic_get(const_cast<int32 volatile*>(&gTotalRunnableThreads));
 	if (threadCount < 0)
 		threadCount = 0;
 
@@ -79,7 +79,7 @@ _LoadavgUpdate(void *data, int iteration)
 		// Clamp the result to B_INT32_MAX (a sane upper bound: no system has
 		// 2^31 runnable threads).  The FreeBSD algorithm assumes the same
 		// practical bound.
-		// GCC 2.95 compatibility: use uint64; intermediate fits in 64 bits.
+		// Modern GCC optimization: use uint64; intermediate fits in 64 bits.
 		uint64 acc =
 			(uint64)sCExp[i] * sAverageRunnable.ldavg[i]
 			+ (uint64)threadCount * (kFScale - sCExp[i]) * kFScale;

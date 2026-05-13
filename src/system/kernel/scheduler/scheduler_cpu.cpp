@@ -292,8 +292,8 @@ CPUEntry::Start()
 {
 	fThreadCount = 0;
 	fLoad = 0;
-	atomic_set64((int64*)&fMeasureTime, system_time());
-	atomic_set64((int64*)&fMeasureActiveTime, 0);
+	atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureTime), system_time());
+	atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureActiveTime), 0);
 }
 
 
@@ -359,7 +359,7 @@ CPUEntry::PushFront(ThreadData* thread, int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushFront(thread, priority);
-	atomic_add(&fThreadCount, 1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fThreadCount), 1);
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -374,7 +374,7 @@ CPUEntry::PushBack(ThreadData* thread, int32 priority)
 {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushBack(thread, priority);
-	atomic_add(&fThreadCount, 1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fThreadCount), 1);
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -399,7 +399,7 @@ CPUEntry::Remove(ThreadData* thread)
 
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
-	atomic_add(&fThreadCount, -1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fThreadCount), -1);
 
 	if (!thread->IsIdle()) {
 		Core()->DecrementTotalThreadCount();
@@ -466,20 +466,20 @@ CPUEntry::ComputeLoad(bigtime_t now)
 	if (now == 0)
 		now = system_time();
 
-	int32 currentLoad = atomic_get(&fLoad);
+	int32 currentLoad = atomic_get(const_cast<int32 volatile*>(&fLoad));
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int oldLoad;
 	do {
-		bigtime_t measureTime = atomic_get64((int64*)&fMeasureTime);
-		measureActiveTime = atomic_get64((int64*)&fMeasureActiveTime);
+		bigtime_t measureTime = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fMeasureTime)));
+		measureActiveTime = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fMeasureActiveTime)));
 		bigtime_t tempMeasureTime = measureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
 		oldLoad = compute_load(tempMeasureTime, tempMeasureActiveTime, currentLoad,
 				now);
 		if (oldLoad < 0)
 			break;
-		if (atomic_test_and_set64((int64*)&fMeasureActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
-			atomic_set64((int64*)&fMeasureTime, tempMeasureTime);
+		if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&fMeasureActiveTime), tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
+			atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureTime), tempMeasureTime);
 			break;
 		}
 	} while (true);
@@ -492,7 +492,7 @@ CPUEntry::ComputeLoad(bigtime_t now)
 	else if (currentLoad > kLoadClampMax)
 		currentLoad = kLoadClampMax;
 
-	atomic_set(&fLoad, currentLoad);
+	atomic_set(reinterpret_cast<int32 volatile*>(&fLoad), currentLoad);
 
 	if (GetLoad() > kVeryHighLoad)
 		Scheduler::RebalanceIRQs(false);
@@ -647,7 +647,7 @@ CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now)
 		cpuEntry->active_time += active;
 		locker.Unlock();
 
-		atomic_add64((int64*)&fMeasureActiveTime, active);
+		atomic_add64(reinterpret_cast<int64 volatile*>(&fMeasureActiveTime), active);
 		atomic_pointer_get<CoreEntry>(&fCore)->IncreaseActiveTime(active);
 
 		// Use the provided timestamp for UpdateActivity.
@@ -667,7 +667,7 @@ CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now)
 #ifdef DEBUG_SCHEDULER
 	TRACE("scheduler: cpu=%d load=%d idle=%d\n",
 		fCPUNumber,
-		atomic_get(&fLoad),
+		atomic_get(const_cast<int32 volatile*>(&fLoad)),
 		gCPU[fCPUNumber].idle);
 #endif
 
@@ -1000,7 +1000,7 @@ CoreEntry::PushFront(ThreadData* thread, int32 priority)
 	SCHEDULER_ENTER_FUNCTION();
 
 	fRunQueue.PushFront(thread, priority);
-	atomic_add(&fThreadCount, 1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fThreadCount), 1);
 	IncrementTotalThreadCount();
 	if (priority >= B_DISPLAY_PRIORITY)
 		IncrementDisplayThreadCount();
@@ -1013,7 +1013,7 @@ CoreEntry::PushBack(ThreadData* thread, int32 priority)
 	SCHEDULER_ENTER_FUNCTION();
 
 	fRunQueue.PushBack(thread, priority);
-	atomic_add(&fThreadCount, 1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fThreadCount), 1);
 	IncrementTotalThreadCount();
 	if (priority >= B_DISPLAY_PRIORITY)
 		IncrementDisplayThreadCount();
@@ -1034,7 +1034,7 @@ CoreEntry::Remove(ThreadData* thread)
 
 	thread->SetDequeued();
 
-	atomic_add(&fThreadCount, -1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fThreadCount), -1);
 	DecrementTotalThreadCount();
 	if (priority >= B_DISPLAY_PRIORITY)
 		DecrementDisplayThreadCount();
@@ -1064,10 +1064,10 @@ void
 CoreEntry::AddCPU(CPUEntry* cpu)
 {
 	ASSERT(fCPUCount >= 0);
-	ASSERT(atomic_get(&fIdleCPUCount) >= 0);
+	ASSERT(atomic_get(const_cast<int32 volatile*>(&fIdleCPUCount)) >= 0);
 
-	atomic_add(&fIdleCPUCount, 1);
-	bool firstCPU = (atomic_add(&fCPUCount, 1) == 0);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), 1);
+	bool firstCPU = (atomic_add(reinterpret_cast<int32 volatile*>(&fCPUCount), 1) == 0);
 
 	// Find the first available local index using a CAS loop.
 	// This ensures unique index assignment even after arbitrary CPU hot-unplugging.
@@ -1101,9 +1101,9 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	if (firstCPU) {
 		didAddIdle = true;
 		fLoad = 0;
-		atomic_set64(&fCombinedLoad, 0);
+		atomic_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), 0);
 
-		atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
+		atomic_set(reinterpret_cast<int32 volatile*>(&fPackage->fCoreLoads[fPackageIndex]), 0);
 		scheduler_atomic_or(&fPackage->fEnabledCoreMask,
 			(native_cpu_mask_t)1 << fPackageIndex);
 
@@ -1117,17 +1117,17 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 			~((native_cpu_mask_t)1 << localIndex));
 		if (firstCPU) {
 			fLoad = 0;
-			atomic_set64(&fCombinedLoad, 0);
-			atomic_set(&fPackage->fCoreLoads[fPackageIndex], 0);
+			atomic_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), 0);
+			atomic_set(reinterpret_cast<int32 volatile*>(&fPackage->fCoreLoads[fPackageIndex]), 0);
 			if (didAddIdle)
 				fPackage->RemoveIdleCore(this);
 			scheduler_atomic_and(&fPackage->fEnabledCoreMask,
 				~((native_cpu_mask_t)1 << fPackageIndex));
-			atomic_add(&fCPUCount, -1);
+			atomic_add(reinterpret_cast<int32 volatile*>(&fCPUCount), -1);
 		} else {
-			atomic_add(&fCPUCount, -1);
+			atomic_add(reinterpret_cast<int32 volatile*>(&fCPUCount), -1);
 		}
-		atomic_add(&fIdleCPUCount, -1);
+		atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1);
 		panic("CoreEntry::AddCPU: failed to insert CPU %" B_PRId32 " into heap",
 			cpu->ID());
 	}
@@ -1138,14 +1138,14 @@ void
 CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 {
 	ASSERT(fCPUCount > 0);
-	ASSERT(atomic_get(&fIdleCPUCount) >= 1);
+	ASSERT(atomic_get(const_cast<int32 volatile*>(&fIdleCPUCount)) >= 1);
 
 	// The CPU is guaranteed to be idle and accounted for in fIdleCPUCount
 	// before RemoveCPU is called (set by scheduler_set_cpu_enabled).
-	int32 oldIdleCount = atomic_add(&fIdleCPUCount, -1);
+	int32 oldIdleCount = atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1);
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
-	int32 oldCPUCount = atomic_add(&fCPUCount, -1);
+	int32 oldCPUCount = atomic_add(reinterpret_cast<int32 volatile*>(&fCPUCount), -1);
 
 	if (oldCPUCount == 1) {
 		// core has been disabled
@@ -1189,11 +1189,11 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		// If a concurrent steal occurred in the narrow window, fThreadCount
 		// may be positive. Force it to zero since CPUCount==0 prevents
 		// further enqueues, making any residual count a permanent leak.
-		int32 residual = atomic_get(&fThreadCount);
+	int32 residual = atomic_get(const_cast<int32 volatile*>(&fThreadCount));
 		if (residual != 0) {
 			dprintf("CoreEntry::RemoveCPU: fThreadCount=%" B_PRId32
 				" after drain (expected 0) - resetting\n", residual);
-			atomic_set(&fThreadCount, 0);
+		atomic_set(reinterpret_cast<int32 volatile*>(&fThreadCount), 0);
 		}
 	}
 
@@ -1301,7 +1301,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
-	int32 cpuCount = atomic_get((int32*)&fCPUCount);
+	int32 cpuCount = atomic_get(const_cast<int32 volatile*>(&fCPUCount));
 	if (cpuCount <= 0)
 		return;
 
@@ -1310,18 +1310,18 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 
 	// one system_time() call shared by both branches eliminates
 	// a redundant syscall and ensures consistent timestamps.
-	bigtime_t lastUpdate = atomic_get64(&fLastLoadUpdate);
+	bigtime_t lastUpdate = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fLastLoadUpdate)));
 	if (!forceUpdate) {
 		if (now < kLoadMeasureInterval + lastUpdate)
 			return;
-		if (atomic_test_and_set64(&fLastLoadUpdate, now, lastUpdate)
+		if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&fLastLoadUpdate), now, lastUpdate)
 				!= lastUpdate) {
 			return;
 		}
 	} else {
 		// on CAS failure another CPU won the update race; that
 		// update is sufficient, so return rather than silently skipping.
-		if (atomic_test_and_set64(&fLastLoadUpdate, now, lastUpdate)
+		if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&fLastLoadUpdate), now, lastUpdate)
 				!= lastUpdate) {
 			return;
 		}
@@ -1335,14 +1335,14 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 	// added to fLoad) or the new epoch (and are captured in the next snapshot),
 	// with no double-counting or loss.
 	int32 currentLoad = 0;
-	int64 oldCombined = atomic_get64(&fCombinedLoad);
+	int64 oldCombined = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fCombinedLoad)));
 	int outerRetryCount = 0;
 	while (true) {
 		currentLoad = (int32)(oldCombined >> 32);
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch; // Load reset to 0
 
-		int64 actual = atomic_test_and_set64(&fCombinedLoad, newCombined,
+		int64 actual = atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), newCombined,
 			oldCombined);
 		if (actual == oldCombined) {
 			// Issue 7 fix: snapshot prevLoad immediately after winning the
@@ -1353,7 +1353,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 			// Reading here minimises the race window to the CAS itself.
 			// currentFLoad starts equal to prevLoad; the inner retry loop
 			// updates it on CAS failure and correctly adds delta each time.
-			int32 prevLoad = atomic_get(&fLoad);
+			int32 prevLoad = atomic_get(const_cast<int32 volatile*>(&fLoad));
 			int32 currentFLoad = prevLoad;
 
 			// Issue 48 fix: snapshot prevLoad immediately after winning the
@@ -1377,7 +1377,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 				if (newFLoad < 0)
 					newFLoad = 0;
 
-				int32 actualLoad = atomic_test_and_set(&fLoad, newFLoad,
+				int32 actualLoad = atomic_test_and_set(reinterpret_cast<int32 volatile*>(&fLoad), newFLoad,
 					currentFLoad);
 				if (actualLoad == currentFLoad)
 					break;
@@ -1385,7 +1385,7 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 				currentFLoad = actualLoad;
 				if (++innerRetryCount >= kMaxFLoadRetries) {
 					// Best-effort: apply delta to most recently observed value.
-					atomic_add(&fLoad, delta);
+					atomic_add(reinterpret_cast<int32 volatile*>(&fLoad), delta);
 					break;
 				}
 			}
@@ -1402,13 +1402,13 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 			// Issue 85 fix: re-read cpuCount to get a fresh value after
 			// many retry failures. The value from function entry may be
 			// several epochs stale on a heavily contended system.
-			int32 freshCPUCount = atomic_get((int32*)&fCPUCount);
+			int32 freshCPUCount = atomic_get(const_cast<int32 volatile*>(&fCPUCount));
 			if (freshCPUCount <= 0)
 				return;
 
 			int32 load = (int32)(oldCombined >> 32) / freshCPUCount;
 			load = ((int64)load * fScoreFactor) >> 16;
-			atomic_set(&fPackage->fCoreLoads[fPackageIndex],
+			atomic_set(reinterpret_cast<int32 volatile*>(&fPackage->fCoreLoads[fPackageIndex]),
 				min_c(load, (int32)kMaxLoad));
 			return;
 		}
@@ -1419,8 +1419,8 @@ CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now)
 		int32 load = currentLoad / cpuCount;
 		load = ((int64)load * fScoreFactor) >> 16;
 
-		int32 oldLoad = atomic_get(&fPackage->fCoreLoads[fPackageIndex]);
-		atomic_set(&fPackage->fCoreLoads[fPackageIndex],
+		int32 oldLoad = atomic_get(const_cast<int32 volatile*>(&fPackage->fCoreLoads[fPackageIndex]));
+		atomic_set(reinterpret_cast<int32 volatile*>(&fPackage->fCoreLoads[fPackageIndex]),
 			SmoothLoad(oldLoad, min_c(load, (int32)kMaxLoad)));
 	}
 }
@@ -1493,7 +1493,7 @@ PackageEntry::AddIdleCore(CoreEntry* core)
 	WriteSpinLocker coreLocker(fCoreLock);
 	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
 		(native_cpu_mask_t)1 << core->PackageIndex());
-	atomic_add(&fIdleCoreCount, 1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCoreCount), 1);
 
 	if (oldMask == 0) {
 		// Issue 45 fix: document that fCoreLock is held here but NOT held
@@ -1520,7 +1520,7 @@ PackageEntry::RemoveIdleCore(CoreEntry* core)
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
-	atomic_add(&fIdleCoreCount, -1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCoreCount), -1);
 
 	if ((oldMask & ~clearBit) == 0) {
 		// Package wakes up (last idle core became active).  Delegate to
@@ -1750,7 +1750,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 				continue;
 
-			int32 load = atomic_get(&fCoreLoads[i]);
+		int32 load = atomic_get(const_cast<int32 volatile*>(&fCoreLoads[i]));
 
 			// Track the best core across all attempts (Power-of-N-Choices).
 			if (minEntry == NULL || load < minLoad) {
@@ -1779,7 +1779,7 @@ PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 			continue;
 
-		int32 load = atomic_get(&fCoreLoads[i]);
+		int32 load = atomic_get(const_cast<int32 volatile*>(&fCoreLoads[i]));
 		if (minEntry == NULL || load < minLoad) {
 			minLoad = load;
 			minEntry = candidate;
@@ -1809,8 +1809,8 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		// sizeof(native_cpu_mask_t)*8 == 64 on 64-bit and 32 on 32-bit,
 		// so every possible index i < kMaxCoresPerPackage fits within the
 		// bitmask on all supported platforms.  No overflow is possible.
-		// static_assert replaced by comment for GCC 2.95
-		// kMaxCoresPerPackage <= (int32)(sizeof(sampledCores) * 8)
+		static_assert(kMaxCoresPerPackage <= (int32)(sizeof(sampledCores) * 8),
+			"sampledCores too narrow for kMaxCoresPerPackage");
 		int32 attempts = 0;
 		int32 registeredCores = fRegisteredCoreCount;
 		if (registeredCores <= 0)
@@ -1838,7 +1838,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 				continue;
 
-			int32 load = atomic_get(&fCoreLoads[i]);
+			int32 load = atomic_get(const_cast<int32 volatile*>(&fCoreLoads[i]));
 
 			// Track the best core across all attempts (Power-of-N-Choices).
 			if (maxEntry == NULL || load > maxLoad
@@ -1905,7 +1905,7 @@ PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 			if (type != CORE_TYPE_UNKNOWN && candidate->Type() != type)
 				continue;
 
-			int32 load = atomic_get(&fCoreLoads[i]);
+			int32 load = atomic_get(const_cast<int32 volatile*>(&fCoreLoads[i]));
 			if (maxEntry == NULL || load > maxLoad
 					// Issue 55 fix: tie-break by higher PackageIndex (within
 					// the package) rather than lower core ID to spread across
@@ -2044,7 +2044,7 @@ static int
 dump_idle_cores(int /* argc */, char** /* argv */)
 {
 	kprintf("Idle packages:\n");
-	uint64 nodeMask = atomic_get64((int64*)&gIdleNodeMask);
+	uint64 nodeMask = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&gIdleNodeMask)));
 
 	if (nodeMask != 0) {
 		kprintf("node package cores\n");

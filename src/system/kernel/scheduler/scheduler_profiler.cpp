@@ -107,7 +107,7 @@ Profiler::EnterFunction(int32 cpu, const char* functionName)
 		return false;
 
 	// Only count the call after we know we can successfully profile it.
-	atomic_add(&function->fCalled, 1);
+	atomic_add(reinterpret_cast<int32 volatile*>(&function->fCalled), 1);
 	fFunctionStackPointers[cpu]++;
 	FunctionEntry* stackEntry = &fFunctionStacks[cpu][stackDepth];
 
@@ -149,8 +149,8 @@ Profiler::ExitFunction(int32 cpu, const char* functionName)
 
 	// Optimization: Store in nanoseconds to maintain precision for low-latency tasks.
 	// Division by 1000 moved to the _Dump function.
-	atomic_add64(&stackEntry->fFunction->fTimeInclusive, timeSpent);
-	atomic_add64(&stackEntry->fFunction->fTimeExclusive,
+	atomic_add64(reinterpret_cast<int64 volatile*>(&stackEntry->fFunction->fTimeInclusive), timeSpent);
+	atomic_add64(reinterpret_cast<int64 volatile*>(&stackEntry->fFunction->fTimeExclusive),
 		(timeSpent - stackEntry->fOthersTime));
 
 	nanotime_t profilerTime = stackEntry->fProfilerTime;
