@@ -170,8 +170,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	CoreEntry* core = NULL;
 
 	// Thread Coloring: Search for a core of the preferred type first
-	uint64 idleNodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(
-		reinterpret_cast<uint64 volatile*>(&gIdleNodeMask)));
+	uint64 idleNodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask));
 
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
@@ -718,7 +717,7 @@ static void rebalance_irqs(bool idle) {
 
 	// Note: rebalance_irqs is called from CPUEntry::ComputeLoad
 	// which is called from TrackLoad which is called from reschedule() under
-	// SchedulerModeLocker (RCU read-side). DPCQueue::Add
+	// SchedulerModeLocker (read lock on fSchedulerModeLock). DPCQueue::Add
 	// wakes a thread which eventually calls scheduler_enqueue_in_run_queue
 	// → SchedulerModeLocker. Read locks are reentrant on Haiku (rw_spinlock),
 	// so this is safe today. Document explicitly to prevent future regression

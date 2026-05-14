@@ -230,13 +230,14 @@ CPUEntry::CPUEntry()
 	  fReschedulePending(0),
 	  fLastLocalPackageIndex(0),
 	  lastReschedule(0) {
-	fRCULastGeneration = 0;
+	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
 }
 
 void CPUEntry::Init(int32 id, CoreEntry* core) {
 	fCPUNumber = id;
 	atomic_pointer_set<CoreEntry>(&fCore, core);
+	atomic_set64(reinterpret_cast<int64 volatile*>(&fRCULastGeneration), 0);
 	// Note: improve per-CPU RNG seed entropy. On boot, system_time()
 	// returns small values with low entropy; successive CPUs initialized
 	// microseconds apart get highly correlated seeds. Fold in the address of
@@ -271,8 +272,9 @@ void CPUEntry::Init(int32 id, CoreEntry* core) {
 void CPUEntry::Start() {
 	// fThreadCount and fLoad are already initialized in CoreEntry::AddCPU
 	// while holding the necessary locks.
-	atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureTime), (int64)(system_time()));
-	atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureActiveTime), (int64)(0));
+	atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureTime),
+				 system_time());
+	atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureActiveTime), 0);
 }
 
 void CPUEntry::Stop() {
@@ -429,17 +431,21 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int oldLoad;
 	do {
-		bigtime_t measureTime = atomic_get64(reinterpret_cast<int64 volatile*>(&fMeasureTime));
-		measureActiveTime = atomic_get64(reinterpret_cast<int64 volatile*>(&fMeasureActiveTime));
+		bigtime_t measureTime = atomic_get64(
+			reinterpret_cast<int64 volatile*>(&fMeasureTime));
+		measureActiveTime = atomic_get64(
+			reinterpret_cast<int64 volatile*>(&fMeasureActiveTime));
 		bigtime_t tempMeasureTime = measureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
 		oldLoad = compute_load(tempMeasureTime, tempMeasureActiveTime,
 							   currentLoad, now);
 		if (oldLoad < 0)
 			break;
-		if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(
-				&fMeasureActiveTime), (int64)(tempMeasureActiveTime), (int64)(measureActiveTime)) == measureActiveTime) {
-			atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureTime), (int64)(tempMeasureTime));
+		if ((bigtime_t)atomic_test_and_set64(
+				reinterpret_cast<int64 volatile*>(&fMeasureActiveTime),
+				tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
+			atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureTime),
+						 tempMeasureTime);
 			break;
 		}
 	} while (true);
@@ -974,6 +980,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 	ASSERT(LoadAcquire(fCPUCount) >= 0);
 	ASSERT(LoadAcquire(fIdleCPUCount) >= 0);
 
+	// Initialize CPU thread count before it can be seen by others.
 	cpu->Reset();
 
 	AddRelease(fIdleCPUCount, 1);
@@ -1003,9 +1010,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 				  localIndex, fCoreID);
 		}
 
-		if (atomic_test_and_set(
-				&fLocalIndices, mask | ((native_cpu_mask_t)1 << localIndex),
-				mask) == mask) {
+		if (cpu_mask_test_and_set_atomic(&fLocalIndices, mask | ((native_cpu_mask_t)1 << localIndex), mask) == mask) {
 			break;
 		}
 	}
@@ -1017,11 +1022,10 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 	if (firstCPU) {
 		didAddIdle = true;
 		StoreRelease(fLoad, 0);
-		atomic_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), (int64)(0));
+		atomic_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), 0);
 
 		StoreRelease(fPackage->fCoreLoads[fPackageIndex], 0);
-		cpu_mask_or_atomic(&fPackage->fEnabledCoreMask,
-							(native_cpu_mask_t)1 << fPackageIndex);
+		cpu_mask_or_atomic(&fPackage->fEnabledCoreMask, (native_cpu_mask_t)1 << fPackageIndex);
 
 		fPackage->AddIdleCore(this);
 	}
@@ -1029,16 +1033,14 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 	if (fCPUHeap.Insert(cpu, B_IDLE_PRIORITY) != B_OK) {
 		fCPUSet.ClearBitAtomic(cpu->ID());
 		// Roll back the local index on failure.
-		cpu_mask_and_atomic(&fLocalIndices,
-							 ~((native_cpu_mask_t)1 << localIndex));
+		cpu_mask_and_atomic(&fLocalIndices, ~((native_cpu_mask_t)1 << localIndex));
 		if (firstCPU) {
 			StoreRelease(fLoad, 0);
-			atomic_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), (int64)(0));
+			atomic_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), 0);
 			StoreRelease(fPackage->fCoreLoads[fPackageIndex], 0);
 			if (didAddIdle)
 				fPackage->RemoveIdleCore(this);
-			cpu_mask_and_atomic(&fPackage->fEnabledCoreMask,
-								 ~((native_cpu_mask_t)1 << fPackageIndex));
+			cpu_mask_and_atomic(&fPackage->fEnabledCoreMask, ~((native_cpu_mask_t)1 << fPackageIndex));
 			AddRelease(fCPUCount, -1);
 		} else {
 			AddRelease(fCPUCount, -1);
@@ -1056,15 +1058,14 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 
 	// The CPU is guaranteed to be idle and accounted for in fIdleCPUCount
 	// before RemoveCPU is called (set by scheduler_set_cpu_enabled).
-	int32 oldIdleCount = atomic_add(&fIdleCPUCount, -1);
+	int32 oldIdleCount = atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1);
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
-	int32 oldCPUCount = atomic_add(&fCPUCount, -1);
+	int32 oldCPUCount = atomic_add(reinterpret_cast<int32 volatile*>(&fCPUCount), -1);
 
 	if (oldCPUCount == 1) {
 		// core has been disabled
-		cpu_mask_and_atomic(&fPackage->fEnabledCoreMask,
-							 ~((native_cpu_mask_t)1 << fPackageIndex));
+		cpu_mask_and_atomic(&fPackage->fEnabledCoreMask, ~((native_cpu_mask_t)1 << fPackageIndex));
 
 		// Note: only call RemoveIdleCore if the core was actually idle
 		// (all its CPUs were idle). Calling unconditionally when a non-idle
@@ -1128,8 +1129,7 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 	fCPUHeap.RemoveRoot();
 
 	// Atomically clear the bit in fLocalIndices.
-	cpu_mask_and_atomic(&fLocalIndices,
-						 ~((native_cpu_mask_t)1 << cpu->fCoreLocalIndex));
+	cpu_mask_and_atomic(&fLocalIndices, ~((native_cpu_mask_t)1 << cpu->fCoreLocalIndex));
 
 	ASSERT(cpu->GetLoad() >= 0 && cpu->GetLoad() <= kMaxLoad);
 	ASSERT(fLoad >= 0);
@@ -1233,17 +1233,17 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 	// added to fLoad) or the new epoch (and are captured in the next snapshot),
 	// with no double-counting or loss.
 	int32 currentLoad = 0;
-	int64 oldCombined __attribute__((aligned(8))) =
-		(int64)atomic_get64(reinterpret_cast<int64 volatile*>(
-			reinterpret_cast<uint64 volatile*>(&fCombinedLoad)));
+	int64 oldCombined __attribute__((aligned(8))) = atomic_get64(
+		reinterpret_cast<int64 volatile*>(&fCombinedLoad));
 	int outerRetryCount = 0;
 	while (true) {
 		currentLoad = (int32)(oldCombined >> 32);
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch;  // Load reset to 0
 
-		int64 actual = (int64)atomic_test_and_set64(reinterpret_cast<int64 volatile*>(
-			reinterpret_cast<uint64 volatile*>(&fCombinedLoad)), (int64)((uint64)newCombined), (int64)((uint64))oldCombined);
+		int64 actual = atomic_test_and_set64(
+			reinterpret_cast<int64 volatile*>(&fCombinedLoad),
+			newCombined, oldCombined);
 		if (actual == oldCombined) {
 			// Note: snapshot prevLoad immediately after winning the
 			// outer CAS on fCombinedLoad, not before the loop.  The original
@@ -1277,8 +1277,8 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 				if (newFLoad < 0)
 					newFLoad = 0;
 
-				int32 actualLoad = atomic_test_and_set(
-					&fLoad, newFLoad, currentFLoad);
+				int32 actualLoad = atomic_test_and_set(reinterpret_cast<int32 volatile*>(
+					&fLoad), (int32)(newFLoad), (int32)(currentFLoad));
 				if (actualLoad == currentFLoad)
 					break;
 
@@ -1368,14 +1368,13 @@ void PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex) {
 
 void PackageEntry::AddIdleCore(CoreEntry* core) {
 	WriteSpinLocker coreLocker(fCoreLock);
-	native_cpu_mask_t oldMask = cpu_mask_or_atomic(
-		&fIdleCoreMask, (native_cpu_mask_t)1 << core->PackageIndex());
+	native_cpu_mask_t oldMask = cpu_mask_or_atomic(&fIdleCoreMask, (native_cpu_mask_t)1 << core->PackageIndex());
 	AddRelease(fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
 		// Note: document that fCoreLock is held here but NOT held
 		// in CoreGoesIdle. The two paths are serialized at a higher level
-		// (RCU synchronization for AddIdleCore vs. normal scheduling
+		// (InterruptsBigSchedulerLocker for AddIdleCore vs. normal scheduling
 		// for CoreGoesIdle). If this serialization is ever relaxed, an
 		// explicit atomic CAS must guard the PackageGoesIdle transition.
 		if (fNode != NULL)
@@ -1451,7 +1450,7 @@ CoreEntry* PackageEntry::GetIdleCorePacking(CPUEntry* cpu,
 	// proxy.
 
 	native_cpu_mask_t enabledMask =
-		cpu_mask_get_atomic((native_cpu_mask_t*)&fEnabledCoreMask);
+		cpu_mask_get_atomic(&fEnabledCoreMask);
 	native_cpu_mask_t activeMask = enabledMask & ~mask;
 
 	if (activeMask != 0) {
@@ -1589,7 +1588,7 @@ CoreEntry* PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	int32 minLoad = -1;
 
 	native_cpu_mask_t enabledMask =
-		cpu_mask_get_atomic((native_cpu_mask_t*)&fEnabledCoreMask);
+		cpu_mask_get_atomic(&fEnabledCoreMask);
 	if (enabledMask == 0)
 		return NULL;
 
@@ -1672,7 +1671,7 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	int32 maxLoad = -1;
 
 	native_cpu_mask_t enabledMask =
-		cpu_mask_get_atomic((native_cpu_mask_t*)&fEnabledCoreMask);
+		cpu_mask_get_atomic(&fEnabledCoreMask);
 	if (enabledMask == 0)
 		return NULL;
 
@@ -1901,8 +1900,7 @@ static int dump_cpu_heap(int /* argc */, char** /* argv */) {
 
 static int dump_idle_cores(int /* argc */, char** /* argv */) {
 	kprintf("Idle packages:\n");
-	uint64 nodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(
-		reinterpret_cast<uint64 volatile*>(&gIdleNodeMask)));
+	uint64 nodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask));
 
 	if (nodeMask != 0) {
 		kprintf("node package cores\n");

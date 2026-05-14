@@ -318,8 +318,7 @@ inline void ClearCPUIDle(uint64& mask, int cpu) {
 inline bool IsCPUIDle(const uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return false;
-	return (atomic_get64(reinterpret_cast<int64 volatile*>(
-							 const_cast<uint64 volatile*>(&mask))) &
+	return (atomic_get64(reinterpret_cast<int64 volatile*>(&mask)) &
 			((int64)1 << cpu)) != 0;
 }
 
@@ -334,8 +333,7 @@ inline SchedulerSnapshot MakeSchedulerSnapshot(const int32& total,
 											   const uint64& idleMask) {
 	SchedulerSnapshot s;
 	s.totalRunnable = LoadAcquire(total);
-	s.idleMask = (uint64)atomic_get64(reinterpret_cast<int64 volatile*>(
-		const_cast<uint64 volatile*>(&idleMask)));
+	s.idleMask = (uint64)atomic_get64(reinterpret_cast<int64 volatile*>(&idleMask));
 	return s;
 }
 

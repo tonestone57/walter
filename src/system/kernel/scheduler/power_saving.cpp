@@ -370,8 +370,7 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	if (package == NULL) {
 		// No partially idle packages. Check for any idle package using the
 		// mask.
-		uint64 idleNodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(
-			reinterpret_cast<uint64 volatile*>(&gIdleNodeMask)));
+		uint64 idleNodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask));
 		int scannedCount = 0;
 		while (idleNodeMask != 0) {
 			if (++scannedCount > kMaxCPUsToScan)

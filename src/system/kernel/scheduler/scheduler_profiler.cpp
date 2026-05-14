@@ -134,10 +134,10 @@ void Profiler::ExitFunction(int32 cpu, const char* functionName) {
 
 	// Optimization: Store in nanoseconds to maintain precision for low-latency
 	// tasks. Division by 1000 moved to the _Dump function.
-	atomic_add64(reinterpret_cast<int64 volatile*>(reinterpret_cast<uint64 volatile*>(
-							   &stackEntry->fFunction->fTimeInclusive)), (int64)((uint64))timeSpent);
-	atomic_add64(reinterpret_cast<int64 volatile*>(reinterpret_cast<uint64 volatile*>(
-							   &stackEntry->fFunction->fTimeExclusive)), (int64)((uint64))(timeSpent - stackEntry->fOthersTime));
+	atomic_add64(reinterpret_cast<int64 volatile*>(
+							   &stackEntry->fFunction->fTimeInclusive), (int64)timeSpent);
+	atomic_add64(reinterpret_cast<int64 volatile*>(
+							   &stackEntry->fFunction->fTimeExclusive), (int64)(timeSpent - stackEntry->fOthersTime));
 
 	nanotime_t profilerTime = stackEntry->fProfilerTime;
 	if (stackDepth > 0) {

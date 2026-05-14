@@ -136,7 +136,7 @@ class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 	inline int32 ThreadCount() const { return LoadAcquire(fThreadCount); }
 
 	bool SetReschedulePending() {
-		return atomic_get_and_set(&fReschedulePending, 1) == 0;
+		return atomic_get_and_set(reinterpret_cast<int32 volatile*>(&fReschedulePending), 1) == 0;
 	}
 	void ClearReschedulePending() { StoreRelease(fReschedulePending, 0); }
 
@@ -268,12 +268,12 @@ class CoreEntry {
 	inline uint32 ScoreFactor() const { return fScoreFactor; }
 	bigtime_t GetMinVirtualRuntime() const;
 	inline uint32 LoadMeasurementEpoch() const {
-		return (uint32)atomic_get64(reinterpret_cast<int64 volatile*>(const_cast<uint64 volatile*>(
-			reinterpret_cast<const uint64*>(&fCombinedLoad))));
+		return (uint32)atomic_get64(const_cast<int64 volatile*>(
+			reinterpret_cast<const int64*>(&fCombinedLoad)));
 	}
 	inline int32 CurrentLoad() const {
-		return (int32)(atomic_get64(reinterpret_cast<int64 volatile*>(const_cast<uint64 volatile*>(
-						   reinterpret_cast<const uint64*>(&fCombinedLoad)))) >>
+		return (int32)(atomic_get64(const_cast<int64 volatile*>(
+						   reinterpret_cast<const int64*>(&fCombinedLoad))) >>
 					   32);
 	}
 
@@ -522,12 +522,13 @@ inline void CoreEntry::UnlockRunQueue() {
 
 inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 	SCHEDULER_ENTER_FUNCTION();
-	atomic_add64(reinterpret_cast<int64 volatile*>(reinterpret_cast<uint64 volatile*>(&fActiveTime)), (int64)((uint64))activeTime);
+	atomic_add64(reinterpret_cast<int64 volatile*>(&fActiveTime),
+				 (int64)activeTime);
 }
 
 inline bigtime_t CoreEntry::GetActiveTime() const {
-	return (bigtime_t)atomic_get64(reinterpret_cast<int64 volatile*>(const_cast<uint64 volatile*>(
-		reinterpret_cast<const uint64*>(&fActiveTime))));
+	return (bigtime_t)atomic_get64(const_cast<int64 volatile*>(
+		reinterpret_cast<const int64*>(&fActiveTime)));
 }
 
 inline int32 CoreEntry::GetLoad() const { return LoadAcquire(fLoad); }
@@ -543,8 +544,9 @@ inline void CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad,
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = (int64)atomic_add64(reinterpret_cast<int64 volatile*>(
-		reinterpret_cast<uint64 volatile*>(&fCombinedLoad)), (int64)((uint64))((int64)load << 32));
+	int64 oldCombined = atomic_add64(
+		reinterpret_cast<int64 volatile*>(&fCombinedLoad),
+		(int64)load << 32);
 	if ((uint32)oldCombined != epoch)
 		AddRelease(fLoad, load);
 
@@ -558,8 +560,9 @@ inline uint32 CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now) {
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = (int64)atomic_add64(reinterpret_cast<int64 volatile*>(
-		reinterpret_cast<uint64 volatile*>(&fCombinedLoad)), (int64)((uint64))((int64)(-load) << 32));
+	int64 oldCombined = atomic_add64(
+		reinterpret_cast<int64 volatile*>(&fCombinedLoad),
+		(int64)(-load) << 32);
 	if (force) {
 		AddRelease(fLoad, -load);
 
@@ -578,8 +581,9 @@ inline void CoreEntry::ChangeLoad(int32 delta, bigtime_t now) {
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 
 	if (delta != 0) {
-		atomic_add64(reinterpret_cast<int64 volatile*>(
-			reinterpret_cast<uint64 volatile*>(&fCombinedLoad)), (int64)((uint64))((int64)delta << 32));
+		atomic_add64(
+			reinterpret_cast<int64 volatile*>(&fCombinedLoad),
+			(int64)delta << 32);
 		AddRelease(fLoad, delta);
 	}
 
@@ -595,8 +599,7 @@ inline void PackageEntry::CoreGoesIdle(CoreEntry* core) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	WriteSpinLocker coreLocker(fCoreLock);
-	native_cpu_mask_t oldMask = cpu_mask_or_atomic(
-		&fIdleCoreMask, (native_cpu_mask_t)1 << core->PackageIndex());
+	native_cpu_mask_t oldMask = cpu_mask_or_atomic(&fIdleCoreMask, (native_cpu_mask_t)1 << core->PackageIndex());
 	AddRelease(fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
@@ -646,7 +649,7 @@ inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 	if (oldMask == 0 && fNodeID < 64) {
 		atomic_or64(
 			reinterpret_cast<int64 volatile*>(&gIdleNodeMask),
-			(int64)(1ULL << fNodeID));
+			(int64)1 << fNodeID);
 	}
 }
 
@@ -658,7 +661,7 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 	if (package->NodeIndex() < 0 || package->NodeIndex() >= kMaxPackagesPerNode)
 		return;
 
-	// same fix - use cpu_mask_and_atomic for 32-bit safety.
+	// same fix - use scheduler_atomic_and for 32-bit safety.
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << package->NodeIndex();
 	native_cpu_mask_t oldMask =
 		cpu_mask_and_atomic(&fIdlePackageMask, ~clearBit);
@@ -690,8 +693,7 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 			const int kMaxWakeupRetries = 64;
 			int wakeupRetries = 0;
 			while (true) {
-				nodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(
-					reinterpret_cast<uint64 volatile*>(&gIdleNodeMask)));
+				nodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask));
 				if (!(nodeMask & nodeBit))
 					break;	// already cleared by a concurrent PackageWakesUp
 
@@ -702,8 +704,9 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 					break;
 				}
 
-				if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(
-						reinterpret_cast<uint64 volatile*>(&gIdleNodeMask)), (int64)(nodeMask & ~nodeBit), (int64)(nodeMask)) == nodeMask) {
+				if (atomic_test_and_set64(
+						reinterpret_cast<int64 volatile*>(&gIdleNodeMask),
+						(int64)(nodeMask & ~nodeBit), (int64)nodeMask) == (int64)nodeMask) {
 					// Successfully cleared. Re-check for safety to catch the
 					// race where a package went idle between our last check
 					// and the CAS.
@@ -725,16 +728,15 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 
 inline native_cpu_mask_t SchedulerNode::IdlePackageMask() const {
 	SCHEDULER_ENTER_FUNCTION();
-	// use cpu_mask_get_atomic for 32-bit correctness.
-	return cpu_mask_get_atomic(
-		const_cast<native_cpu_mask_t*>(&fIdlePackageMask));
+	// use scheduler_atomic_get for 32-bit correctness.
+	return cpu_mask_get_atomic(&fIdlePackageMask);
 }
 
 // Note: AddCPU calls fPackage->AddIdleCore(this) which acquires
 // fCoreLock (write). CoreGoesIdle calls PackageEntry::CoreGoesIdle, which
 // now also acquires fCoreLock (write) for explicit serialization. This
 // ensures package-level state transitions are atomic even when triggered
-// outside of the RCU-synchronized global update path.
+// outside of the global InterruptsBigSchedulerLocker path.
 inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 	if (gSingleCore)
 		return;
@@ -746,7 +748,7 @@ inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 	// barrier between atomic-add(fIdleCPUCount) and atomic-get(fCPUCount),
 	// the CPU could observe fCPUCount before fIdleCPUCount increment is
 	// globally visible, causing a spurious PackageGoesIdle call.
-	int32 newIdleCount = atomic_add(&fIdleCPUCount, 1) + 1;
+	int32 newIdleCount = atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), 1) + 1;
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
 	if (cpuCount > 0 && newIdleCount >= cpuCount)
@@ -768,7 +770,7 @@ inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
-	if (atomic_add(&fIdleCPUCount, -1) == cpuCount)
+	if (atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 
