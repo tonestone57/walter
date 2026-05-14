@@ -81,3 +81,29 @@ While the 2025 Audit implementation is highly optimized, the following areas off
 
 ### 5.3 Lockless Load Averaging
 - Converting the global load average spinlock to a wait-free atomic RMW loop would reduce global kernel jitter during periodic maintenance tasks.
+
+---
+
+## 6. Optimization Analysis: Architecture and Impact
+
+### 6.1 Architecture Independence of Lock-Free Run Queues
+Lock-free run queues are **conceptually architecture-independent** but **implementation-sensitive**.
+
+- **Abstraction Layer:** Haiku's kernel already provides an atomic abstraction layer (`util/atomic.h`) that maps to architecture-specific instructions (CAS on x86, LL/SC on ARM).
+- **The ABA Problem:** Most sophisticated lock-free queues require Double-Word CAS (DWCAS) to prevent the ABA problem. While supported on modern x86_64 and ARMv8, older or more niche architectures might lack native support, requiring slower software-based versioning or hazard pointers.
+- **Memory Barriers:** On weakly-ordered architectures (ARM, RISC-V), lock-free code requires explicit and precise memory fences (`memory_order`). Incorrect fencing leads to subtle, non-deterministic bugs that don't appear on x86.
+- **Verdict:** They can be made portable across Haiku's supported targets, but the implementation must be rigorously tested on weak memory models.
+
+### 6.2 Ranking Improvements by Impact
+
+| Improvement | Primary Benefit | Impact Scale | Complexity |
+| :--- | :--- | :--- | :--- |
+| **RCU for Topology** | Throughput (Hot Path) | **High** | Medium |
+| **EEVDF Algorithm** | Latency Consistency (QoS) | **High** | High |
+| **Adaptive Spinlocks** | Power/Sibling Efficiency | **Medium** | Low |
+| **Lock-Free Queues** | Scaling (>64 Cores) | **Medium/High** | Very High |
+| **Wait-Free Load Avg** | Global Jitter Reduction | **Low** | Low |
+
+#### **The "Biggest Gain" Winner:**
+1.  **RCU for Topology & Modes:** This gives the biggest **throughput** gain. Currently, every CPU must acquire a read-lock on topology and mode structures during every `reschedule()`. Eliminating this lock-trip entirely removes a significant amount of cache-line bouncing and "bus-lock" overhead in the kernel's most frequent path.
+2.  **EEVDF:** This gives the biggest **user-perceived responsiveness** gain. For a media-focused OS like Haiku, EEVDF's ability to provide deterministic latency for audio threads without "gaming" the priority system is a transformative upgrade.
