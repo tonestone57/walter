@@ -257,7 +257,7 @@ choose_small_task_core(CPUEntry* cpu)
 			int casRetries = 0;
 			const int kMaxCASRetries = 16;
 			while (true) {
-				CoreEntry* currentE = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+				CoreEntry* currentE = atomic_pointer_get<CoreEntry>(
 					&sSmallTaskCore[nodeID]);
 				if (currentE != NULL && currentE->Type() == gMinCoreType
 						&& currentE->GetScore() < kHighLoad) {
@@ -270,7 +270,7 @@ choose_small_task_core(CPUEntry* cpu)
 				}
 
 				if (++casRetries >= kMaxCASRetries) {
-					CoreEntry* latest = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+					CoreEntry* latest = atomic_pointer_get<CoreEntry>(
 						&sSmallTaskCore[nodeID]);
 					return (latest != NULL) ? latest : eCore;
 				}
@@ -338,7 +338,7 @@ choose_small_task_core(CPUEntry* cpu)
 		int casRetries = 0;
 		const int kMaxCASRetries = 16;
 		while (true) {
-			CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+			CoreEntry* current = atomic_pointer_get<CoreEntry>(
 				&sSmallTaskCore[nodeID]);
 			if (current != NULL && current->GetScore() < kHighLoad)
 				return current;
@@ -350,7 +350,7 @@ choose_small_task_core(CPUEntry* cpu)
 
 			if (++casRetries >= kMaxCASRetries) {
 				// Give up; return best known candidate to avoid spinning.
-				CoreEntry* latest = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+				CoreEntry* latest = atomic_pointer_get<CoreEntry>(
 					&sSmallTaskCore[nodeID]);
 				return (latest != NULL) ? latest : core;
 			}
@@ -369,7 +369,8 @@ choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL)
 
 	if (package == NULL) {
 		// No partially idle packages. Check for any idle package using the mask.
-		uint64 idleNodeMask = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&gIdleNodeMask)));
+		uint64 idleNodeMask = scheduler_atomic_get64(
+			reinterpret_cast<uint64 volatile*>(&gIdleNodeMask));
 		int scannedCount = 0;
 		while (idleNodeMask != 0) {
 			if (++scannedCount > kMaxCPUsToScan)

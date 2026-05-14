@@ -67,7 +67,7 @@ _LoadavgUpdate(void *data, int iteration)
 	// If sub-second load visibility is required in the future, the daemon
 	// period must be reduced and sCExp recalibrated accordingly.
 	// Optimization: Use global atomic counter instead of O(N) core scan.
-	int32 threadCount = atomic_get(const_cast<int32 volatile*>(&gTotalRunnableThreads));
+	int32 threadCount = LoadAcquire(gTotalRunnableThreads);
 	if (threadCount < 0)
 		threadCount = 0;
 

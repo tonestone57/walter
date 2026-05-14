@@ -145,12 +145,12 @@ public:
 						uint32			GetRandom();
 
 	inline				int32			ThreadCount() const
-											{ return atomic_get(const_cast<int32 volatile*>(&fThreadCount)); }
+											{ return LoadAcquire(fThreadCount); }
 
 						bool			SetReschedulePending()
-											{ return atomic_set(reinterpret_cast<int32 volatile*>(&fReschedulePending), 1) == 0; }
+											{ return (int32)atomic_set(reinterpret_cast<int32 volatile*>(&fReschedulePending), 1) == 0; }
 						void			ClearReschedulePending()
-											{ atomic_set(reinterpret_cast<int32 volatile*>(&fReschedulePending), 0); }
+											{ StoreRelease(fReschedulePending, 0); }
 
 	static inline		CPUEntry*		GetCPU(int32 cpu);
 
@@ -220,7 +220,7 @@ public:
 	inline				int32			PackageIndex() const
 											{ return fPackageIndex; }
 	inline				int32			CPUCount() const
-											{ return atomic_get(const_cast<int32 volatile*>(&fCPUCount)); }
+											{ return LoadAcquire(fCPUCount); }
 	inline				const CPUSet&	CPUMask() const
 											{ return fCPUSet; }
 
@@ -236,20 +236,20 @@ public:
 	inline				CPUPriorityHeap*	CPUHeap();
 
 	inline				int32			ThreadCount() const
-											{ return atomic_get(const_cast<int32 volatile*>(&fTotalThreadCount)); }
+											{ return LoadAcquire(fTotalThreadCount); }
 	inline				void			IncrementTotalThreadCount()
-											{ atomic_add(reinterpret_cast<int32 volatile*>(&fTotalThreadCount), 1); }
+											{ AddRelease(fTotalThreadCount, 1); }
 	inline				void			DecrementTotalThreadCount()
-											{ atomic_add(reinterpret_cast<int32 volatile*>(&fTotalThreadCount), -1); }
+											{ AddRelease(fTotalThreadCount, -1); }
 
 	inline				int32			DisplayThreadCount() const
-											{ return atomic_get(const_cast<int32 volatile*>(&fDisplayThreadCount)); }
+											{ return LoadAcquire(fDisplayThreadCount); }
 	inline				void			IncrementDisplayThreadCount()
-											{ atomic_add(reinterpret_cast<int32 volatile*>(&fDisplayThreadCount), 1); }
+											{ AddRelease(fDisplayThreadCount, 1); }
 	inline				void			DecrementDisplayThreadCount()
-											{ atomic_add(reinterpret_cast<int32 volatile*>(&fDisplayThreadCount), -1); }
+											{ AddRelease(fDisplayThreadCount, -1); }
 	inline				int32			CoreRunQueueThreadCount() const
-											{ return atomic_get(const_cast<int32 volatile*>(&fThreadCount)); }
+											{ return LoadAcquire(fThreadCount); }
 
 	inline				void			LockRunQueue();
 	inline				bool			TryLockRunQueue();
@@ -287,9 +287,9 @@ public:
 	inline				uint32			ScoreFactor() const { return fScoreFactor; }
 						bigtime_t		GetMinVirtualRuntime() const;
 	inline				uint32			LoadMeasurementEpoch() const
-											{ return (uint32)atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fCombinedLoad))); }
+											{ return (uint32)scheduler_atomic_get64(const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fCombinedLoad))); }
 	inline				int32			CurrentLoad() const
-											{ return (int32)(atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fCombinedLoad))) >> 32); }
+											{ return (int32)(scheduler_atomic_get64(const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fCombinedLoad))) >> 32); }
 
 	inline				void			AddLoad(int32 load, uint32 epoch,
 											bool updateLoad, bigtime_t now = 0);
@@ -409,7 +409,7 @@ public:
 						CoreEntry*			GetIdleCorePacking(CPUEntry* cpu,
 												const CPUSet* mask = NULL) const;
 	inline				native_cpu_mask_t	IdleCoreMask() const;
-	inline				int32				IdleCoreCount() const { return fIdleCoreCount; }
+	inline				int32				IdleCoreCount() const { return LoadAcquire(fIdleCoreCount); }
 	inline				CoreEntry*			GetCore(int32 index) const;
 	inline				SchedulerNode*		Node() const { return fNode; }
 	inline				int32				NodeIndex() const { return fNodeIndex; }
@@ -540,7 +540,7 @@ CPUEntry::GetCPU(int32 cpu)
 inline int32
 CPUEntry::GetLoad() const
 {
-	int32 load = atomic_get(const_cast<int32 volatile*>(&fLoad));
+	int32 load = LoadAcquire(fLoad);
 
 	// Penalize SMT siblings to prefer physical cores
 	CoreEntry* core = atomic_pointer_get<CoreEntry>(
@@ -623,21 +623,23 @@ inline void
 CoreEntry::IncreaseActiveTime(bigtime_t activeTime)
 {
 	SCHEDULER_ENTER_FUNCTION();
-	atomic_add64(reinterpret_cast<int64 volatile*>(&fActiveTime), activeTime);
+	scheduler_atomic_add64(reinterpret_cast<uint64 volatile*>(&fActiveTime),
+		(uint64)activeTime);
 }
 
 
 inline bigtime_t
 CoreEntry::GetActiveTime() const
 {
-	return atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fActiveTime)));
+	return (bigtime_t)scheduler_atomic_get64(
+		const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fActiveTime)));
 }
 
 
 inline int32
 CoreEntry::GetLoad() const
 {
-	return atomic_get(const_cast<int32 volatile*>(&fLoad));
+	return LoadAcquire(fLoad);
 }
 
 
@@ -656,9 +658,11 @@ CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad, bigtime_t now)
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = atomic_add64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), (int64)load << 32);
+	int64 oldCombined = (int64)scheduler_atomic_add64(
+		reinterpret_cast<uint64 volatile*>(&fCombinedLoad),
+		(uint64)((int64)load << 32));
 	if ((uint32)oldCombined != epoch)
-		atomic_add(reinterpret_cast<int32 volatile*>(&fLoad), load);
+		AddRelease(fLoad, load);
 
 	if (updateLoad)
 		_UpdateLoad(true, now);
@@ -673,9 +677,11 @@ CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now)
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = atomic_add64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), (int64)(-load) << 32);
+	int64 oldCombined = (int64)scheduler_atomic_add64(
+		reinterpret_cast<uint64 volatile*>(&fCombinedLoad),
+		(uint64)((int64)(-load) << 32));
 	if (force) {
-		atomic_add(reinterpret_cast<int32 volatile*>(&fLoad), -load);
+		AddRelease(fLoad, -load);
 
 		_UpdateLoad(true, now);
 	}
@@ -695,8 +701,10 @@ CoreEntry::ChangeLoad(int32 delta, bigtime_t now)
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 
 	if (delta != 0) {
-		atomic_add64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), (int64)delta << 32);
-		atomic_add(reinterpret_cast<int32 volatile*>(&fLoad), delta);
+		scheduler_atomic_add64(
+			reinterpret_cast<uint64 volatile*>(&fCombinedLoad),
+			(uint64)((int64)delta << 32));
+		AddRelease(fLoad, delta);
 	}
 
 	_UpdateLoad(false, now);
@@ -872,9 +880,9 @@ CoreEntry::CPUGoesIdle(CPUEntry* cpu)
 	// barrier between atomic_add(fIdleCPUCount) and atomic_get(fCPUCount),
 	// the CPU could observe fCPUCount before fIdleCPUCount increment is
 	// globally visible, causing a spurious PackageGoesIdle call.
-	int32 newIdleCount = atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), 1) + 1;
+	int32 newIdleCount = (int32)atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), 1) + 1;
 	memory_read_barrier();
-	int32 cpuCount = atomic_get(const_cast<int32 volatile*>(&fCPUCount));
+	int32 cpuCount = LoadAcquire(fCPUCount);
 	if (cpuCount > 0 && newIdleCount >= cpuCount)
 		fPackage->CoreGoesIdle(this);
 }
@@ -896,8 +904,8 @@ CoreEntry::CPUWakesUp(CPUEntry* cpu)
 	// fIdleCPUCount; by inserting the barrier we ensure we see the latest
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();
-	int32 cpuCount = atomic_get(const_cast<int32 volatile*>(&fCPUCount));
-	if (atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1) == cpuCount)
+	int32 cpuCount = LoadAcquire(fCPUCount);
+	if ((int32)atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 
@@ -963,7 +971,7 @@ PackageEntry::GetLeastIdlePackage()
 			// callers dereference Package()->Node()->ID() on the result.
 			if (current->fNode == NULL)
 				continue;
-			int32 count = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&current->fIdleCoreCount)));
+			int32 count = LoadAcquire(current->fIdleCoreCount);
 			if (count != 0 && (package == NULL || count < bestIdleCount)) {
 				package = current;
 				bestIdleCount = count;
@@ -1014,7 +1022,8 @@ CoreEntry::HasHighPriorityThread() const
 	// the next reschedule corrects it - acceptable for this hint.
 	const uint32* bitmap = fRunQueue.GetBitmap();
 	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = (uint32)atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&bitmap[i])));
+		uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
+			const_cast<uint32*>(&bitmap[i])));
 		if (i == ThreadRunQueue::kBitmapSize - 1)
 			val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 		if (val != 0) {

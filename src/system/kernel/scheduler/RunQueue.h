@@ -73,7 +73,7 @@ public:
 
 	inline	bool		IsEmpty() const
 	{
-		return atomic_get(const_cast<int32 volatile*>(&fTotalCount)) == 0;
+		return LoadAcquire(fTotalCount) == 0;
 	}
 
 	class ConstIterator {
@@ -112,7 +112,7 @@ public:
 
 	inline	int32		Count() const
 	{
-		return atomic_get(const_cast<int32 volatile*>(&fTotalCount));
+		return LoadAcquire(fTotalCount);
 	}
 
 	inline	Element*	GetHead(unsigned int priority) const;
@@ -338,7 +338,8 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&fBitmap[i])));
+			uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
+				const_cast<uint32*>(&fBitmap[i])));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
 				// Issue 61 fix: guard MaxPriority % 32 == 31.
@@ -388,9 +389,9 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	// Issue 10/24 fix: capture isEmpty before the bitmap update.
 	// Since we hold the run-queue spinlock, this check is atomic
 	// with the subsequent insertion.
-	bool isEmpty = (atomic_get(const_cast<int32 volatile*>(&fTotalCount)) == 0);
+	bool isEmpty = (LoadAcquire(fTotalCount) == 0);
 
-	atomic_add(reinterpret_cast<int32 volatile*>(&fTotalCount), 1);
+	AddRelease(fTotalCount, 1);
 
 #ifdef DEBUG_SCHEDULER
 	atomic_add(reinterpret_cast<int32 volatile*>(&fDebugEnqueueCount), 1);
@@ -410,7 +411,8 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		atomic_pointer_set<Element>(&fTails[priority], element);
 		atomic_pointer_set<Element>(&fHeads[priority], element);
 		memory_write_barrier();
-		atomic_or(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]), (1UL << (priority % 32)));
+		atomic_or(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
+			(int32)(1UL << (priority % 32)));
 	}
 
 	// Issue 46 fix: read fBest once and validate its bucket before reading
@@ -461,9 +463,9 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	// For priority > bestPriority the new element is unconditionally better.
 	// For priority < bestPriority the new element cannot be fBest.
 	// This logic is intentional and correct for all three cases.
-	bool isEmpty = (atomic_get(const_cast<int32 volatile*>(&fTotalCount)) == 0);
+	bool isEmpty = (LoadAcquire(fTotalCount) == 0);
 
-	atomic_add(reinterpret_cast<int32 volatile*>(&fTotalCount), 1);
+	AddRelease(fTotalCount, 1);
 
 #ifdef DEBUG_SCHEDULER
 	atomic_add(reinterpret_cast<int32 volatile*>(&fDebugEnqueueCount), 1);
@@ -483,7 +485,8 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		atomic_pointer_set<Element>(&fHeads[priority], element);
 		atomic_pointer_set<Element>(&fTails[priority], element);
 		memory_write_barrier();
-		atomic_or(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]), (1UL << (priority % 32)));
+		atomic_or(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
+			(int32)(1UL << (priority % 32)));
 	}
 
 	// Issue 46 fix: same snapshot-based fBest update as PushFront.
@@ -537,11 +540,12 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 			&& atomic_pointer_get<Element>(&fTails[priority]) != NULL));
 
 	if (atomic_pointer_get<Element>(&fHeads[priority]) == NULL) {
-		atomic_and(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]), ~(1UL << (priority % 32)));
+		atomic_and(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
+			(int32)~(1UL << (priority % 32)));
 		memory_write_barrier();
 	}
 
-	atomic_add(reinterpret_cast<int32 volatile*>(&fTotalCount), -1);
+	SubAcquireRelease(fTotalCount, 1);
 
 	Traits::SetInRunQueue(element, false);
 
@@ -638,7 +642,8 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	Element* globalBest = NULL;
 
 	for (int i = kBitmapSize - 1; i >= 0 && levelsSearched < kDeadlineLookaheadLevels; i--) {
-		uint32 val = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&fBitmap[i])));
+		uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
+			const_cast<uint32*>(&fBitmap[i])));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
 				// Issue 61 fix: guard MaxPriority % 32 == 31.
@@ -683,9 +688,10 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	// levels without finding anything (shouldn't happen in practice but
 	// possible when kDeadlineLookaheadLevels < total occupied levels),
 	// do a full scan to guarantee a non-NULL result from a non-empty queue.
-	if (globalBest == NULL && atomic_get(const_cast<int32 volatile*>(&fTotalCount)) > 0) {
+	if (globalBest == NULL && LoadAcquire(fTotalCount) > 0) {
 		for (int i = kBitmapSize - 1; i >= 0; i--) {
-			uint32 val = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&fBitmap[i])));
+			uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
+				const_cast<uint32*>(&fBitmap[i])));
 			if (i == kBitmapSize - 1 && (MaxPriority % 32) != 31)
 				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 			if (val == 0) continue;
@@ -724,7 +730,8 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare, const Predicate& predica
 	SCHEDULER_ENTER_FUNCTION();
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&fBitmap[i])));
+		uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
+			const_cast<uint32*>(&fBitmap[i])));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
 				// Issue 61 fix: guard MaxPriority % 32 == 31.
@@ -787,7 +794,8 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 		if (totalBudget <= 0)
 			return NULL;
 
-		uint32 val = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&fBitmap[i])));
+		uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
+			const_cast<uint32*>(&fBitmap[i])));
 
 		if (i == kBitmapSize - 1) {
 			// Issue 61 fix: guard MaxPriority % 32 == 31.

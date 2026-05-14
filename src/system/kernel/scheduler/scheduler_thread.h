@@ -120,12 +120,14 @@ public:
 
 	SCHEDULER_INLINE	bigtime_t	WentSleep() const
 	{
-		return atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fWentSleep)));
+		return (bigtime_t)scheduler_atomic_get64(
+			const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fWentSleep)));
 	}
 
 	SCHEDULER_INLINE	bigtime_t	WentSleepActive() const
 	{
-		return atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fWentSleepActive)));
+		return (bigtime_t)scheduler_atomic_get64(
+			const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fWentSleepActive)));
 	}
 
 	// PutBack() and Enqueue() accept an optional 'now' timestamp for
@@ -150,12 +152,14 @@ public:
 
 	SCHEDULER_INLINE	bigtime_t	GetVirtualRuntime() const
 	{
-		return atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&fVirtualRuntime)));
+		return (bigtime_t)scheduler_atomic_get64(
+			const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fVirtualRuntime)));
 	}
 
 	SCHEDULER_INLINE	void		SetQuantum(bigtime_t quantum)
 	{
-		atomic_set64(reinterpret_cast<int64 volatile*>(&fBaseQuantum), quantum);
+		scheduler_atomic_set64(reinterpret_cast<uint64 volatile*>(&fBaseQuantum),
+			(uint64)quantum);
 	}
 
 	SCHEDULER_INLINE	bool		IsEnqueued() const	{ return fEnqueued; }
@@ -880,8 +884,9 @@ ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 			break;
 
 		// Optimization: Reuse the value returned by the CAS if it fails
-		bigtime_t old = atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&fVirtualRuntime),
-			next, vRuntime);
+		bigtime_t old = (bigtime_t)scheduler_atomic_test_and_set64(
+			reinterpret_cast<uint64 volatile*>(&fVirtualRuntime),
+			(uint64)next, (uint64)vRuntime);
 		if (old == vRuntime)
 			break;
 		vRuntime = old;
@@ -904,8 +909,10 @@ ThreadData::UpdateActivity(bigtime_t active, bigtime_t now)
 	if (!gTrackCoreLoad)
 		return;
 
-	atomic_add64(reinterpret_cast<int64 volatile*>(&fMeasureAvailableTime), active);
-	atomic_add64(reinterpret_cast<int64 volatile*>(&fMeasureAvailableActiveTime), active);
+	scheduler_atomic_add64(reinterpret_cast<uint64 volatile*>(&fMeasureAvailableTime),
+		(uint64)active);
+	scheduler_atomic_add64(reinterpret_cast<uint64 volatile*>(&fMeasureAvailableActiveTime),
+		(uint64)active);
 }
 
 

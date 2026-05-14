@@ -174,7 +174,8 @@ choose_core(const ThreadData* threadData, const CPUSet& mask, bigtime_t now)
 	CoreEntry* core = NULL;
 
 	// Thread Coloring: Search for a core of the preferred type first
-	uint64 idleNodeMask = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&gIdleNodeMask)));
+	uint64 idleNodeMask = scheduler_atomic_get64(
+		reinterpret_cast<uint64 volatile*>(&gIdleNodeMask));
 
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
