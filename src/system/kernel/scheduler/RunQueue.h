@@ -1,148 +1,142 @@
-// AUDIT FIXES: issues 1, 5, 13, 22, 46, 61, 90
 /*
  * Copyright 2013 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  * Audit fixes applied 2025.
  *
  * Authors:
- *		Paweł Dziepak, pdziepak@quarnos.org
+ *      Paweł Dziepak, pdziepak@quarnos.org
  */
 #ifndef RUN_QUEUE_H
 #define RUN_QUEUE_H
-
 
 #include <util/BitUtils.h>
 #include <util/atomic.h>
 
 #include "scheduler_profiler.h"
 
-
-template<typename Element>
+template <typename Element>
 struct RunQueueLink {
-					RunQueueLink();
+	RunQueueLink();
 
-	Element*		fPrevious;
-	Element*		fNext;
-	unsigned int	fPriority;
+	Element* fPrevious;
+	Element* fNext;
+	unsigned int fPriority;
 } __attribute__((aligned(8)));
 
-template<typename Element>
+template <typename Element>
 class RunQueueLinkImpl {
-public:
-	inline	RunQueueLink<Element>*	GetRunQueueLink();
+   public:
+	inline RunQueueLink<Element>* GetRunQueueLink();
 
-private:
-			RunQueueLink<Element>	fRunQueueLink;
+   private:
+	RunQueueLink<Element> fRunQueueLink;
 };
 
-template<typename Element>
+template <typename Element>
 class RunQueueStandardGetLink {
-private:
+   private:
 	typedef RunQueueLink<Element> Link;
 
-public:
-	inline	Link*		operator()(Element* element) const;
+   public:
+	inline Link* operator()(Element* element) const;
 };
 
-template<typename Element, RunQueueLink<Element> Element::*LinkMember>
+template <typename Element, RunQueueLink<Element> Element::*LinkMember>
 class RunQueueMemberGetLink {
-private:
+   private:
 	typedef RunQueueLink<Element> Link;
 
-public:
-	inline	Link*		operator()(Element* element) const;
+   public:
+	inline Link* operator()(Element* element) const;
 };
 
 namespace Scheduler {
-	template<typename Element>
-	struct RunQueueTraits {
-		static inline void SetInRunQueue(Element* element, bool inQueue) {}
-	};
-}
+template <typename Element>
+struct RunQueueTraits {
+	static inline void SetInRunQueue(Element* element, bool inQueue) {}
+};
+}  // namespace Scheduler
 
-#define RUN_QUEUE_TEMPLATE_LIST	\
-	template<typename Element, unsigned int MaxPriority, typename Compare, typename GetLink>
-#define RUN_QUEUE_CLASS_NAME	RunQueue<Element, MaxPriority, Compare, GetLink>
+#define RUN_QUEUE_TEMPLATE_LIST                                             \
+	template <typename Element, unsigned int MaxPriority, typename Compare, \
+			  typename GetLink>
+#define RUN_QUEUE_CLASS_NAME RunQueue<Element, MaxPriority, Compare, GetLink>
 
-template<typename Element, unsigned int MaxPriority, typename Compare,
-	typename GetLink = RunQueueStandardGetLink<Element> >
+template <typename Element, unsigned int MaxPriority, typename Compare,
+		  typename GetLink = RunQueueStandardGetLink<Element> >
 class RunQueue {
 	typedef Scheduler::RunQueueTraits<Element> Traits;
-public:
+
+   public:
 	static const int kBitmapSize = (MaxPriority + 32) / 32;
 
-	inline	bool		IsEmpty() const
-	{
-		return LoadAcquire(fTotalCount) == 0;
-	}
+	inline bool IsEmpty() const { return LoadAcquire(fTotalCount) == 0; }
 
 	class ConstIterator {
-	public:
-								ConstIterator();
-								ConstIterator(const RunQueue<Element,
-										MaxPriority, Compare, GetLink>* list);
+	   public:
+		ConstIterator();
+		ConstIterator(
+			const RunQueue<Element, MaxPriority, Compare, GetLink>* list);
 
-		inline	ConstIterator&	operator=(const ConstIterator& other);
+		inline ConstIterator& operator=(const ConstIterator& other);
 
-				bool			HasNext() const;
-				Element*		Next();
+		bool HasNext() const;
+		Element* Next();
 
-				void			Rewind();
+		void Rewind();
 
-	private:
-		inline	void			_FindNextPriority();
+	   private:
+		inline void _FindNextPriority();
 
-				const RUN_QUEUE_CLASS_NAME*	fList;
-				unsigned int	fPriority;
-				Element*		fNext;
+		const RUN_QUEUE_CLASS_NAME* fList;
+		unsigned int fPriority;
+		Element* fNext;
 
-		static	GetLink			sGetLink;
+		static GetLink sGetLink;
 	};
 
-						RunQueue();
+	RunQueue();
 
-	inline	status_t	GetInitStatus();
+	inline status_t GetInitStatus();
 
-	Element*			PeekMaximum() const;
+	Element* PeekMaximum() const;
 
-	inline	void		PushFront(Element* element, unsigned int priority);
-	inline	void		PushBack(Element* element, unsigned int priority);
+	inline void PushFront(Element* element, unsigned int priority);
+	inline void PushBack(Element* element, unsigned int priority);
 
-	inline	void		Remove(Element* element);
+	inline void Remove(Element* element);
 
-	inline	int32		Count() const
-	{
-		return LoadAcquire(fTotalCount);
-	}
+	inline int32 Count() const { return LoadAcquire(fTotalCount); }
 
-	inline	Element*	GetHead(unsigned int priority) const;
+	inline Element* GetHead(unsigned int priority) const;
 
-	inline	const uint32*	GetBitmap() const;
+	inline const uint32* GetBitmap() const;
 
-	inline	ConstIterator	GetConstIterator() const;
+	inline ConstIterator GetConstIterator() const;
 
 	/*!
 		Finds the best element in the highest priority non-empty queue.
 	*/
-	Element*	PeekBest() const;
+	Element* PeekBest() const;
 
-	template<typename Predicate>
-	Element*	PeekOption(const Predicate& predicate) const;
+	template <typename Predicate>
+	Element* PeekOption(const Predicate& predicate) const;
 
-	template<typename Compare2, typename Predicate>
-	Element*	PeekBest(const Compare2& compare, const Predicate& predicate) const;
+	template <typename Compare2, typename Predicate>
+	Element* PeekBest(const Compare2& compare,
+					  const Predicate& predicate) const;
 
-private:
-			status_t	fInitStatus;
+   private:
+	status_t fInitStatus;
 
-			uint32		fBitmap[kBitmapSize] __attribute__((aligned(8)));
+	uint32 fBitmap[kBitmapSize] __attribute__((aligned(8)));
 
-			Element*	fHeads[MaxPriority + 1] __attribute__((aligned(8)));
-			Element*	fTails[MaxPriority + 1] __attribute__((aligned(8)));
+	Element* fHeads[MaxPriority + 1] __attribute__((aligned(8)));
+	Element* fTails[MaxPriority + 1] __attribute__((aligned(8)));
 
-	mutable	Element*	fBest __attribute__((aligned(8)));
+	mutable Element* fBest __attribute__((aligned(8)));
 
-			int32		fTotalCount;
+	int32 fTotalCount;
 
 	// Prevent false sharing (hot structure)
 	char _pad0[64] __attribute__((aligned(64)));
@@ -151,68 +145,44 @@ private:
 	int32 fDebugEnqueueCount;
 #endif
 
-	static	GetLink		sGetLink;
-	static	Compare		sCompare;
+	static GetLink sGetLink;
+	static Compare sCompare;
 };
 
+template <typename Element>
+RunQueueLink<Element>::RunQueueLink() : fPrevious(NULL), fNext(NULL) {}
 
-template<typename Element>
-RunQueueLink<Element>::RunQueueLink()
-	:
-	fPrevious(NULL),
-	fNext(NULL)
-{
-}
-
-
-template<typename Element>
-RunQueueLink<Element>*
-RunQueueLinkImpl<Element>::GetRunQueueLink()
-{
+template <typename Element>
+RunQueueLink<Element>* RunQueueLinkImpl<Element>::GetRunQueueLink() {
 	return &fRunQueueLink;
 }
 
-
-template<typename Element>
-RunQueueLink<Element>*
-RunQueueStandardGetLink<Element>::operator()(Element* element) const
-{
+template <typename Element>
+RunQueueLink<Element>* RunQueueStandardGetLink<Element>::operator()(
+	Element* element) const {
 	return element->GetRunQueueLink();
 }
 
-
-template<typename Element, RunQueueLink<Element> Element::*LinkMember>
-RunQueueLink<Element>*
-RunQueueMemberGetLink<Element, LinkMember>::operator()(Element* element) const
-{
+template <typename Element, RunQueueLink<Element> Element::*LinkMember>
+RunQueueLink<Element>* RunQueueMemberGetLink<Element, LinkMember>::operator()(
+	Element* element) const {
 	return &(element->*LinkMember);
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::ConstIterator::ConstIterator()
-	:
-	fList(NULL),
-	fPriority(0),
-	fNext(NULL)
-{
-}
-
+	: fList(NULL), fPriority(0), fNext(NULL) {}
 
 RUN_QUEUE_TEMPLATE_LIST
-RUN_QUEUE_CLASS_NAME::ConstIterator::ConstIterator(const RunQueue<Element,
-		MaxPriority, Compare, GetLink>* list)
-	:
-	fList(list)
-{
+RUN_QUEUE_CLASS_NAME::ConstIterator::ConstIterator(
+	const RunQueue<Element, MaxPriority, Compare, GetLink>* list)
+	: fList(list) {
 	Rewind();
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
 typename RUN_QUEUE_CLASS_NAME::ConstIterator&
-RUN_QUEUE_CLASS_NAME::ConstIterator::operator=(const ConstIterator& other)
-{
+RUN_QUEUE_CLASS_NAME::ConstIterator::operator=(const ConstIterator& other) {
 	fList = other.fList;
 	fPriority = other.fPriority;
 	fNext = other.fNext;
@@ -220,19 +190,13 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::operator=(const ConstIterator& other)
 	return *this;
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-bool
-RUN_QUEUE_CLASS_NAME::ConstIterator::HasNext() const
-{
+bool RUN_QUEUE_CLASS_NAME::ConstIterator::HasNext() const {
 	return fNext != NULL;
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-Element*
-RUN_QUEUE_CLASS_NAME::ConstIterator::Next()
-{
+Element* RUN_QUEUE_CLASS_NAME::ConstIterator::Next() {
 	ASSERT(HasNext());
 
 	Element* current = fNext;
@@ -245,11 +209,8 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::Next()
 	return current;
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-void
-RUN_QUEUE_CLASS_NAME::ConstIterator::Rewind()
-{
+void RUN_QUEUE_CLASS_NAME::ConstIterator::Rewind() {
 	ASSERT(fList != NULL);
 
 	fPriority = MaxPriority;
@@ -258,11 +219,8 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::Rewind()
 		_FindNextPriority();
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-void
-RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
-{
+void RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority() {
 	ASSERT(fList != NULL);
 
 	// (clarification): fPriority is unsigned int.  The guard
@@ -283,9 +241,9 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 	// Highest priority we may consider is (fPriority - 1), which lives in
 	// word 'i' at bit 'topBit'.
 	int i = (int)(fPriority - 1) / 32;
-	int topBit = (int)(fPriority - 1) % 32;  // 0..31
+	int topBit = (int)(fPriority - 1) % 32;	 // 0..31
 
-	// Issue 61 fix: when topBit==31, (2ULL<<31)==0x100000000; cast to uint32
+	// Note: when topBit==31, (2ULL<<31)==0x100000000; cast to uint32
 	// gives 0x00000000, masking all valid bits including priority 31+32k.
 	uint32 val;
 	if (topBit == 31)
@@ -301,7 +259,8 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 			return;
 		}
 
-		if (i == 0) break;
+		if (i == 0)
+			break;
 		i--;
 		val = bitmap[i];
 	}
@@ -309,42 +268,29 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority()
 	fNext = NULL;
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
-	:
-	fInitStatus(B_OK),
-	fBest(NULL),
-	fTotalCount(0)
-{
+	: fInitStatus(B_OK), fBest(NULL), fTotalCount(0) {
 	memset(fBitmap, 0, sizeof(fBitmap));
 	memset(fHeads, 0, sizeof(fHeads));
 	memset(fTails, 0, sizeof(fTails));
 }
 
+RUN_QUEUE_TEMPLATE_LIST
+status_t RUN_QUEUE_CLASS_NAME::GetInitStatus() { return fInitStatus; }
 
 RUN_QUEUE_TEMPLATE_LIST
-status_t
-RUN_QUEUE_CLASS_NAME::GetInitStatus()
-{
-	return fInitStatus;
-}
-
-
-RUN_QUEUE_TEMPLATE_LIST
-Element*
-RUN_QUEUE_CLASS_NAME::PeekMaximum() const
-{
+Element* RUN_QUEUE_CLASS_NAME::PeekMaximum() const {
 	SCHEDULER_ENTER_FUNCTION();
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
-			uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
-				const_cast<uint32*>(&fBitmap[i])));
+		uint32 val =
+			(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
-				// Issue 61 fix: guard MaxPriority % 32 == 31.
+				// Note: guard MaxPriority % 32 == 31.
 				if ((MaxPriority % 32) == 31)
-					; // all bits valid, no mask needed
+					;  // all bits valid, no mask needed
 				else
 					val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 			}
@@ -368,12 +314,8 @@ RUN_QUEUE_CLASS_NAME::PeekMaximum() const
 	return NULL;
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-void
-RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
-	unsigned int priority)
-{
+void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(priority <= MaxPriority);
@@ -383,10 +325,10 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	ASSERT(elementLink->fPrevious == NULL);
 	ASSERT(elementLink->fNext == NULL);
 
-	ASSERT((fHeads[priority] == NULL && fTails[priority] == NULL)
-		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
+	ASSERT((fHeads[priority] == NULL && fTails[priority] == NULL) ||
+		   (fHeads[priority] != NULL && fTails[priority] != NULL));
 
-	// Issue 10/24 fix: capture isEmpty before the bitmap update.
+	// Note: capture isEmpty before the bitmap update.
 	// Since we hold the run-queue spinlock, this check is atomic
 	// with the subsequent insertion.
 	bool isEmpty = (LoadAcquire(fTotalCount) == 0);
@@ -394,7 +336,7 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	AddRelease(fTotalCount, 1);
 
 #ifdef DEBUG_SCHEDULER
-	atomic_add(reinterpret_cast<int32 volatile*>(&fDebugEnqueueCount), 1);
+	atomic_add(const_cast<int32 volatile*>(&fDebugEnqueueCount), 1);
 #endif
 
 	Traits::SetInRunQueue(element, true);
@@ -404,7 +346,7 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	elementLink->fPrevious = NULL;
 	if (elementLink->fNext != NULL) {
 		atomic_pointer_set<Element>(&sGetLink(elementLink->fNext)->fPrevious,
-			element);
+									element);
 		memory_write_barrier();
 		atomic_pointer_set<Element>(&fHeads[priority], element);
 	} else {
@@ -412,10 +354,10 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		atomic_pointer_set<Element>(&fHeads[priority], element);
 		memory_write_barrier();
 		atomic_or(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
-			(int32)(1UL << (priority % 32)));
+				  (int32)(1U << (priority % 32)));
 	}
 
-	// Issue 46 fix: read fBest once and validate its bucket before reading
+	// Note: read fBest once and validate its bucket before reading
 	// sGetLink(best)->fPriority, which is racy if 'best' was concurrently
 	// removed and its memory reused between the pointer-get and link-read.
 	// Since Remove is always called under the run-queue spinlock (same lock
@@ -425,10 +367,10 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 		Element* best = atomic_pointer_get<Element>(&fBest);
 		if (best != NULL) {
 			unsigned int bestPriority = sGetLink(best)->fPriority;
-			// Issue 28 fix: validate bestPriority is within bounds.
+			// Note: validate bestPriority is within bounds.
 			// Validate the bucket is non-empty before trusting bestPriority.
 			if (bestPriority > MaxPriority || fHeads[bestPriority] == NULL)
-				atomic_pointer_set<Element>(&fBest, element); // stale, replace
+				atomic_pointer_set<Element>(&fBest, element);  // stale, replace
 			else if (priority > bestPriority)
 				atomic_pointer_set<Element>(&fBest, element);
 			else if (priority == bestPriority && sCompare(element, best))
@@ -439,12 +381,8 @@ RUN_QUEUE_CLASS_NAME::PushFront(Element* element,
 	}
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-void
-RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
-	unsigned int priority)
-{
+void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(priority <= MaxPriority);
@@ -454,10 +392,10 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	ASSERT(elementLink->fPrevious == NULL);
 	ASSERT(elementLink->fNext == NULL);
 
-	ASSERT((fHeads[priority] == NULL && fTails[priority] == NULL)
-		|| (fHeads[priority] != NULL && fTails[priority] != NULL));
+	ASSERT((fHeads[priority] == NULL && fTails[priority] == NULL) ||
+		   (fHeads[priority] != NULL && fTails[priority] != NULL));
 
-	// Issue 1 / 10/24 fix: capture isEmpty before the bitmap update.
+	// Note: capture isEmpty before the bitmap update.
 	// Note: the fBest update below uses sCompare for equal-priority elements,
 	// correctly keeping the element with the earliest virtual deadline.
 	// For priority > bestPriority the new element is unconditionally better.
@@ -468,7 +406,7 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	AddRelease(fTotalCount, 1);
 
 #ifdef DEBUG_SCHEDULER
-	atomic_add(reinterpret_cast<int32 volatile*>(&fDebugEnqueueCount), 1);
+	atomic_add(const_cast<int32 volatile*>(&fDebugEnqueueCount), 1);
 #endif
 
 	Traits::SetInRunQueue(element, true);
@@ -478,7 +416,7 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	elementLink->fNext = NULL;
 	if (elementLink->fPrevious != NULL) {
 		atomic_pointer_set<Element>(&sGetLink(elementLink->fPrevious)->fNext,
-			element);
+									element);
 		memory_write_barrier();
 		atomic_pointer_set<Element>(&fTails[priority], element);
 	} else {
@@ -486,15 +424,15 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 		atomic_pointer_set<Element>(&fTails[priority], element);
 		memory_write_barrier();
 		atomic_or(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
-			(int32)(1UL << (priority % 32)));
+				  (int32)(1U << (priority % 32)));
 	}
 
-	// Issue 46 fix: same snapshot-based fBest update as PushFront.
+	// Note: same snapshot-based fBest update as PushFront.
 	{
 		Element* best = atomic_pointer_get<Element>(&fBest);
 		if (best != NULL) {
 			unsigned int bestPriority = sGetLink(best)->fPriority;
-			// Issue 28 fix: validate bestPriority is within bounds.
+			// Note: validate bestPriority is within bounds.
 			if (bestPriority > MaxPriority || fHeads[bestPriority] == NULL)
 				atomic_pointer_set<Element>(&fBest, element);
 			else if (priority > bestPriority)
@@ -507,11 +445,8 @@ RUN_QUEUE_CLASS_NAME::PushBack(Element* element,
 	}
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-void
-RUN_QUEUE_CLASS_NAME::Remove(Element* element)
-{
+void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	RunQueueLink<Element>* elementLink = sGetLink(element);
@@ -522,26 +457,26 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 
 	if (elementLink->fPrevious != NULL) {
 		atomic_pointer_set<Element>(&sGetLink(elementLink->fPrevious)->fNext,
-			elementLink->fNext);
+									elementLink->fNext);
 	} else
 		atomic_pointer_set<Element>(&fHeads[priority], elementLink->fNext);
 
 	if (elementLink->fNext != NULL) {
 		atomic_pointer_set<Element>(&sGetLink(elementLink->fNext)->fPrevious,
-			elementLink->fPrevious);
+									elementLink->fPrevious);
 	} else
 		atomic_pointer_set<Element>(&fTails[priority], elementLink->fPrevious);
 
 	memory_write_barrier();
 
-	ASSERT((atomic_pointer_get<Element>(&fHeads[priority]) == NULL
-			&& atomic_pointer_get<Element>(&fTails[priority]) == NULL)
-		|| (atomic_pointer_get<Element>(&fHeads[priority]) != NULL
-			&& atomic_pointer_get<Element>(&fTails[priority]) != NULL));
+	ASSERT((atomic_pointer_get<Element>(&fHeads[priority]) == NULL &&
+			atomic_pointer_get<Element>(&fTails[priority]) == NULL) ||
+		   (atomic_pointer_get<Element>(&fHeads[priority]) != NULL &&
+			atomic_pointer_get<Element>(&fTails[priority]) != NULL));
 
 	if (atomic_pointer_get<Element>(&fHeads[priority]) == NULL) {
 		atomic_and(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
-			(int32)~(1UL << (priority % 32)));
+				   (int32) ~(1U << (priority % 32)));
 		memory_write_barrier();
 	}
 
@@ -552,7 +487,7 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	elementLink->fPrevious = NULL;
 	elementLink->fNext = NULL;
 
-	// Issue 22 fix: read fBest ONCE. The original two-step pattern
+	// Note: read fBest ONCE. The original two-step pattern
 	// (get pointer, then separately read fPriority via sGetLink) is racy
 	// even under the run-queue lock because fBest can be written locklessly
 	// by PeekBest on other CPUs. Reading the link after a separate get
@@ -565,25 +500,22 @@ RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 		Element* best = atomic_pointer_get<Element>(&fBest);
 		if (best == element) {
 			atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
-				element);
+												 element);
 		} else if (best != NULL) {
 			// Use the single snapshot: safe because best != element so it
 			// cannot be the element we just unlinked.
 			unsigned int bestPrio = sGetLink(best)->fPriority;
-			// Issue 28 fix: validate bestPrio is within bounds.
+			// Note: validate bestPrio is within bounds.
 			if (bestPrio > MaxPriority || fHeads[bestPrio] == NULL) {
 				atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
-					best);
+													 best);
 			}
 		}
 	}
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-Element*
-RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const
-{
+Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(priority <= MaxPriority);
@@ -591,64 +523,55 @@ RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const
 		const_cast<Element* volatile*>(&fHeads[priority]));
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-const uint32*
-RUN_QUEUE_CLASS_NAME::GetBitmap() const
-{
-	return fBitmap;
-}
-
+const uint32* RUN_QUEUE_CLASS_NAME::GetBitmap() const { return fBitmap; }
 
 RUN_QUEUE_TEMPLATE_LIST
 typename RUN_QUEUE_CLASS_NAME::ConstIterator
-RUN_QUEUE_CLASS_NAME::GetConstIterator() const
-{
+RUN_QUEUE_CLASS_NAME::GetConstIterator() const {
 	return ConstIterator(this);
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-Element*
-RUN_QUEUE_CLASS_NAME::PeekBest() const
-{
+Element* RUN_QUEUE_CLASS_NAME::PeekBest() const {
 	Element* bestCandidate = atomic_pointer_get<Element>(&fBest);
 	if (bestCandidate != NULL) {
-		// Issue 1 fix: validate that fBest is still actually in a non-empty
+		// Note: validate that fBest is still actually in a non-empty
 		// priority bucket before trusting it. A priority change followed by a
 		// Remove can leave fBest pointing to an element whose bucket is empty,
 		// causing PeekBest to return a stale/dangling entry.
 		RunQueueLink<Element>* bestLink = sGetLink(bestCandidate);
 		unsigned int bestPrio = bestLink->fPriority;
 		// If the bucket is empty the pointer is stale; fall through to rescan.
-		// Issue 28 fix: validate bestPrio is within bounds.
-		if (bestPrio <= MaxPriority
-				&& atomic_pointer_get<Element>(&fHeads[bestPrio]) != NULL) {
+		// Note: validate bestPrio is within bounds.
+		if (bestPrio <= MaxPriority &&
+			atomic_pointer_get<Element>(&fHeads[bestPrio]) != NULL) {
 			return bestCandidate;
 		}
 		// Invalidate stale cache and rescan.
 		atomic_pointer_test_and_set<Element>(&fBest, (Element*)NULL,
-			bestCandidate);
+											 bestCandidate);
 	}
 
 	// search up to kDeadlineLookaheadLevels non-empty priority
 	// levels (highest first) so a lower-priority thread with an earlier virtual
 	// deadline can preempt when the top level has no advantage.  The bound
 	// keeps worst-case complexity O(kDeadlineLookaheadLevels * kSearchDepth).
-	// Issue 11 fix: PeekBest uses its own lookahead logic; PeekOption's
+	// Note: PeekBest uses its own lookahead logic; PeekOption's
 	// shared budget fix does not apply here.
 	const int kDeadlineLookaheadLevels = 3;
 	int levelsSearched = 0;
 	Element* globalBest = NULL;
 
-	for (int i = kBitmapSize - 1; i >= 0 && levelsSearched < kDeadlineLookaheadLevels; i--) {
-		uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
-			const_cast<uint32*>(&fBitmap[i])));
+	for (int i = kBitmapSize - 1;
+		 i >= 0 && levelsSearched < kDeadlineLookaheadLevels; i--) {
+		uint32 val =
+			(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
-				// Issue 61 fix: guard MaxPriority % 32 == 31.
+				// Note: guard MaxPriority % 32 == 31.
 				if ((MaxPriority % 32) == 31)
-					; // all bits valid, no mask needed
+					;  // all bits valid, no mask needed
 				else
 					val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 			}
@@ -660,12 +583,13 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 				int bit = fls(val) - 1;
 				val &= ~(1UL << bit);
 				unsigned int priority = i * 32 + bit;
-				Element* current = atomic_pointer_get<Element>(&fHeads[priority]);
+				Element* current =
+					atomic_pointer_get<Element>(&fHeads[priority]);
 				if (current == NULL)
 					continue;
 
-				// We found a non-empty priority level. Now find the best candidate
-				// strictly within this priority level.
+				// We found a non-empty priority level. Now find the best
+				// candidate strictly within this priority level.
 				const int kSearchDepth = 32;
 				Element* best = current;
 				current = sGetLink(current)->fNext;
@@ -684,34 +608,36 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 		}
 	}
 
-	// Issue 90 fix: if the queue is non-empty but lookahead exhausted all
+	// Note: if the queue is non-empty but lookahead exhausted all
 	// levels without finding anything (shouldn't happen in practice but
 	// possible when kDeadlineLookaheadLevels < total occupied levels),
 	// do a full scan to guarantee a non-NULL result from a non-empty queue.
 	if (globalBest == NULL && LoadAcquire(fTotalCount) > 0) {
 		for (int i = kBitmapSize - 1; i >= 0; i--) {
-			uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
-				const_cast<uint32*>(&fBitmap[i])));
+			uint32 val =
+				(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
 			if (i == kBitmapSize - 1 && (MaxPriority % 32) != 31)
 				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
-			if (val == 0) continue;
+			if (val == 0)
+				continue;
 			int bit = fls(val) - 1;
 			globalBest = atomic_pointer_get<Element>(&fHeads[i * 32 + bit]);
-			if (globalBest != NULL) break;
+			if (globalBest != NULL)
+				break;
 		}
 	}
 
-	// Issue 13 fix: the full rescan is authoritative (we hold the run-queue
+	// Note: the full rescan is authoritative (we hold the run-queue
 	// lock).  Use an unconditional set so a concurrent PushFront that raced
 	// and set fBest to a valid-but-inferior element is overwritten with the
 	// true best.
-	// Issue 1 fix: use atomic_pointer_test_and_set to avoid regressing quality
+	// Note: use atomic_pointer_test_and_set to avoid regressing quality
 	// if a concurrent PushFront has already set a better fBest.
 	if (globalBest != NULL) {
 		Element* best = atomic_pointer_get<Element>(&fBest);
 		while (best == NULL || sCompare(globalBest, best)) {
-			Element* was = atomic_pointer_test_and_set<Element>(&fBest,
-				globalBest, best);
+			Element* was =
+				atomic_pointer_test_and_set<Element>(&fBest, globalBest, best);
 			if (was == best)
 				break;
 			best = was;
@@ -721,22 +647,20 @@ RUN_QUEUE_CLASS_NAME::PeekBest() const
 	return globalBest;
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-template<typename Compare2, typename Predicate>
-Element*
-RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare, const Predicate& predicate) const
-{
+template <typename Compare2, typename Predicate>
+Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
+										const Predicate& predicate) const {
 	SCHEDULER_ENTER_FUNCTION();
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
-			const_cast<uint32*>(&fBitmap[i])));
+		uint32 val =
+			(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
-				// Issue 61 fix: guard MaxPriority % 32 == 31.
+				// Note: guard MaxPriority % 32 == 31.
 				if ((MaxPriority % 32) == 31)
-					; // all bits valid, no mask needed
+					;  // all bits valid, no mask needed
 				else
 					val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 			}
@@ -749,7 +673,8 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare, const Predicate& predica
 				val &= ~(1UL << bit);
 
 				unsigned int priority = i * 32 + bit;
-				Element* current = atomic_pointer_get<Element>(&fHeads[priority]);
+				Element* current =
+					atomic_pointer_get<Element>(&fHeads[priority]);
 
 				const int kSearchDepth = 32;
 				Element* best = NULL;
@@ -771,12 +696,9 @@ RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare, const Predicate& predica
 	return NULL;
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
-template<typename Predicate>
-Element*
-RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
-{
+template <typename Predicate>
+Element* RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const {
 	SCHEDULER_ENTER_FUNCTION();
 
 	// Scale search depth based on system size.
@@ -784,23 +706,23 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 	const int kNumCPUs = smp_get_num_cpus();
 	const int kMaxSearchPerLevel = 16 + (kNumCPUs >> 3);
 
-	// Issue 11 fix: Increase totalBudget to allow searching more priority
+	// Note: Increase totalBudget to allow searching more priority
 	// levels before giving up.  kMaxSearchPerLevel * 8 allows up to 8
 	// full levels or many partially-occupied levels.
 	int totalBudget = kMaxSearchPerLevel * 8;
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
-		// Issue 5 fix: check budget before scanning a new priority word.
+		// Note: check budget before scanning a new priority word.
 		if (totalBudget <= 0)
 			return NULL;
 
-		uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
-			const_cast<uint32*>(&fBitmap[i])));
+		uint32 val =
+			(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
 
 		if (i == kBitmapSize - 1) {
-			// Issue 61 fix: guard MaxPriority % 32 == 31.
+			// Note: guard MaxPriority % 32 == 31.
 			if ((MaxPriority % 32) == 31)
-				; // all bits valid, no mask needed
+				;  // all bits valid, no mask needed
 			else
 				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 		}
@@ -824,7 +746,7 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 					return current;
 
 				current = sGetLink(current)->fNext;
-				// Issue 22 fix: decrement budget here, paired with element
+				// Note: decrement budget here, paired with element
 				// visitation, so the per-level cap and budget cap are both
 				// correctly accounted for in the same decrement.
 				totalBudget--;
@@ -840,7 +762,6 @@ RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const
 	return NULL;
 }
 
-
 RUN_QUEUE_TEMPLATE_LIST
 GetLink RUN_QUEUE_CLASS_NAME::sGetLink;
 
@@ -849,6 +770,5 @@ Compare RUN_QUEUE_CLASS_NAME::sCompare;
 
 RUN_QUEUE_TEMPLATE_LIST
 GetLink RUN_QUEUE_CLASS_NAME::ConstIterator::sGetLink;
-
 
 #endif	// RUN_QUEUE_H

@@ -6,12 +6,10 @@
 #ifndef KERNEL_SCHEDULER_TRACING_H
 #define KERNEL_SCHEDULER_TRACING_H
 
-
 #include <arch/debug.h>
 #include <cpu.h>
 #include <thread.h>
 #include <tracing.h>
-
 
 #if SCHEDULER_TRACING
 
@@ -26,38 +24,30 @@ enum SchedulerTraceEntryType {
 };
 
 class SchedulerTraceEntry : public AbstractTraceEntry {
-public:
-	SchedulerTraceEntry(Thread* thread)
-		:
-		fID(thread->id)
-	{
-	}
+   public:
+	SchedulerTraceEntry(Thread* thread) : fID(thread->id) {}
 
-	thread_id ThreadID() const	{ return fID; }
+	thread_id ThreadID() const { return fID; }
 
 	virtual const char* Name() const = 0;
 	virtual uint16 EntryType() const = 0;
 
-protected:
-	thread_id			fID;
+   protected:
+	thread_id fID;
 };
 
-
 class EnqueueThread : public SchedulerTraceEntry {
-public:
-	virtual uint16 EntryType() const
-	{
+   public:
+	virtual uint16 EntryType() const {
 		return SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD;
 	}
 
 	EnqueueThread(Thread* thread, int32 effectivePriority)
-		:
-		SchedulerTraceEntry(thread),
-		fPriority(thread->priority),
-		fEffectivePriority(effectivePriority)
-	{
-		fName = alloc_tracing_buffer_strcpy(thread->name, B_OS_NAME_LENGTH,
-			false);
+		: SchedulerTraceEntry(thread),
+		  fPriority(thread->priority),
+		  fEffectivePriority(effectivePriority) {
+		fName =
+			alloc_tracing_buffer_strcpy(thread->name, B_OS_NAME_LENGTH, false);
 		Initialized();
 	}
 
@@ -65,25 +55,20 @@ public:
 
 	virtual const char* Name() const;
 
-private:
-	char*				fName;
-	int32				fPriority;
-	int32				fEffectivePriority;
+   private:
+	char* fName;
+	int32 fPriority;
+	int32 fEffectivePriority;
 };
 
-
 class RemoveThread : public SchedulerTraceEntry {
-public:
-	virtual uint16 EntryType() const
-	{
+   public:
+	virtual uint16 EntryType() const {
 		return SCHEDULER_TRACE_ENTRY_TYPE_REMOVE_THREAD;
 	}
 
 	RemoveThread(Thread* thread)
-		:
-		SchedulerTraceEntry(thread),
-		fPriority(thread->priority)
-	{
+		: SchedulerTraceEntry(thread), fPriority(thread->priority) {
 		Initialized();
 	}
 
@@ -91,29 +76,25 @@ public:
 
 	virtual const char* Name() const;
 
-private:
-	int32				fPriority;
+   private:
+	int32 fPriority;
 };
 
-
 class ScheduleThread : public SchedulerTraceEntry {
-public:
-	virtual uint16 EntryType() const
-	{
+   public:
+	virtual uint16 EntryType() const {
 		return SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD;
 	}
 
 	ScheduleThread(Thread* thread, Thread* previous)
-		:
-		SchedulerTraceEntry(thread),
-		fPreviousID(previous->id),
-		fCPU(previous->cpu->cpu_num),
-		fPriority(thread->priority),
-		fPreviousState(previous->state),
-		fPreviousWaitObjectType(previous->wait.type)
-	{
-		fName = alloc_tracing_buffer_strcpy(thread->name, B_OS_NAME_LENGTH,
-			false);
+		: SchedulerTraceEntry(thread),
+		  fPreviousID(previous->id),
+		  fCPU(previous->cpu->cpu_num),
+		  fPriority(thread->priority),
+		  fPreviousState(previous->state),
+		  fPreviousWaitObjectType(previous->wait.type) {
+		fName =
+			alloc_tracing_buffer_strcpy(thread->name, B_OS_NAME_LENGTH, false);
 
 #if SCHEDULER_TRACING >= 2
 		if (fPreviousState == B_THREAD_READY)
@@ -136,34 +117,33 @@ public:
 
 	virtual const char* Name() const;
 
-	thread_id PreviousThreadID() const		{ return fPreviousID; }
-	uint8 PreviousState() const				{ return fPreviousState; }
-	uint16 PreviousWaitObjectType() const	{ return fPreviousWaitObjectType; }
-	const void* PreviousWaitObject() const	{ return fWait.fPreviousWaitObject; }
+	thread_id PreviousThreadID() const { return fPreviousID; }
+	uint8 PreviousState() const { return fPreviousState; }
+	uint16 PreviousWaitObjectType() const { return fPreviousWaitObjectType; }
+	const void* PreviousWaitObject() const { return fWait.fPreviousWaitObject; }
 
-private:
-	char*				fName;
-	thread_id			fPreviousID;
-	int32				fCPU;
-	int32				fPriority;
-	uint16				fPreviousWaitObjectType;
-	uint8				fPreviousState;
+   private:
+	char* fName;
+	thread_id fPreviousID;
+	int32 fCPU;
+	int32 fPriority;
+	uint16 fPreviousWaitObjectType;
+	uint8 fPreviousState;
 	union {
-		const void*		fPreviousWaitObject;
-		void*			fPreviousPC;
+		const void* fPreviousWaitObject;
+		void* fPreviousPC;
 	} fWait;
 };
 
-}	// namespace SchedulerTracing
+}  // namespace SchedulerTracing
 
-#	define T(x) \
-		if (tracing_is_enabled()) { \
-			new(std::nothrow) SchedulerTracing::x; \
-		}
+#define T(x)                                    \
+	if (tracing_is_enabled()) {                 \
+		new (std::nothrow) SchedulerTracing::x; \
+	}
 #else
-#	define T(x) ;
+#define T(x) ;
 #endif
-
 
 #if SCHEDULER_TRACING
 
@@ -180,7 +160,7 @@ enum ScheduleState {
 
 int cmd_scheduler(int argc, char** argv);
 
-}
+}  // namespace SchedulerTracing
 
 #endif	// SCHEDULER_TRACING
 

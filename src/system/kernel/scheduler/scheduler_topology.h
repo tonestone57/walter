@@ -8,19 +8,14 @@
 #define KERNEL_SCHEDULER_TOPOLOGY_H
 
 #include <string.h>
-
 #include <util/Random.h>
 
 #include "scheduler_cpu.h"
 
-
 namespace Scheduler {
 
-
 template <typename Action>
-static void
-search_local_node(SchedulerNode* node, Action action)
-{
+static void search_local_node(SchedulerNode* node, Action action) {
 	if (node == NULL)
 		return;
 
@@ -83,7 +78,7 @@ search_local_node(SchedulerNode* node, Action action)
 
 	const int kMaxLocalAttempts = min_c(packagesInNode, 4 + logPackages);
 
-	// Issue 71 fix: the large-node random path has no visited bitmask,
+	// Note: the large-node random path has no visited bitmask,
 	// allowing the same package to be probed multiple times within a single
 	// call. Add a simple 64-bit bitmask for nodes with <= 64 packages (the
 	// common case) to avoid duplicate probes and wasted budget.
@@ -91,8 +86,9 @@ search_local_node(SchedulerNode* node, Action action)
 	const bool canDedup = (packagesInNode <= 64);
 
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
-		int32 index = nodeBaseIndex
-			+ (int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
+		int32 index =
+			nodeBaseIndex +
+			(int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
 		if (index >= gPackageCount)
 			continue;
 
@@ -111,24 +107,20 @@ search_local_node(SchedulerNode* node, Action action)
 	}
 }
 
-
 template <typename Action>
-static void
-search_global_random(Action action)
-{
-	// Issue 17 fix: snapshot gPackageCount once at the start of the function.
+static void search_global_random(Action action) {
+	// Note: snapshot gPackageCount once at the start of the function.
 	// This ensures consistency if a hot-plug event changes the global count
 	const int32 packageCount = gPackageCount;
 
-	// Issue 51 fix: guard packageCount == 0 before computing samplesToTake
+	// Note: guard packageCount == 0 before computing samplesToTake
 	// and entering the while loop. min_c(gRandomSamples, 0) == 0 so the
 	// loop would not execute, but the ASSERT and wordsNeeded computation
 	// below could misbehave with packageCount == 0.
 	if (packageCount <= 0)
 		return;
 
-
-	// Issue 5 fix: kStackBitmaskSize covers 4096 packages (512 bytes on the
+	// Note: kStackBitmaskSize covers 4096 packages (512 bytes on the
 	// stack).  init() enforces gPackageCount <= 4096.  Assert that the runtime
 	// value never exceeds our compile-time allocation so an accidental removal
 	// of the init() cap does not silently cause out-of-bounds writes.
@@ -173,12 +165,12 @@ search_global_random(Action action)
 	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
-	// Issue 17 fix: use snapshotted packageCount.
+	// Note: use snapshotted packageCount.
 	// zero only the words needed for packageCount instead of
 	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
 	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
-	int32 wordsNeeded = min_c((packageCount + 63) / 64,
-		(int32)(kStackBitmaskSize / 64));
+	int32 wordsNeeded =
+		min_c((packageCount + 63) / 64, (int32)(kStackBitmaskSize / 64));
 	memset(visitedBits, 0, (size_t)wordsNeeded * sizeof(uint64));
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
@@ -188,7 +180,7 @@ search_global_random(Action action)
 		// valid index i fits inside the bitmask.  The out-of-range branch
 		// is retained as a safety net in case the cap ever changes.
 		int32 word = i / 64;
-		int32 bit  = i % 64;
+		int32 bit = i % 64;
 
 		if (i < kStackBitmaskSize) {
 			if ((visitedBits[word] & (1ULL << bit)) != 0)
@@ -204,11 +196,11 @@ search_global_random(Action action)
 	}
 }
 
-
-static inline bool
-CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
-	CoreEntry*& bestCore, int32& bestLoad, CoreType type = CORE_TYPE_UNKNOWN)
-{
+static inline bool CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry,
+										   const CPUSet* mask,
+										   CoreEntry*& bestCore,
+										   int32& bestLoad,
+										   CoreType type = CORE_TYPE_UNKNOWN) {
 	CoreEntry* candidate = entry->PeekMinimumLoadCore(cpu, mask, type);
 
 	if (candidate != NULL) {
@@ -220,7 +212,7 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 		if (score <= kLowLoadThreshold) {
 			bestCore = candidate;
 			bestLoad = score;
-			return true; // callers must check this return value
+			return true;  // callers must check this return value
 		}
 
 		if (bestCore == NULL || score < bestLoad) {
@@ -229,19 +221,17 @@ CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry, const CPUSet* mask,
 		}
 	}
 
-	return false; // continue searching
+	return false;  // continue searching
 }
 
-
-static inline void
-CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
-	CoreEntry*& bestCore, int32& bestLoad, CoreType type = CORE_TYPE_UNKNOWN)
-{
+static inline void CheckMaskedPackagesMinimumLoad(
+	CPUEntry* cpu, const CPUSet& mask, CoreEntry*& bestCore, int32& bestLoad,
+	CoreType type = CORE_TYPE_UNKNOWN) {
 	const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 	const int32 cpuCount = smp_get_num_cpus();
 	PackageEntry* lastPackage = NULL;
 
-	// Issue 19 fix: the previous deduplication only caught *consecutive*
+	// Note: the previous deduplication only caught *consecutive*
 	// duplicate packages. Two CPU IDs in non-adjacent affinity mask bits
 	// can belong to the same package and be scanned twice, wasting time and
 	// skewing the minimum-load result toward that package. Use a proper
@@ -252,15 +242,16 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	// For larger systems the consecutive-duplicate check is retained as a
 	// lightweight approximation (full dedup would require heap allocation).
 	const bool useVisitedBitmask = (gPackageCount <= 128);
-	uint64 visitedPackages[2] = {0, 0};  // covers package IDs 0..127
+	uint64 visitedPackages[2] = {0, 0};	 // covers package IDs 0..127
 
-	// Issue 19 fix already present in original. Additional fix for
+	// Note: already present in original. Additional fix for
 	// gPackageCount > 128 fallback: consecutive-duplicate suppression
 	// misses non-adjacent duplicates.
-	// Issue 78 optimization: Extend bitmask to 512 packages.
+	// Optimization: Extend bitmask to 512 packages.
 	// This covers virtually all server hardware precisely.
-	const bool useExtendedBitmask = (!useVisitedBitmask && gPackageCount <= 512);
-	uint64 extendedVisited[8]; // 8 * 64 = 512 bits
+	const bool useExtendedBitmask =
+		(!useVisitedBitmask && gPackageCount <= 512);
+	uint64 extendedVisited[8];	// 8 * 64 = 512 bits
 	if (useExtendedBitmask)
 		memset(extendedVisited, 0, sizeof(extendedVisited));
 
@@ -308,8 +299,9 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 					}
 					if (!alreadyVisited) {
 						if (CheckPackageMinimumLoad(cpu, package, &mask,
-								bestCore, bestLoad, type)) {
-							return; // Short-circuit: found a core with very low load.
+													bestCore, bestLoad, type)) {
+							return;	 // Short-circuit: found a core with very
+									 // low load.
 						}
 						lastPackage = package;
 					}
@@ -319,8 +311,6 @@ CheckMaskedPackagesMinimumLoad(CPUEntry* cpu, const CPUSet& mask,
 	}
 }
 
-
-}	// namespace Scheduler
-
+}  // namespace Scheduler
 
 #endif	// KERNEL_SCHEDULER_TOPOLOGY_H

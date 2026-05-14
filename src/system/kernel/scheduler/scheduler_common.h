@@ -6,71 +6,66 @@
 #ifndef KERNEL_SCHEDULER_COMMON_H
 #define KERNEL_SCHEDULER_COMMON_H
 
-
 #include <debug.h>
 #include <kscheduler.h>
 #include <load_tracking.h>
 #include <smp.h>
 #include <thread.h>
 #include <user_debugger.h>
-#include <util/atomic.h>
 #include <util/BitUtils.h>
 #include <util/MinMaxHeap.h>
+#include <util/atomic.h>
 
-//#define TRACE_SCHEDULER
+// #define TRACE_SCHEDULER
 #ifdef TRACE_SCHEDULER
-#	define TRACE(...) dprintf_no_syslog(__VA_ARGS__)
+#define TRACE(...) dprintf_no_syslog(__VA_ARGS__)
 #else
-#	define TRACE(...) do { } while (false)
+#define TRACE(...) \
+	do {           \
+	} while (false)
 #endif
-
 
 #define SCHEDULER_INLINE inline __attribute__((always_inline))
 
-
 namespace Scheduler {
 
-inline int
-LoadAcquire(const int32 volatile& value)
-{
-	return atomic_get(const_cast<int32 volatile*>(&value));
+inline int LoadAcquire(const int32 volatile& value) {
+	int v = atomic_get(const_cast<int32 volatile*>(&value));
+	memory_read_barrier();
+	return v;
 }
 
-
-inline void
-StoreRelease(int32 volatile& value, int v)
-{
+inline void StoreRelease(int32 volatile& value, int v) {
+	memory_write_barrier();
 	atomic_set(const_cast<int32 volatile*>(&value), v);
 }
 
-
-inline void
-AddRelease(int32 volatile& value, int v)
-{
+inline void AddRelease(int32 volatile& value, int v) {
+	memory_write_barrier();
 	atomic_add(const_cast<int32 volatile*>(&value), v);
 }
 
+static inline int32 scheduler_atomic_add(int32 volatile* value,
+										 int32 addValue) {
+	return atomic_add(const_cast<int32 volatile*>(value), addValue);
+}
 
-inline void
-SubAcquireRelease(int32 volatile& value, int v)
-{
+inline void SubAcquireRelease(int32 volatile& value, int v) {
 	atomic_add(const_cast<int32 volatile*>(&value), -v);
 }
 
-}	// namespace Scheduler
+}  // namespace Scheduler
 
 #include "RunQueue.h"
 #include "scheduler_modes.h"
-
 
 namespace Scheduler {
 
 const bigtime_t kForegroundVRuntimeOffset = 5000;
 
 struct ThreadDataVRuntimeCompare {
-	template<typename ThreadData>
-	bool operator()(const ThreadData* a, const ThreadData* b) const
-	{
+	template <typename ThreadData>
+	bool operator()(const ThreadData* a, const ThreadData* b) const {
 		if (a->IsRealTime()) {
 			if (b->IsRealTime())
 				return false;
@@ -93,136 +88,74 @@ struct ThreadDataVRuntimeCompare {
 	}
 };
 
-
 struct ThreadDataOptimal {
-	template<typename ThreadData>
-	bool operator()(const ThreadData* /*thread*/) const
-	{
+	template <typename ThreadData>
+	bool operator()(const ThreadData* /*thread*/) const {
 		return true;
 	}
 };
-
 
 // Portability helpers for modern GCC and architecture independence.
 // These wrappers ensure atomic operations and bit manipulation work correctly
 // on both 32-bit and 64-bit systems.
 
 #if B_HAIKU_64_BIT
-	// 64-bit systems: supports up to 64 L3 domains per node
-	typedef uint64 native_cpu_mask_t __attribute__((aligned(8)));
-	#define SCHEDULER_MASK_IS_64_BIT 1
+// 64-bit systems: supports up to 64 L3 domains per node
+typedef uint64 native_cpu_mask_t __attribute__((aligned(8)));
+#define SCHEDULER_MASK_IS_64_BIT 1
 #else
-	// 32-bit systems: supports up to 32 L3 domains per node
-	// (Self-limiting: 32-bit OS RAM limits prevent massive topology anyway)
-	typedef uint32 native_cpu_mask_t;
-	#define SCHEDULER_MASK_IS_64_BIT 0
+// 32-bit systems: supports up to 32 L3 domains per node
+// (Self-limiting: 32-bit OS RAM limits prevent massive topology anyway)
+typedef uint32 native_cpu_mask_t;
+#define SCHEDULER_MASK_IS_64_BIT 0
 #endif
 
 // Helpers for atomic operations and bit manipulation on native_cpu_mask_t
 // These wrappers provide architecture-independent atomic access (32/64-bit).
 
-static inline native_cpu_mask_t
-scheduler_atomic_or(native_cpu_mask_t* value, native_cpu_mask_t orValue)
-{
+static inline native_cpu_mask_t scheduler_atomic_or(native_cpu_mask_t* value,
+													native_cpu_mask_t orValue) {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_or64(reinterpret_cast<int64 volatile*>(value), (int64)orValue);
+	return (native_cpu_mask_t)atomic_or64(
+		reinterpret_cast<int64 volatile*>(value), (int64)orValue);
 #else
-	return (native_cpu_mask_t)atomic_or(reinterpret_cast<int32 volatile*>(value), (int32)orValue);
+	return (native_cpu_mask_t)atomic_or(
+		reinterpret_cast<int32 volatile*>(value), (int32)orValue);
 #endif
 }
 
-
-static inline uint64
-scheduler_atomic_get64(uint64 volatile* value)
-{
-	return (uint64)atomic_get64(reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)));
+static inline uint64 scheduler_atomic_get64(uint64 volatile* value) {
+	return (uint64)atomic_get64(
+		reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)));
 }
 
-
-static inline void
-scheduler_atomic_set64(uint64 volatile* value, uint64 newValue)
-{
-	atomic_set64(reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)), (int64)newValue);
+static inline void scheduler_atomic_set64(uint64 volatile* value,
+										  uint64 newValue) {
+	atomic_set64(reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)),
+				 (int64)newValue);
 }
 
-
-static inline uint64
-scheduler_atomic_add64(uint64 volatile* value, uint64 addValue)
-{
-	return (uint64)atomic_add64(reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)), (int64)addValue);
+static inline uint64 scheduler_atomic_add64(uint64 volatile* value,
+											uint64 addValue) {
+	return (uint64)atomic_add64(
+		reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)),
+		(int64)addValue);
 }
 
-
-static inline uint64
-scheduler_atomic_test_and_set64(uint64 volatile* value, uint64 newValue,
-	uint64 expectedValue)
-{
-	return (uint64)atomic_test_and_set64(reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)),
-		(int64)newValue, (int64)expectedValue);
+static inline uint64 scheduler_atomic_and64(uint64 volatile* value,
+											uint64 andValue) {
+	return (uint64)atomic_and64(
+		reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)),
+		(int64)andValue);
 }
 
+static inline int scheduler_ffs(uint32 value) { return __builtin_ffs(value); }
 
-static inline uint64
-scheduler_atomic_or64(uint64 volatile* value, uint64 orValue)
-{
-	return (uint64)atomic_or64(reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)), (int64)orValue);
+static inline int scheduler_ffs64(uint64 value) {
+	return __builtin_ffsll(value);
 }
 
-
-static inline int32
-scheduler_atomic_get_and_set(int32 volatile* value, int32 newValue)
-{
-	return atomic_get_and_set(const_cast<int32 volatile*>(value), newValue);
-}
-
-
-static inline native_cpu_mask_t
-scheduler_atomic_and(native_cpu_mask_t* value, native_cpu_mask_t andValue)
-{
-#if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_and64(reinterpret_cast<int64 volatile*>(value), (int64)andValue);
-#else
-	return (native_cpu_mask_t)atomic_and(reinterpret_cast<int32 volatile*>(value), (int32)andValue);
-#endif
-}
-
-
-static inline native_cpu_mask_t
-scheduler_atomic_get(native_cpu_mask_t* value)
-{
-#if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_get64(reinterpret_cast<int64 volatile*>(value));
-#else
-	return (native_cpu_mask_t)atomic_get(reinterpret_cast<int32 volatile*>(value));
-#endif
-}
-
-static inline void
-scheduler_atomic_set(native_cpu_mask_t* value, native_cpu_mask_t newValue)
-{
-#if SCHEDULER_MASK_IS_64_BIT
-	atomic_set64(reinterpret_cast<int64 volatile*>(value), (int64)newValue);
-#else
-	atomic_set(reinterpret_cast<int32 volatile*>(value), (int32)newValue);
-#endif
-}
-
-static inline native_cpu_mask_t
-scheduler_atomic_test_and_set(native_cpu_mask_t* value, native_cpu_mask_t newValue,
-	native_cpu_mask_t expectedValue)
-{
-#if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)atomic_test_and_set64(reinterpret_cast<int64 volatile*>(value),
-		(int64)newValue, (int64)expectedValue);
-#else
-	return (native_cpu_mask_t)atomic_test_and_set(reinterpret_cast<int32 volatile*>(value),
-		(int32)newValue, (int32)expectedValue);
-#endif
-}
-
-static inline int
-scheduler_popcount(native_cpu_mask_t value)
-{
+static inline int scheduler_popcount(native_cpu_mask_t value) {
 #if SCHEDULER_MASK_IS_64_BIT
 	return __builtin_popcountll(value);
 #else
@@ -230,24 +163,7 @@ scheduler_popcount(native_cpu_mask_t value)
 #endif
 }
 
-// scheduler_ffs: Native intrinsic Find First Set bit.
-// Returns 1-based index of the first bit set, or 0 if value is 0.
-static inline int
-scheduler_ffs(uint32 value)
-{
-	return __builtin_ffs(value);
-}
-
-static inline int
-scheduler_ffs64(uint64 value)
-{
-	return __builtin_ffsll(value);
-}
-
-// scheduler_ctz: Native intrinsic Count Trailing Zeros.
-static inline int
-scheduler_ctz(native_cpu_mask_t value)
-{
+static inline int scheduler_ctz(native_cpu_mask_t value) {
 	if (value == 0)
 		return -1;
 #if SCHEDULER_MASK_IS_64_BIT
@@ -257,57 +173,119 @@ scheduler_ctz(native_cpu_mask_t value)
 #endif
 }
 
+static inline uint64 scheduler_atomic_test_and_set64(uint64 volatile* value,
+													 uint64 newValue,
+													 uint64 expectedValue) {
+	return (uint64)atomic_test_and_set64(
+		reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)),
+		(int64)newValue, (int64)expectedValue);
+}
+
+static inline uint64 scheduler_atomic_or64(uint64 volatile* value,
+										   uint64 orValue) {
+	return (uint64)atomic_or64(
+		reinterpret_cast<int64 volatile*>(const_cast<uint64*>(value)),
+		(int64)orValue);
+}
+
+static inline int32 scheduler_atomic_get_and_set(int32 volatile* value,
+												 int32 newValue) {
+	return atomic_get_and_set(const_cast<int32 volatile*>(value), newValue);
+}
+
+static inline int32 scheduler_atomic_test_and_set(int32 volatile* value,
+												  int32 newValue,
+												  int32 expectedValue) {
+	return atomic_test_and_set(const_cast<int32 volatile*>(value), newValue,
+							   expectedValue);
+}
+
+static inline native_cpu_mask_t scheduler_atomic_and(
+	native_cpu_mask_t* value, native_cpu_mask_t andValue) {
+#if SCHEDULER_MASK_IS_64_BIT
+	return (native_cpu_mask_t)atomic_and64(
+		reinterpret_cast<int64 volatile*>(value), (int64)andValue);
+#else
+	return (native_cpu_mask_t)atomic_and(
+		reinterpret_cast<int32 volatile*>(value), (int32)andValue);
+#endif
+}
+
+static inline native_cpu_mask_t scheduler_atomic_get(native_cpu_mask_t* value) {
+#if SCHEDULER_MASK_IS_64_BIT
+	return (native_cpu_mask_t)atomic_get64(
+		reinterpret_cast<int64 volatile*>(value));
+#else
+	return (native_cpu_mask_t)atomic_get(
+		reinterpret_cast<int32 volatile*>(value));
+#endif
+}
+
+static inline void scheduler_atomic_set(native_cpu_mask_t* value,
+										native_cpu_mask_t newValue) {
+#if SCHEDULER_MASK_IS_64_BIT
+	atomic_set64(reinterpret_cast<int64 volatile*>(value), (int64)newValue);
+#else
+	atomic_set(reinterpret_cast<int32 volatile*>(value), (int32)newValue);
+#endif
+}
+
+static inline native_cpu_mask_t scheduler_atomic_test_and_set(
+	native_cpu_mask_t* value, native_cpu_mask_t newValue,
+	native_cpu_mask_t expectedValue) {
+#if SCHEDULER_MASK_IS_64_BIT
+	return (native_cpu_mask_t)atomic_test_and_set64(
+		reinterpret_cast<int64 volatile*>(value), (int64)newValue,
+		(int64)expectedValue);
+#else
+	return (native_cpu_mask_t)atomic_test_and_set(
+		reinterpret_cast<int32 volatile*>(value), (int32)newValue,
+		(int32)expectedValue);
+#endif
+}
 
 // atomic_pointer: architecture-independent atomic pointer operations.
 // Necessary for 32/64-bit portability.
-template<typename T>
-static inline T*
-atomic_pointer_get(T* volatile* pointer)
-{
+template <typename T>
+static inline T* atomic_pointer_get(T* volatile* pointer) {
 #if SCHEDULER_MASK_IS_64_BIT
-	T* value = reinterpret_cast<T*>(scheduler_atomic_get64(
-		reinterpret_cast<uint64 volatile*>(pointer)));
+	T* value = reinterpret_cast<T*>(
+		scheduler_atomic_get64(reinterpret_cast<uint64 volatile*>(pointer)));
 #else
-	T* value = reinterpret_cast<T*>(atomic_get(
-		reinterpret_cast<int32 volatile*>(pointer)));
+	T* value = reinterpret_cast<T*>(
+		atomic_get(reinterpret_cast<int32 volatile*>(pointer)));
 #endif
 	memory_read_barrier();
 	return value;
 }
 
-
-template<typename T>
-static inline void
-atomic_pointer_set(T* volatile* pointer, T* value)
-{
+template <typename T>
+static inline void atomic_pointer_set(T* volatile* pointer, T* value) {
 	memory_write_barrier();
 #if SCHEDULER_MASK_IS_64_BIT
 	scheduler_atomic_set64(reinterpret_cast<uint64 volatile*>(pointer),
-		reinterpret_cast<uint64>(value));
+						   reinterpret_cast<uint64>(value));
 #else
 	atomic_set(reinterpret_cast<int32 volatile*>(pointer),
-		reinterpret_cast<int32>(value));
+			   reinterpret_cast<int32>(value));
 #endif
 }
 
-
-template<typename T>
-static inline T*
-atomic_pointer_test_and_set(T* volatile* pointer, T* newValue, T* expectedValue)
-{
+template <typename T>
+static inline T* atomic_pointer_test_and_set(T* volatile* pointer, T* newValue,
+											 T* expectedValue) {
 #if SCHEDULER_MASK_IS_64_BIT
 	return reinterpret_cast<T*>(scheduler_atomic_test_and_set64(
 		reinterpret_cast<uint64 volatile*>(pointer),
 		reinterpret_cast<uint64>(newValue),
 		reinterpret_cast<uint64>(expectedValue)));
 #else
-	return reinterpret_cast<T*>(atomic_test_and_set(
-		reinterpret_cast<int32 volatile*>(pointer),
-		reinterpret_cast<int32>(newValue),
-		reinterpret_cast<int32>(expectedValue)));
+	return reinterpret_cast<T*>(
+		atomic_test_and_set(reinterpret_cast<int32 volatile*>(pointer),
+							reinterpret_cast<int32>(newValue),
+							reinterpret_cast<int32>(expectedValue)));
 #endif
 }
-
 
 class CPUEntry;
 class CoreEntry;
@@ -348,7 +326,6 @@ extern int32 gRandomSamples;
 extern const bigtime_t kMinMeasurementWindow __attribute__((aligned(8)));
 extern const int kLoadClampMax;
 
-
 extern int64 gDeadlineBucketSize __attribute__((aligned(8)));
 
 extern int32 gTotalRunnableThreads;
@@ -356,7 +333,6 @@ extern uint64 gIdleMask __attribute__((aligned(8)));
 
 extern CoreType gMinCoreType;
 extern CoreType gMaxCoreType;
-
 
 #define ASSERT_SCHED_LOCK() ASSERT(SchedulerLockHeld())
 
@@ -366,103 +342,81 @@ extern CoreType gMaxCoreType;
 #define SCHED_ASSERT(x) ((void)0)
 #endif
 
-
-inline void
-AssertThreadReady(Thread* thread)
-{
+inline void AssertThreadReady(Thread* thread) {
 	SCHED_ASSERT(thread != NULL);
 	SCHED_ASSERT(thread->state == B_THREAD_READY);
 	SCHED_ASSERT(!thread->inRunQueue);
 }
 
-
-inline void
-AssertThreadQueued(Thread* thread)
-{
+inline void AssertThreadQueued(Thread* thread) {
 	SCHED_ASSERT(thread != NULL);
 	SCHED_ASSERT(thread->inRunQueue);
 }
 
-
-inline void
-SetCPUIDle(uint64& mask, int cpu)
-{
+inline void SetCPUIDle(uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	scheduler_atomic_or64(reinterpret_cast<uint64 volatile*>(&mask), 1ULL << cpu);
+	scheduler_atomic_or64(reinterpret_cast<uint64 volatile*>(&mask),
+						  1ULL << cpu);
 }
 
-
-inline void
-ClearCPUIDle(uint64& mask, int cpu)
-{
+inline void ClearCPUIDle(uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	scheduler_atomic_and64_helper(reinterpret_cast<uint64 volatile*>(&mask), ~(1ULL << cpu));
+	scheduler_atomic_and64(reinterpret_cast<uint64 volatile*>(&mask),
+						   ~(1ULL << cpu));
 }
 
-
-inline bool
-IsCPUIDle(const uint64& mask, int cpu)
-{
+inline bool IsCPUIDle(const uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return false;
-	return (scheduler_atomic_get64(const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&mask))) & (1ULL << cpu)) != 0;
+	return (scheduler_atomic_get64(const_cast<uint64 volatile*>(
+				reinterpret_cast<const uint64*>(&mask))) &
+			(1ULL << cpu)) != 0;
 }
-
 
 struct SchedulerSnapshot {
 	int32 totalRunnable;
 	uint64 idleMask __attribute__((aligned(8)));
 };
 
-
 SchedulerSnapshot TakeSnapshot();
 
-
-inline SchedulerSnapshot
-MakeSchedulerSnapshot(const int32& total,
-	const uint64& idleMask)
-{
+inline SchedulerSnapshot MakeSchedulerSnapshot(const int32& total,
+											   const uint64& idleMask) {
 	SchedulerSnapshot s;
 	s.totalRunnable = LoadAcquire(total);
-	s.idleMask = scheduler_atomic_get64(const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&idleMask)));
+	s.idleMask = scheduler_atomic_get64(const_cast<uint64 volatile*>(
+		reinterpret_cast<const uint64*>(&idleMask)));
 	return s;
 }
 
-
-inline bool
-ShouldMigrate(int sourceLoad, int targetLoad, int threshold)
-{
+inline bool ShouldMigrate(int sourceLoad, int targetLoad, int threshold) {
 	return sourceLoad > targetLoad + threshold;
 }
 
-
-inline bool
-ShouldReschedule(bigtime_t now, bigtime_t last, bigtime_t cooldown)
-{
+inline bool ShouldReschedule(bigtime_t now, bigtime_t last,
+							 bigtime_t cooldown) {
 	return (now - last) > cooldown;
 }
-
 
 // True when at least one CORE_TYPE_STANDARD core exists. Used by choose_core
 // to decide whether a STANDARD-core intermediate fallback is available for
 // 3-type systems (EFFICIENCY + STANDARD + PERFORMANCE).
 extern bool gHasStandardCores;
 
-
 void init_debug_commands();
 void scheduler_update_interaction_state(bigtime_t now = 0);
 bool enqueue_safe(struct Thread* thread, bigtime_t now = 0);
 
-
 class Scheduler {
-public:
+   public:
 	static inline void SetOperationMode(scheduler_mode mode,
-		scheduler_mode_operations* operations)
-	{
-		atomic_pointer_set<scheduler_mode_operations>(&sCurrentMode, operations);
-		atomic_set(reinterpret_cast<int32 volatile*>(&sCurrentModeID), (int32)mode);
+										scheduler_mode_operations* operations) {
+		atomic_pointer_set<scheduler_mode_operations>(&sCurrentMode,
+													  operations);
+		atomic_set(reinterpret_cast<int32 volatile*>(&sCurrentModeID),
+				   (int32)mode);
 	}
 
 	// expose sCurrentMode via a public accessor.
@@ -470,70 +424,56 @@ public:
 	// the Scheduler class, and needs to cache the pointer once to guard
 	// against mid-quantum mode switches.  Direct access to a private
 	// static member from a non-member function is ill-formed in C++.
-	static inline scheduler_mode_operations* GetCurrentMode()
-	{
+	static inline scheduler_mode_operations* GetCurrentMode() {
 		return atomic_pointer_get<scheduler_mode_operations>(&sCurrentMode);
 	}
 
-	static inline scheduler_mode Mode()
-	{
+	static inline scheduler_mode Mode() {
 		return (scheduler_mode)LoadAcquire(sCurrentModeID);
 	}
 
-	static inline void SwitchToMode()
-	{
-		GetCurrentMode()->switch_to_mode();
-	}
+	static inline void SwitchToMode() { GetCurrentMode()->switch_to_mode(); }
 
-	static inline void SetCPUEnabled(int32 cpu, bool enabled)
-	{
+	static inline void SetCPUEnabled(int32 cpu, bool enabled) {
 		GetCurrentMode()->set_cpu_enabled(cpu, enabled);
 	}
 
-	static inline bool HasCacheExpired(const ThreadData* threadData, bigtime_t now)
-	{
+	static inline bool HasCacheExpired(const ThreadData* threadData,
+									   bigtime_t now) {
 		return GetCurrentMode()->has_cache_expired(threadData, now);
 	}
 
 	static inline CoreEntry* ChooseCore(const ThreadData* threadData,
-		const CPUSet& mask, bigtime_t now)
-	{
+										const CPUSet& mask, bigtime_t now) {
 		return GetCurrentMode()->choose_core(threadData, mask, now);
 	}
 
 	static inline CoreEntry* Rebalance(const ThreadData* threadData,
-		const CPUSet& mask, bigtime_t now)
-	{
+									   const CPUSet& mask, bigtime_t now) {
 		return GetCurrentMode()->rebalance(threadData, mask, now);
 	}
 
-	static inline void RebalanceIRQs(bool idle)
-	{
+	static inline void RebalanceIRQs(bool idle) {
 		GetCurrentMode()->rebalance_irqs(idle);
 	}
 
-	static inline bigtime_t BaseQuantum()
-	{
+	static inline bigtime_t BaseQuantum() {
 		return GetCurrentMode()->base_quantum;
 	}
 
-	static inline bigtime_t MinimalQuantum()
-	{
+	static inline bigtime_t MinimalQuantum() {
 		return GetCurrentMode()->minimal_quantum;
 	}
 
-	static inline bigtime_t QuantumMultiplier(int index)
-	{
+	static inline bigtime_t QuantumMultiplier(int index) {
 		return GetCurrentMode()->quantum_multipliers[index];
 	}
 
-	static inline bigtime_t MaximumLatency()
-	{
+	static inline bigtime_t MaximumLatency() {
 		return GetCurrentMode()->maximum_latency;
 	}
 
-	static inline bool IsAllEnabledMask(const CPUSet& mask)
-	{
+	static inline bool IsAllEnabledMask(const CPUSet& mask) {
 		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 		for (int32 i = 0; i < kCPUSetArraySize; i++) {
 			if (mask.Bits(i) != gCPUEnabled.Bits(i))
@@ -542,13 +482,11 @@ public:
 		return true;
 	}
 
-private:
+   private:
 	static scheduler_mode sCurrentModeID;
 	static scheduler_mode_operations* sCurrentMode;
 };
 
-
-}	// namespace Scheduler
-
+}  // namespace Scheduler
 
 #endif	// KERNEL_SCHEDULER_COMMON_H

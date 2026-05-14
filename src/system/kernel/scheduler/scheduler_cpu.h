@@ -1,4 +1,3 @@
-// AUDIT FIXES: issues 6, 12, 36, 45, 52, 59, 70, 96
 /*
  * Copyright 2013, Paweł Dziepak, pdziepak@quarnos.org.
  * Distributed under the terms of the MIT License.
@@ -6,28 +5,23 @@
 #ifndef KERNEL_SCHEDULER_CPU_H
 #define KERNEL_SCHEDULER_CPU_H
 
-
+#include <DPC.h>
 #include <OS.h>
-
+#include <cpufreq.h>
 #include <smp.h>
 #include <thread.h>
-#include <util/atomic.h>
 #include <util/AutoLock.h>
 #include <util/BitUtils.h>
 #include <util/Heap.h>
 #include <util/MinMaxHeap.h>
-
-#include <cpufreq.h>
-#include <DPC.h>
+#include <util/atomic.h>
 
 #include "RunQueue.h"
 #include "scheduler_common.h"
 #include "scheduler_modes.h"
 #include "scheduler_profiler.h"
 
-
 namespace Scheduler {
-
 
 class DebugDumper;
 
@@ -46,307 +40,295 @@ enum CoreType {
 };
 
 class IRQRebalanceDPC : public DPCCallback {
-public:
-	virtual	void			DoDPC(DPCQueue* queue);
+   public:
+	virtual void DoDPC(DPCQueue* queue);
 
-			int32			fIRQ;
-			int32			fTargetCPU;
+	int32 fIRQ;
+	int32 fTargetCPU;
 };
 
-// Adjusted to sizeof(native_cpu_mask_t) * 8 to support larger clusters on 64-bit.
-// This allows a single L3 domain to span up to 64 cores.
+// Adjusted to sizeof(native_cpu_mask_t) * 8 to support larger clusters on
+// 64-bit. This allows a single L3 domain to span up to 64 cores.
 const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
 // Validate the shift range: PackageIndex is in [0, kMaxCoresPerPackage),
 // so (native_cpu_mask_t)1 << PackageIndex() must not overflow. The old
 // assert compared kMaxCoresPerPackage to itself (tautological). This one
 // checks that kMaxCoresPerPackage does not exceed a hard platform ceiling
 // and that native_cpu_mask_t is wide enough to represent all core bits.
-static_assert(kMaxCoresPerPackage <= 64, "kMaxCoresPerPackage exceeds platform ceiling");
-static_assert(kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8), "native_cpu_mask_t too narrow");
+static_assert(kMaxCoresPerPackage <= 64,
+			  "kMaxCoresPerPackage exceeds platform ceiling");
+static_assert(kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8),
+			  "native_cpu_mask_t too narrow");
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
 // logical processor has its sPinnedRunQueues used for scheduling
 // pinned threads.
 class ThreadRunQueue : public RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY,
-	ThreadDataVRuntimeCompare> {
-public:
-						void			Dump() const;
+									   ThreadDataVRuntimeCompare> {
+   public:
+	void Dump() const;
 };
 
 class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
-public:
-										CPUEntry();
+   public:
+	CPUEntry();
 
-						void			Init(int32 id, CoreEntry* core);
+	void Init(int32 id, CoreEntry* core);
 
-	inline				int32			ID() const	{ return fCPUNumber; }
-	inline				CoreEntry*		Core() const
-	{
+	inline int32 ID() const { return fCPUNumber; }
+	inline CoreEntry* Core() const {
 		return atomic_pointer_get<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 	}
 
-	inline				int32			PerformanceScale() const
-											{ return fPerformanceScale; }
-	inline				void			SetPerformanceScale(int32 scale)
-											{ fPerformanceScale = scale; }
+	inline int32 PerformanceScale() const { return fPerformanceScale; }
+	inline void SetPerformanceScale(int32 scale) { fPerformanceScale = scale; }
 
-						void			Start();
-						void			Stop();
+	void Start();
+	void Stop();
 
-	inline				void			EnterScheduler();
-	inline				void			ExitScheduler();
+	inline void EnterScheduler();
+	inline void ExitScheduler();
 
-	inline				void			LockScheduler();
-	inline				void			UnlockScheduler();
+	inline void LockScheduler();
+	inline void UnlockScheduler();
 
-	inline				void			LockRunQueue();
-	inline				bool			TryLockRunQueue();
-	inline				void			UnlockRunQueue();
+	inline void LockRunQueue();
+	inline bool TryLockRunQueue();
+	inline void UnlockRunQueue();
 
 	// Index of this CPU within its core, assigned sequentially in AddCPU.
 	// Used by UpdatePriorityBoostScalable for round-robin epoch ownership.
 	// Public because UpdatePriorityBoostScalable is a file-scope function.
-						int32			fCoreLocalIndex;
+	int32 fCoreLocalIndex;
 
-						void			PushFront(ThreadData* thread,
-											int32 priority);
-						void			PushBack(ThreadData* thread,
-											int32 priority);
-						void			Remove(ThreadData* thread);
-						ThreadData*		PeekThread() const;
-						ThreadData*		PeekIdleThread() const;
-						// Required by UpdatePriorityBoostScalable in scheduler.cpp,
-						// which inspects the run queue bitmap directly for priority boosting.
-	inline				const ThreadRunQueue*	RunQueue() const { return &fRunQueue; }
+	void PushFront(ThreadData* thread, int32 priority);
+	void PushBack(ThreadData* thread, int32 priority);
+	void Remove(ThreadData* thread);
+	ThreadData* PeekThread() const;
+	ThreadData* PeekIdleThread() const;
+	// Required by UpdatePriorityBoostScalable in scheduler.cpp,
+	// which inspects the run queue bitmap directly for priority boosting.
+	inline const ThreadRunQueue* RunQueue() const { return &fRunQueue; }
 
-	inline				ThreadRunQueue::ConstIterator
-										GetConstIterator() const
-											{ return fRunQueue.GetConstIterator(); }
+	inline ThreadRunQueue::ConstIterator GetConstIterator() const {
+		return fRunQueue.GetConstIterator();
+	}
 
-						void			UpdatePriority(int32 priority);
+	void UpdatePriority(int32 priority);
 
-	inline				int32			GetLoad() const;
-						bigtime_t		GetMinVirtualRuntime() const;
-						void			ComputeLoad(bigtime_t now = 0);
+	inline int32 GetLoad() const;
+	bigtime_t GetMinVirtualRuntime() const;
+	void ComputeLoad(bigtime_t now = 0);
 
-						ThreadData*		ChooseNextThread(ThreadData* oldThread,
-											bool putAtBack, bigtime_t now = 0);
+	ThreadData* ChooseNextThread(ThreadData* oldThread, bool putAtBack,
+								 bigtime_t now = 0);
 
-						void			UpdateActiveTime(ThreadData* oldThreadData,
-											bigtime_t now);
-						void			TrackLoad(ThreadData* nextThreadData,
-											bigtime_t now = 0);
+	void UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now);
+	void TrackLoad(ThreadData* nextThreadData, bigtime_t now = 0);
 
-						void			StartQuantumTimer(ThreadData* thread,
-											bool wasPreempted);
+	void StartQuantumTimer(ThreadData* thread, bool wasPreempted);
 
-						uint32			GetRandom();
+	uint32 GetRandom();
 
-	inline				int32			ThreadCount() const
-											{ return LoadAcquire(fThreadCount); }
+	inline int32 ThreadCount() const { return LoadAcquire(fThreadCount); }
 
-						bool			SetReschedulePending()
-											{ return (int32)atomic_set(reinterpret_cast<int32 volatile*>(&fReschedulePending), 1) == 0; }
-						void			ClearReschedulePending()
-											{ StoreRelease(fReschedulePending, 0); }
+	bool SetReschedulePending() {
+		return scheduler_atomic_get_and_set(&fReschedulePending, 1) == 0;
+	}
+	void ClearReschedulePending() { StoreRelease(fReschedulePending, 0); }
 
-	static inline		CPUEntry*		GetCPU(int32 cpu);
+	static inline CPUEntry* GetCPU(int32 cpu);
 
-private:
-						void			_RequestPerformanceLevel(
-											ThreadData* threadData,
-											bigtime_t now = 0);
-						ThreadData*		_TryStealWork(bigtime_t now = 0);
+   private:
+	void _RequestPerformanceLevel(ThreadData* threadData, bigtime_t now = 0);
+	ThreadData* _TryStealWork(bigtime_t now = 0);
 
-	static				int32			_RescheduleEvent(timer* /* unused */);
-	static				int32			_UpdateLoadEvent(timer* /* unused */);
+	static int32 _RescheduleEvent(timer* /* unused */);
+	static int32 _UpdateLoadEvent(timer* /* unused */);
 
-						int32			fCPUNumber;
-						CoreEntry*		fCore;
+	int32 fCPUNumber;
+	CoreEntry* fCore;
 
-						rw_spinlock 	fSchedulerModeLock;
+	rw_spinlock fSchedulerModeLock;
 
-						ThreadRunQueue	fRunQueue;
-						spinlock		fQueueLock;
+	ThreadRunQueue fRunQueue;
+	spinlock fQueueLock;
 
-						int32				fThreadCount;
-						int32				fLoad;
-						bigtime_t		lastReschedule __attribute__((aligned(8)));
+	int32 fThreadCount;
+	int32 fLoad;
+	bigtime_t lastReschedule __attribute__((aligned(8)));
 
-						int32			fPerformanceScale;
+	int32 fPerformanceScale;
 
-						bigtime_t		fMeasureActiveTime __attribute__((aligned(8)));
-						bigtime_t		fMeasureTime __attribute__((aligned(8)));
+	bigtime_t fMeasureActiveTime __attribute__((aligned(8)));
+	bigtime_t fMeasureTime __attribute__((aligned(8)));
 
-						bool			fUpdateLoadEvent;
-						uint64			fRandomState __attribute__((aligned(8)));
+	bool fUpdateLoadEvent;
+	uint64 fRandomState __attribute__((aligned(8)));
 
-						uint32			fRescheduleCount;
-						uint32			fInteractionUpdateCounter;
+	uint32 fRescheduleCount;
+	uint32 fInteractionUpdateCounter;
 
-						int32			fReschedulePending;
-						// Moved from CoreEntry to eliminate false sharing.
-						// This field is written on every search_local_node call by
-						// the searching CPU.  Placing it in CoreEntry dirtied the
-						// core's hot read-mostly cache line on every sibling CPU.
-						int32			fLastLocalPackageIndex;
+	int32 fReschedulePending;
+	// Moved from CoreEntry to eliminate false sharing.
+	// This field is written on every search_local_node call by
+	// the searching CPU.  Placing it in CoreEntry dirtied the
+	// core's hot read-mostly cache line on every sibling CPU.
+	int32 fLastLocalPackageIndex;
 
-public:
-						IRQRebalanceDPC	fRebalanceDPC;
+   public:
+	IRQRebalanceDPC fRebalanceDPC;
 
-						friend class DebugDumper;
+	friend class DebugDumper;
 } __attribute__((aligned(64)));
 
 class CPUPriorityHeap : public Heap<CPUEntry, int32> {
-public:
-										CPUPriorityHeap() { }
-										CPUPriorityHeap(int32 cpuCount);
+   public:
+	CPUPriorityHeap() {}
+	CPUPriorityHeap(int32 cpuCount);
 
-						void			Dump();
+	void Dump();
 };
 
 class CoreEntry {
-public:
-										CoreEntry();
+   public:
+	CoreEntry();
 
-						void			Init(int32 id, PackageEntry* package);
+	void Init(int32 id, PackageEntry* package);
 
-	static inline		CoreEntry*		GetCore(int32 cpu);
+	static inline CoreEntry* GetCore(int32 cpu);
 
-	inline				int32			ID() const	{ return fCoreID; }
-	inline				PackageEntry*	Package() const	{ return fPackage; }
-	inline				int32			PackageIndex() const
-											{ return fPackageIndex; }
-	inline				int32			CPUCount() const
-											{ return LoadAcquire(fCPUCount); }
-	inline				const CPUSet&	CPUMask() const
-											{ return fCPUSet; }
+	inline int32 ID() const { return fCoreID; }
+	inline PackageEntry* Package() const { return fPackage; }
+	inline int32 PackageIndex() const { return fPackageIndex; }
+	inline int32 CPUCount() const { return LoadAcquire(fCPUCount); }
+	inline const CPUSet& CPUMask() const { return fCPUSet; }
 
-	inline				CoreType		Type() const	{ return fType; }
-	inline				void			SetType(CoreType type) { fType = type; }
+	inline CoreType Type() const { return fType; }
+	inline void SetType(CoreType type) { fType = type; }
 
-	inline				void			LockCPUHeap();
-	inline				void			UnlockCPUHeap();
+	inline void LockCPUHeap();
+	inline void UnlockCPUHeap();
 
-	inline				void			LockCPU();
-	inline				void			UnlockCPU();
+	inline void LockCPU();
+	inline void UnlockCPU();
 
-	inline				CPUPriorityHeap*	CPUHeap();
+	inline CPUPriorityHeap* CPUHeap();
 
-	inline				int32			ThreadCount() const
-											{ return LoadAcquire(fTotalThreadCount); }
-	inline				void			IncrementTotalThreadCount()
-											{ AddRelease(fTotalThreadCount, 1); }
-	inline				void			DecrementTotalThreadCount()
-											{ AddRelease(fTotalThreadCount, -1); }
+	inline int32 ThreadCount() const { return LoadAcquire(fTotalThreadCount); }
+	inline void IncrementTotalThreadCount() {
+		AddRelease(fTotalThreadCount, 1);
+	}
+	inline void DecrementTotalThreadCount() {
+		AddRelease(fTotalThreadCount, -1);
+	}
 
-	inline				int32			DisplayThreadCount() const
-											{ return LoadAcquire(fDisplayThreadCount); }
-	inline				void			IncrementDisplayThreadCount()
-											{ AddRelease(fDisplayThreadCount, 1); }
-	inline				void			DecrementDisplayThreadCount()
-											{ AddRelease(fDisplayThreadCount, -1); }
-	inline				int32			CoreRunQueueThreadCount() const
-											{ return LoadAcquire(fThreadCount); }
+	inline int32 DisplayThreadCount() const {
+		return LoadAcquire(fDisplayThreadCount);
+	}
+	inline void IncrementDisplayThreadCount() {
+		AddRelease(fDisplayThreadCount, 1);
+	}
+	inline void DecrementDisplayThreadCount() {
+		AddRelease(fDisplayThreadCount, -1);
+	}
+	inline int32 CoreRunQueueThreadCount() const {
+		return LoadAcquire(fThreadCount);
+	}
 
-	inline				void			LockRunQueue();
-	inline				bool			TryLockRunQueue();
-	inline				void			UnlockRunQueue();
-	// Issue 12 fix: lockless check for display-priority threads in the
+	inline void LockRunQueue();
+	inline bool TryLockRunQueue();
+	inline void UnlockRunQueue();
+	// Note: lockless check for display-priority threads in the
 	// run queue.  Used by ComputeQuantum to avoid TryLockRunQueue on the
 	// scheduling hot path.  Atomic bitmap reads match PeekMaximum's pattern.
-	inline				bool			HasHighPriorityThread() const;
+	inline bool HasHighPriorityThread() const;
 
-						ThreadData*		StealThread(int32& stolenPriority,
-											int32 thiefCPU);
+	ThreadData* StealThread(int32& stolenPriority, int32 thiefCPU);
 
-						void			PushFront(ThreadData* thread,
-											int32 priority);
-						void			PushBack(ThreadData* thread,
-											int32 priority);
-						void			Remove(ThreadData* thread);
-						ThreadData*		PeekThread() const;
-	inline				ThreadData*		PeekHead() const
-											{ return fRunQueue.PeekMaximum(); }
-	inline				const ThreadRunQueue*	RunQueue() const { return &fRunQueue; }
+	void PushFront(ThreadData* thread, int32 priority);
+	void PushBack(ThreadData* thread, int32 priority);
+	void Remove(ThreadData* thread);
+	ThreadData* PeekThread() const;
+	inline ThreadData* PeekHead() const { return fRunQueue.PeekMaximum(); }
+	inline const ThreadRunQueue* RunQueue() const { return &fRunQueue; }
 
-	inline				ThreadRunQueue::ConstIterator
-										GetConstIterator() const
-											{ return fRunQueue.GetConstIterator(); }
+	inline ThreadRunQueue::ConstIterator GetConstIterator() const {
+		return fRunQueue.GetConstIterator();
+	}
 
-	inline				bigtime_t		GetActiveTime() const;
-	inline				void			IncreaseActiveTime(
-											bigtime_t activeTime);
+	inline bigtime_t GetActiveTime() const;
+	inline void IncreaseActiveTime(bigtime_t activeTime);
 
-	inline				int32			GetLoad() const;
-	inline				int32			GetScore() const;
-						void			SetCapacity(int32 capacity);
-	inline				int32			Capacity() const { return fCapacity; }
-	inline				uint32			ScoreFactor() const { return fScoreFactor; }
-						bigtime_t		GetMinVirtualRuntime() const;
-	inline				uint32			LoadMeasurementEpoch() const
-											{ return (uint32)scheduler_atomic_get64(const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fCombinedLoad))); }
-	inline				int32			CurrentLoad() const
-											{ return (int32)(scheduler_atomic_get64(const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fCombinedLoad))) >> 32); }
+	inline int32 GetLoad() const;
+	inline int32 GetScore() const;
+	void SetCapacity(int32 capacity);
+	inline int32 Capacity() const { return fCapacity; }
+	inline uint32 ScoreFactor() const { return fScoreFactor; }
+	bigtime_t GetMinVirtualRuntime() const;
+	inline uint32 LoadMeasurementEpoch() const {
+		return (uint32)scheduler_atomic_get64(const_cast<uint64 volatile*>(
+			reinterpret_cast<const uint64*>(&fCombinedLoad)));
+	}
+	inline int32 CurrentLoad() const {
+		return (int32)(scheduler_atomic_get64(const_cast<uint64 volatile*>(
+						   reinterpret_cast<const uint64*>(&fCombinedLoad))) >>
+					   32);
+	}
 
-	inline				void			AddLoad(int32 load, uint32 epoch,
-											bool updateLoad, bigtime_t now = 0);
-	inline				uint32			RemoveLoad(int32 load, bool force,
-											bigtime_t now = 0);
-	inline				void			ChangeLoad(int32 delta, bigtime_t now = 0);
+	inline void AddLoad(int32 load, uint32 epoch, bool updateLoad,
+						bigtime_t now = 0);
+	inline uint32 RemoveLoad(int32 load, bool force, bigtime_t now = 0);
+	inline void ChangeLoad(int32 delta, bigtime_t now = 0);
 
-	inline				void			CPUGoesIdle(CPUEntry* cpu);
-	inline				void			CPUWakesUp(CPUEntry* cpu);
+	inline void CPUGoesIdle(CPUEntry* cpu);
+	inline void CPUWakesUp(CPUEntry* cpu);
 
-						CPUEntry*		PeekMinimumLoadCPU();
+	CPUEntry* PeekMinimumLoadCPU();
 
-						void			AddCPU(CPUEntry* cpu);
-						void			RemoveCPU(CPUEntry* cpu,
-											ThreadProcessing&
-												threadPostProcessing);
+	void AddCPU(CPUEntry* cpu);
+	void RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing);
 
-private:
-						void			_UpdateLoad(bool forceUpdate = false,
-											bigtime_t now = 0);
+   private:
+	void _UpdateLoad(bool forceUpdate = false, bigtime_t now = 0);
 
-	static				void			_UnassignThread(Thread* thread,
-											void* core);
+	static void _UnassignThread(Thread* thread, void* core);
 
-						bigtime_t		fActiveTime __attribute__((aligned(8)));
+	bigtime_t fActiveTime __attribute__((aligned(8)));
 
-						// bits 32-63: Current Load, bits 0-31: Epoch
-						int64			fCombinedLoad __attribute__((aligned(8)));
+	// bits 32-63: Current Load, bits 0-31: Epoch
+	int64 fCombinedLoad __attribute__((aligned(8)));
 
-						bigtime_t		fLastLoadUpdate __attribute__((aligned(8)));
+	bigtime_t fLastLoadUpdate __attribute__((aligned(8)));
 
-						int32			fCoreID;
-						PackageEntry*	fPackage __attribute__((aligned(64)));
-						int32			fPackageIndex;
+	int32 fCoreID;
+	PackageEntry* fPackage __attribute__((aligned(64)));
+	int32 fPackageIndex;
 
-						CoreType		fType;
+	CoreType fType;
 
-						int32			fCPUCount;
-						int32			fCapacity;
-						CPUSet			fCPUSet;
-						int32			fIdleCPUCount;
-						CPUPriorityHeap	fCPUHeap;
-						spinlock		fCPULock;
+	int32 fCPUCount;
+	int32 fCapacity;
+	CPUSet fCPUSet;
+	int32 fIdleCPUCount;
+	CPUPriorityHeap fCPUHeap;
+	spinlock fCPULock;
 
-						spinlock		fQueueLock;
-						int32			fThreadCount;
-						int32			fTotalThreadCount;
-						int32			fDisplayThreadCount;
-						ThreadRunQueue	fRunQueue;
+	spinlock fQueueLock;
+	int32 fThreadCount;
+	int32 fTotalThreadCount;
+	int32 fDisplayThreadCount;
+	ThreadRunQueue fRunQueue;
 
-						int32			fLoad;
+	int32 fLoad;
 
-						uint32			fScoreFactor;
+	uint32 fScoreFactor;
 
-						native_cpu_mask_t	fLocalIndices __attribute__((aligned(8)));
+	native_cpu_mask_t fLocalIndices __attribute__((aligned(8)));
 
-						friend class DebugDumper;
+	friend class DebugDumper;
 } __attribute__((aligned(64)));
 
 // gPackageEntries are used to decide which core should be woken up from the
@@ -360,105 +342,97 @@ private:
 // idle are stored in gPackageIdleList (in LIFO manner).
 // Group of packages. Used to improve scalability on systems with many packages.
 class SchedulerNode {
-public:
-											SchedulerNode();
+   public:
+	SchedulerNode();
 
-						void				Init(int32 id);
+	void Init(int32 id);
 
-	inline				void				PackageGoesIdle(PackageEntry* package);
-	inline				void				PackageWakesUp(PackageEntry* package);
+	inline void PackageGoesIdle(PackageEntry* package);
+	inline void PackageWakesUp(PackageEntry* package);
 
-	inline				native_cpu_mask_t	IdlePackageMask() const;
-	inline				int32				NodeIndex() const { return fNodeID; }
+	inline native_cpu_mask_t IdlePackageMask() const;
+	inline int32 NodeIndex() const { return fNodeID; }
 
-	inline				int32				PackageStartIndex() const
-											{ return fPackageStartIndex; }
-	inline				void				SetPackageStartIndex(int32 start)
-											{ fPackageStartIndex = start; }
+	inline int32 PackageStartIndex() const { return fPackageStartIndex; }
+	inline void SetPackageStartIndex(int32 start) {
+		fPackageStartIndex = start;
+	}
 
-	inline				int32				PackageCount() const
-											{ return fPackageCount; }
-	inline				void				SetPackageCount(int32 count)
-											{ fPackageCount = count; }
+	inline int32 PackageCount() const { return fPackageCount; }
+	inline void SetPackageCount(int32 count) { fPackageCount = count; }
 
 	// SetPackageIdle removed - it was never called from any
 	// translation unit.  All idle-mask updates go through PackageGoesIdle /
 	// PackageWakesUp.  Leaving dead code here invited future callers to
 	// bypass the node-level gIdleNodeMask updates performed by those methods.
 
-private:
-						int32				fNodeID;
-						native_cpu_mask_t	fIdlePackageMask __attribute__((aligned(8)));
+   private:
+	int32 fNodeID;
+	native_cpu_mask_t fIdlePackageMask __attribute__((aligned(8)));
 
-						int32				fPackageStartIndex;
-						int32				fPackageCount;
+	int32 fPackageStartIndex;
+	int32 fPackageCount;
 } __attribute__((aligned(64)));
 
-
 class PackageEntry {
-public:
-											PackageEntry();
+   public:
+	PackageEntry();
 
-						void				Init(int32 id, SchedulerNode* node,
-												int32 nodeIndex);
+	void Init(int32 id, SchedulerNode* node, int32 nodeIndex);
 
-	inline				void				CoreGoesIdle(CoreEntry* core);
-	inline				void				CoreWakesUp(CoreEntry* core);
+	inline void CoreGoesIdle(CoreEntry* core);
+	inline void CoreWakesUp(CoreEntry* core);
 
-						CoreEntry*			GetIdleCore(int32 index = 0) const;
-						CoreEntry*			GetIdleCorePacking(CPUEntry* cpu,
-												const CPUSet* mask = NULL) const;
-	inline				native_cpu_mask_t	IdleCoreMask() const;
-	inline				int32				IdleCoreCount() const { return LoadAcquire(fIdleCoreCount); }
-	inline				CoreEntry*			GetCore(int32 index) const;
-	inline				SchedulerNode*		Node() const { return fNode; }
-	inline				int32				NodeIndex() const { return fNodeIndex; }
+	CoreEntry* GetIdleCore(int32 index = 0) const;
+	CoreEntry* GetIdleCorePacking(CPUEntry* cpu,
+								  const CPUSet* mask = NULL) const;
+	inline native_cpu_mask_t IdleCoreMask() const;
+	inline int32 IdleCoreCount() const { return LoadAcquire(fIdleCoreCount); }
+	inline CoreEntry* GetCore(int32 index) const;
+	inline SchedulerNode* Node() const { return fNode; }
+	inline int32 NodeIndex() const { return fNodeIndex; }
 
-						void				AddIdleCore(CoreEntry* core);
-						void				RemoveIdleCore(CoreEntry* core);
-						void				RegisterCore(int32 index,
-												CoreEntry* core);
+	void AddIdleCore(CoreEntry* core);
+	void RemoveIdleCore(CoreEntry* core);
+	void RegisterCore(int32 index, CoreEntry* core);
 
-	// Issue 4 fix: added missing accessor.
-	inline				int32				ID() const { return fPackageID; }
+	// Note: added missing accessor.
+	inline int32 ID() const { return fPackageID; }
 
-	inline				int32				RegisteredCoreCount() const
-											{ return fRegisteredCoreCount; }
+	inline int32 RegisteredCoreCount() const { return fRegisteredCoreCount; }
 
-	static inline		PackageEntry*		GetLeastIdlePackage();
+	static inline PackageEntry* GetLeastIdlePackage();
 
-	inline				void				ReadLockCore();
-	inline				void				ReadUnlockCore();
+	inline void ReadLockCore();
+	inline void ReadUnlockCore();
 
-						CoreEntry*			PeekMinimumLoadCore(
-												CPUEntry* cpu,
-												const CPUSet* mask = NULL,
-												CoreType type = CORE_TYPE_UNKNOWN) const;
-						CoreEntry*			PeekMaximumLoadCore(
-												CPUEntry* cpu,
-												const CPUSet* mask = NULL,
-												CoreType type = CORE_TYPE_UNKNOWN) const;
+	CoreEntry* PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask = NULL,
+								   CoreType type = CORE_TYPE_UNKNOWN) const;
+	CoreEntry* PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask = NULL,
+								   CoreType type = CORE_TYPE_UNKNOWN) const;
 
-private:
-						int32				fPackageID;
-						SchedulerNode*		fNode;
-						int32				fNodeIndex;
+   private:
+	int32 fPackageID;
+	SchedulerNode* fNode;
+	int32 fNodeIndex;
 
-						CoreEntry*			fCores[kMaxCoresPerPackage] __attribute__((aligned(8)));
-						native_cpu_mask_t	fIdleCoreMask __attribute__((aligned(8)));
-						int32				fIdleCoreCount;
-						int32				fCoreCount;
-						int32				fRegisteredCoreCount;
-						int32				fMaxAttempts;
-public:
-	inline				int32				CoreCount() const { return fCoreCount; }
-private:
-	mutable				rw_spinlock			fCoreLock;
+	CoreEntry* fCores[kMaxCoresPerPackage] __attribute__((aligned(8)));
+	native_cpu_mask_t fIdleCoreMask __attribute__((aligned(8)));
+	int32 fIdleCoreCount;
+	int32 fCoreCount;
+	int32 fRegisteredCoreCount;
+	int32 fMaxAttempts;
 
-						int32				fCoreLoads[kMaxCoresPerPackage] __attribute__((aligned(8)));
-						native_cpu_mask_t	fEnabledCoreMask __attribute__((aligned(8)));
+   public:
+	inline int32 CoreCount() const { return fCoreCount; }
 
-						friend class DebugDumper;
+   private:
+	mutable rw_spinlock fCoreLock;
+
+	int32 fCoreLoads[kMaxCoresPerPackage] __attribute__((aligned(8)));
+	native_cpu_mask_t fEnabledCoreMask __attribute__((aligned(8)));
+
+	friend class DebugDumper;
 } __attribute__((aligned(64)));
 
 extern CPUEntry* gCPUEntries;
@@ -473,78 +447,51 @@ extern SchedulerNode* gSchedulerNodes;
 extern uint64 gIdleNodeMask __attribute__((aligned(8)));
 extern int32 gNodeCount;
 
-
-inline void
-CPUEntry::EnterScheduler()
-{
+inline void CPUEntry::EnterScheduler() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_read_spinlock(&fSchedulerModeLock);
 }
 
-
-inline void
-CPUEntry::ExitScheduler()
-{
+inline void CPUEntry::ExitScheduler() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_read_spinlock(&fSchedulerModeLock);
 }
 
-
-inline void
-CPUEntry::LockScheduler()
-{
+inline void CPUEntry::LockScheduler() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_write_spinlock(&fSchedulerModeLock);
 }
 
-
-inline void
-CPUEntry::UnlockScheduler()
-{
+inline void CPUEntry::UnlockScheduler() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_write_spinlock(&fSchedulerModeLock);
 }
 
-
-inline void
-CPUEntry::LockRunQueue()
-{
+inline void CPUEntry::LockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fQueueLock);
 }
 
-
-inline bool
-CPUEntry::TryLockRunQueue()
-{
+inline bool CPUEntry::TryLockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	return try_acquire_spinlock(&fQueueLock);
 }
 
-
-inline void
-CPUEntry::UnlockRunQueue()
-{
+inline void CPUEntry::UnlockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fQueueLock);
 }
 
-
-/* static */ inline CPUEntry*
-CPUEntry::GetCPU(int32 cpu)
-{
+/* static */ inline CPUEntry* CPUEntry::GetCPU(int32 cpu) {
 	return &gCPUEntries[cpu];
 }
 
-
-inline int32
-CPUEntry::GetLoad() const
-{
+inline int32 CPUEntry::GetLoad() const {
 	int32 load = LoadAcquire(fLoad);
 
 	// Penalize SMT siblings to prefer physical cores
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(
-		const_cast<CoreEntry* volatile*>(&fCore));
+	CoreEntry* core =
+		atomic_pointer_get<CoreEntry>(const_cast<CoreEntry* volatile*>(&fCore));
 	if (core != NULL && core->CPUCount() > 1) {
 		// If at least one other thread is running on this core
 		if (core->ThreadCount() > 1)
@@ -554,105 +501,65 @@ CPUEntry::GetLoad() const
 	return load;
 }
 
-
-inline void
-CoreEntry::LockCPUHeap()
-{
+inline void CoreEntry::LockCPUHeap() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fCPULock);
 }
 
-
-inline void
-CoreEntry::UnlockCPUHeap()
-{
+inline void CoreEntry::UnlockCPUHeap() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fCPULock);
 }
 
-
-inline void
-CoreEntry::LockCPU()
-{
+inline void CoreEntry::LockCPU() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fCPULock);
 }
 
-
-inline void
-CoreEntry::UnlockCPU()
-{
+inline void CoreEntry::UnlockCPU() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fCPULock);
 }
 
-
-inline CPUPriorityHeap*
-CoreEntry::CPUHeap()
-{
+inline CPUPriorityHeap* CoreEntry::CPUHeap() {
 	SCHEDULER_ENTER_FUNCTION();
 	return &fCPUHeap;
 }
 
-
-inline void
-CoreEntry::LockRunQueue()
-{
+inline void CoreEntry::LockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fQueueLock);
 }
 
-
-inline bool
-CoreEntry::TryLockRunQueue()
-{
+inline bool CoreEntry::TryLockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	return try_acquire_spinlock(&fQueueLock);
 }
 
-
-inline void
-CoreEntry::UnlockRunQueue()
-{
+inline void CoreEntry::UnlockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fQueueLock);
 }
 
-
-inline void
-CoreEntry::IncreaseActiveTime(bigtime_t activeTime)
-{
+inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 	SCHEDULER_ENTER_FUNCTION();
 	scheduler_atomic_add64(reinterpret_cast<uint64 volatile*>(&fActiveTime),
-		(uint64)activeTime);
+						   (uint64)activeTime);
 }
 
-
-inline bigtime_t
-CoreEntry::GetActiveTime() const
-{
-	return (bigtime_t)scheduler_atomic_get64(
-		const_cast<uint64 volatile*>(reinterpret_cast<const uint64*>(&fActiveTime)));
+inline bigtime_t CoreEntry::GetActiveTime() const {
+	return (bigtime_t)scheduler_atomic_get64(const_cast<uint64 volatile*>(
+		reinterpret_cast<const uint64*>(&fActiveTime)));
 }
 
+inline int32 CoreEntry::GetLoad() const { return LoadAcquire(fLoad); }
 
-inline int32
-CoreEntry::GetLoad() const
-{
-	return LoadAcquire(fLoad);
-}
-
-
-inline int32
-CoreEntry::GetScore() const
-{
+inline int32 CoreEntry::GetScore() const {
 	return ((int64)GetLoad() * fScoreFactor) >> 16;
 }
 
-
-inline void
-CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad, bigtime_t now)
-{
+inline void CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad,
+							   bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(gTrackCoreLoad);
@@ -668,10 +575,7 @@ CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad, bigtime_t now)
 		_UpdateLoad(true, now);
 }
 
-
-inline uint32
-CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now)
-{
+inline uint32 CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(gTrackCoreLoad);
@@ -688,10 +592,7 @@ CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now)
 	return (uint32)oldCombined;
 }
 
-
-inline void
-CoreEntry::ChangeLoad(int32 delta, bigtime_t now)
-{
+inline void CoreEntry::ChangeLoad(int32 delta, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (now == 0)
@@ -710,24 +611,21 @@ CoreEntry::ChangeLoad(int32 delta, bigtime_t now)
 	_UpdateLoad(false, now);
 }
 
-
 /* PackageEntry::CoreGoesIdle and PackageEntry::CoreWakesUp have to be defined
-   before CoreEntry::CPUGoesIdle and CoreEntry::CPUWakesUp. If they weren't
-   GCC2 wouldn't inline them as, apparently, it doesn't do enough optimization
-   passes.
+		before CoreEntry::CPUGoesIdle and CoreEntry::CPUWakesUp. If they weren't
+		GCC2 wouldn't inline them as, apparently, it doesn't do enough
+   optimization passes.
 */
-inline void
-PackageEntry::CoreGoesIdle(CoreEntry* core)
-{
+inline void PackageEntry::CoreGoesIdle(CoreEntry* core) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	WriteSpinLocker coreLocker(fCoreLock);
-	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdleCoreMask,
-		(native_cpu_mask_t)1 << core->PackageIndex());
-	atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCoreCount), 1);
+	native_cpu_mask_t oldMask = scheduler_atomic_or(
+		&fIdleCoreMask, (native_cpu_mask_t)1 << core->PackageIndex());
+	AddRelease(fIdleCoreCount, 1);
 
 	if (oldMask == 0) {
-		// Issue 89 fix: Added explicit serialization via fCoreLock to ensure
+		// Note: Added explicit serialization via fCoreLock to ensure
 		// that PackageGoesIdle is called only once and does not race with
 		// AddIdleCore or CoreWakesUp.
 		if (fNode != NULL)
@@ -735,10 +633,7 @@ PackageEntry::CoreGoesIdle(CoreEntry* core)
 	}
 }
 
-
-inline void
-PackageEntry::CoreWakesUp(CoreEntry* core)
-{
+inline void PackageEntry::CoreWakesUp(CoreEntry* core) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	WriteSpinLocker coreLocker(fCoreLock);
@@ -748,7 +643,7 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << core->PackageIndex();
 	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdleCoreMask, ~clearBit);
 
-	atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCoreCount), -1);
+	AddRelease(fIdleCoreCount, -1);
 
 	// Detect the transition from fully-idle to partially-active:
 	// the package wakes up when the *last* idle core becomes active, i.e.
@@ -760,10 +655,7 @@ PackageEntry::CoreWakesUp(CoreEntry* core)
 	}
 }
 
-
-inline void
-SchedulerNode::PackageGoesIdle(PackageEntry* package)
-{
+inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
@@ -773,19 +665,18 @@ SchedulerNode::PackageGoesIdle(PackageEntry* package)
 	// fIdlePackageMask is native_cpu_mask_t (32-bit on 32-bit
 	// systems); atomic_or64 writes 8 bytes over a 4-byte field, corrupting
 	// adjacent struct memory.  Use scheduler_atomic_or throughout.
-	native_cpu_mask_t oldMask = scheduler_atomic_or(&fIdlePackageMask,
-		(native_cpu_mask_t)1 << package->NodeIndex());
+	native_cpu_mask_t oldMask = scheduler_atomic_or(
+		&fIdlePackageMask, (native_cpu_mask_t)1 << package->NodeIndex());
 
 	if (oldMask == 0 && fNodeID < 64) {
-		scheduler_atomic_or64(reinterpret_cast<uint64 volatile*>(&gIdleNodeMask), 1ULL << fNodeID);
+		scheduler_atomic_or64(
+			reinterpret_cast<uint64 volatile*>(&gIdleNodeMask),
+			1ULL << fNodeID);
 	}
 }
 
-
-inline void
-SchedulerNode::PackageWakesUp(PackageEntry* package)
-{
-	// Issue 19 fix: guard PackageWakesUp livelock.
+inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
+	// Note: guard PackageWakesUp livelock.
 	SCHEDULER_ENTER_FUNCTION();
 
 	const int32 kMaxPackagesPerNode = sizeof(native_cpu_mask_t) * 8;
@@ -794,15 +685,17 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 
 	// same fix - use scheduler_atomic_and for 32-bit safety.
 	native_cpu_mask_t clearBit = (native_cpu_mask_t)1 << package->NodeIndex();
-	native_cpu_mask_t oldMask = scheduler_atomic_and(&fIdlePackageMask, ~clearBit);
+	native_cpu_mask_t oldMask =
+		scheduler_atomic_and(&fIdlePackageMask, ~clearBit);
 
 	// Detect the transition from fully-idle to partially-active for the node.
 	// Only clear the bit in gIdleNodeMask if this package was actually idle
 	// (bit was set in oldMask) AND it was the last idle package in this node
 	// (mask is now zero).
-	if ((oldMask & clearBit) != 0 && (oldMask & ~clearBit) == (native_cpu_mask_t)0) {
-		if (fNodeID < 64) { // Issue 74 fix: node limit
-			// Issue 12 fix: a plain re-read + atomic_and64 is still racy.
+	if ((oldMask & clearBit) != 0 &&
+		(oldMask & ~clearBit) == (native_cpu_mask_t)0) {
+		if (fNodeID < 64) {	 // Note: node limit
+			// Note: a plain re-read + atomic_and64 is still racy.
 			// Between the re-read returning 0 and the atomic_and64, a
 			// concurrent PackageGoesIdle can set a bit in fIdlePackageMask
 			// AND set our node bit in gIdleNodeMask.  The atomic_and64 then
@@ -813,34 +706,38 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 			// zero when we re-read it, a concurrent PackageGoesIdle has fired
 			// and will (or has already) re-set the node bit - we must not
 			// clear it.
-			const int64 nodeBit = (int64)(1ULL << fNodeID);
-			int64 nodeMask __attribute__((aligned(8)));
-			// Issue 19 fix: add iteration bound to prevent livelock when
+			const uint64 nodeBit = 1ULL << fNodeID;
+			uint64 nodeMask __attribute__((aligned(8)));
+			// Note: add iteration bound to prevent livelock when
 			// packages continuously oscillate between idle/active states.
 			// After kMaxWakeupRetries CAS failures we give up; the next
 			// PackageGoesIdle call will re-set the bit if needed.
 			const int kMaxWakeupRetries = 64;
 			int wakeupRetries = 0;
 			while (true) {
-				nodeMask = atomic_get64(const_cast<int64 volatile*>(reinterpret_cast<const int64*>(&gIdleNodeMask)));
+				nodeMask = scheduler_atomic_get64(
+					reinterpret_cast<uint64 volatile*>(&gIdleNodeMask));
 				if (!(nodeMask & nodeBit))
-					break; // already cleared by a concurrent PackageWakesUp
+					break;	// already cleared by a concurrent PackageWakesUp
 
-				if (scheduler_atomic_get(&fIdlePackageMask)
-						!= (native_cpu_mask_t)0) {
+				if (scheduler_atomic_get(&fIdlePackageMask) !=
+					(native_cpu_mask_t)0) {
 					// A package in this node went idle concurrently; the node
 					// bit must remain set.
 					break;
 				}
 
-				if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask),
+				if (scheduler_atomic_test_and_set64(
+						reinterpret_cast<uint64 volatile*>(&gIdleNodeMask),
 						nodeMask & ~nodeBit, nodeMask) == nodeMask) {
 					// Successfully cleared. Re-check for safety to catch the
 					// race where a package went idle between our last check
 					// and the CAS.
-					if (scheduler_atomic_get(&fIdlePackageMask)
-							!= (native_cpu_mask_t)0) {
-						atomic_or64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask), nodeBit);
+					if (scheduler_atomic_get(&fIdlePackageMask) !=
+						(native_cpu_mask_t)0) {
+						scheduler_atomic_or64(
+							reinterpret_cast<uint64 volatile*>(&gIdleNodeMask),
+							nodeBit);
 					}
 					break;
 				}
@@ -852,101 +749,79 @@ SchedulerNode::PackageWakesUp(PackageEntry* package)
 	}
 }
 
-inline native_cpu_mask_t
-SchedulerNode::IdlePackageMask() const
-{
+inline native_cpu_mask_t SchedulerNode::IdlePackageMask() const {
 	SCHEDULER_ENTER_FUNCTION();
 	// use scheduler_atomic_get for 32-bit correctness.
 	return scheduler_atomic_get(
 		const_cast<native_cpu_mask_t*>(&fIdlePackageMask));
 }
 
-
-// Issue 89 fix: AddCPU calls fPackage->AddIdleCore(this) which acquires
+// Note: AddCPU calls fPackage->AddIdleCore(this) which acquires
 // fCoreLock (write). CoreGoesIdle calls PackageEntry::CoreGoesIdle, which
 // now also acquires fCoreLock (write) for explicit serialization. This
 // ensures package-level state transitions are atomic even when triggered
 // outside of the global InterruptsBigSchedulerLocker path.
-inline void
-CoreEntry::CPUGoesIdle(CPUEntry* cpu)
-{
+inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 	if (gSingleCore)
 		return;
 
 	SetCPUIDle(gIdleMask, cpu->ID());
 
 	DecrementTotalThreadCount();
-	// Issue 36 fix: on weakly-ordered architectures, without an explicit
-	// barrier between atomic_add(fIdleCPUCount) and atomic_get(fCPUCount),
+	// Note: on weakly-ordered architectures, without an explicit
+	// barrier between atomic-add(fIdleCPUCount) and atomic-get(fCPUCount),
 	// the CPU could observe fCPUCount before fIdleCPUCount increment is
 	// globally visible, causing a spurious PackageGoesIdle call.
-	int32 newIdleCount = (int32)atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), 1) + 1;
+	int32 newIdleCount = scheduler_atomic_add(&fIdleCPUCount, 1) + 1;
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
 	if (cpuCount > 0 && newIdleCount >= cpuCount)
 		fPackage->CoreGoesIdle(this);
 }
 
-
-inline void
-CoreEntry::CPUWakesUp(CPUEntry* cpu)
-{
+inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 	if (gSingleCore)
 		return;
 
 	ClearCPUIDle(gIdleMask, cpu->ID());
 
-	ASSERT(atomic_get(const_cast<int32 volatile*>(&fIdleCPUCount)) > 0);
+	ASSERT(LoadAcquire(fIdleCPUCount) > 0);
 
 	IncrementTotalThreadCount();
-	// Issue 70 fix: read fCPUCount AFTER IncrementTotalThreadCount and
+	// Note: read fCPUCount AFTER IncrementTotalThreadCount and
 	// insert a read barrier. A concurrent AddCPU increments fCPUCount then
 	// fIdleCPUCount; by inserting the barrier we ensure we see the latest
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
-	if ((int32)atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1) == cpuCount)
+	if (scheduler_atomic_add(&fIdleCPUCount, -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 
-
-/* static */ inline CoreEntry*
-CoreEntry::GetCore(int32 cpu)
-{
+/* static */ inline CoreEntry* CoreEntry::GetCore(int32 cpu) {
 	SCHEDULER_ENTER_FUNCTION();
 	return gCPUEntries[cpu].Core();
 }
 
-
-inline native_cpu_mask_t
-PackageEntry::IdleCoreMask() const
-{
-	// Issue 6: Packing rotation logic documentation. GetIdleCorePacking uses rotation arithmetic on this mask.
-	// The un-rotation formula origIdx = (pos + shift) % kMaxCoresPerPackage
-	// is correct only when kMaxCoresPerPackage is a power of 2, which it is
-	// on all supported platforms (32 on 32-bit, 64 on 64-bit).  This
-	// comment documents the assumption so it is verified if kMaxCoresPerPackage
-	// is ever changed to a non-power-of-2 value.
+inline native_cpu_mask_t PackageEntry::IdleCoreMask() const {
+	// Note: Packing rotation logic documentation. GetIdleCorePacking uses
+	// rotation arithmetic on this mask. The un-rotation formula origIdx = (pos
+	// + shift) % kMaxCoresPerPackage is correct only when kMaxCoresPerPackage
+	// is a power of 2, which it is on all supported platforms (32 on 32-bit, 64
+	// on 64-bit).  This comment documents the assumption so it is verified if
+	// kMaxCoresPerPackage is ever changed to a non-power-of-2 value.
 	static_assert((kMaxCoresPerPackage & (kMaxCoresPerPackage - 1)) == 0,
-		"kMaxCoresPerPackage must be a power of 2");
+				  "kMaxCoresPerPackage must be a power of 2");
 	SCHEDULER_ENTER_FUNCTION();
 	return scheduler_atomic_get(&fIdleCoreMask);
 }
 
-
-inline CoreEntry*
-PackageEntry::GetCore(int32 index) const
-{
+inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 	SCHEDULER_ENTER_FUNCTION();
 	return fCores[index];
 }
 
-
-
-
-/* static */ inline PackageEntry*
-PackageEntry::GetLeastIdlePackage()
-{
+/* static */ inline PackageEntry* PackageEntry::GetLeastIdlePackage() {
 	SCHEDULER_ENTER_FUNCTION();
 
 	PackageEntry* package = NULL;
@@ -965,7 +840,8 @@ PackageEntry::GetLeastIdlePackage()
 		// call in this hot path and keeps the probe count consistent with the
 		// rest of the scheduler.
 		for (int32 i = 0; i < kMaxFallbackAttempts; i++) {
-			int32 idx = (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
+			int32 idx =
+				(int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32);
 			PackageEntry* current = &gPackageEntries[idx];
 			// skip packages whose Init() was skipped (fNode == NULL);
 			// callers dereference Package()->Node()->ID() on the result.
@@ -981,14 +857,15 @@ PackageEntry::GetLeastIdlePackage()
 		// Small system: full linear scan - every package is cheap to check.
 		for (int32 i = 0; i < gPackageCount; i++) {
 			PackageEntry* current = &gPackageEntries[i];
-			// Issue 73 fix: skip packages with NULL fNode (partially init'd).
+			// Note: skip packages with NULL fNode (partially init'd).
 			// Callers like power_saving::choose_core dereference
 			// core->Package()->Node()->ID() on the result; if Node() is NULL
 			// this crashes. The existing NULL skip prevents returning such a
 			// package, but we document it explicitly here.
 			if (current->fNode == NULL)
 				continue;
-			int32 count = atomic_get(const_cast<int32 volatile*>(reinterpret_cast<const int32*>(&current->fIdleCoreCount)));
+			int32 count = atomic_get(const_cast<int32 volatile*>(
+				reinterpret_cast<const int32*>(&current->fIdleCoreCount)));
 			if (count != 0 && (package == NULL || count < bestIdleCount)) {
 				package = current;
 				bestIdleCount = count;
@@ -999,31 +876,23 @@ PackageEntry::GetLeastIdlePackage()
 	return package;
 }
 
+inline void PackageEntry::ReadLockCore() { acquire_read_spinlock(&fCoreLock); }
 
-inline void
-PackageEntry::ReadLockCore()
-{
-	acquire_read_spinlock(&fCoreLock);
-}
-
-
-inline bool
-CoreEntry::HasHighPriorityThread() const
-{
-	// Issue 12 fix: lockless approximation replacing TryLockRunQueue in
+inline bool CoreEntry::HasHighPriorityThread() const {
+	// Note: lockless approximation replacing TryLockRunQueue in
 	// ComputeQuantum.  TryLock failure under contention (common on loaded
 	// systems) left displayReady=false even when a display thread was ready,
 	// handing the running thread up to kMaxQuantum instead of kDisplayQuantum.
 	//
-	// We use the same atomic_get pattern as PeekMaximum: bitmap writes are
+	// We use the same atomic-get pattern as PeekMaximum: bitmap writes are
 	// done under the run-queue lock but we read without it.  On x86 aligned
 	// 32-bit loads are indivisible; on other supported architectures the
 	// worst case is a stale read that causes one extra-long quantum before
 	// the next reschedule corrects it - acceptable for this hint.
 	const uint32* bitmap = fRunQueue.GetBitmap();
 	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-		uint32 val = (uint32)atomic_get(reinterpret_cast<int32 volatile*>(
-			const_cast<uint32*>(&bitmap[i])));
+		uint32 val =
+			(uint32)LoadAcquire(reinterpret_cast<const int32&>(bitmap[i]));
 		if (i == ThreadRunQueue::kBitmapSize - 1)
 			val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 		if (val != 0) {
@@ -1036,18 +905,12 @@ CoreEntry::HasHighPriorityThread() const
 	return false;
 }
 
-
-inline void
-PackageEntry::ReadUnlockCore()
-{
+inline void PackageEntry::ReadUnlockCore() {
 	release_read_spinlock(&fCoreLock);
 }
 
-
 int SmoothLoad(int oldLoad, int newLoad);
 
-
-}	// namespace Scheduler
-
+}  // namespace Scheduler
 
 #endif	// KERNEL_SCHEDULER_CPU_H

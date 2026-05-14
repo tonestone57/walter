@@ -4,16 +4,14 @@
  * Audit fixes applied 2025.
  */
 
-#include <scheduling_analysis.h>
-
 #include <elf.h>
 #include <kernel.h>
 #include <scheduler_defs.h>
+#include <scheduling_analysis.h>
 #include <tracing.h>
 #include <util/AutoLock.h>
 
 #include "scheduler_tracing.h"
-
 
 #if SCHEDULER_TRACING
 
@@ -33,64 +31,42 @@ enum HashObjectType {
 	HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT
 };
 
-
 struct HashObjectKey {
-	virtual ~HashObjectKey()
-	{
-	}
+	virtual ~HashObjectKey() {}
 
 	virtual HashObjectType Type() const = 0;
 	virtual uint32 HashKey() const = 0;
 	virtual bool Equals(const HashObjectKey* key) const = 0;
 };
-
 
 struct HashObject {
-	HashObject*	next;
+	HashObject* next;
 
-	virtual ~HashObject()
-	{
-	}
+	virtual ~HashObject() {}
 
 	virtual HashObjectType Type() const = 0;
 	virtual uint32 HashKey() const = 0;
 	virtual bool Equals(const HashObjectKey* key) const = 0;
 };
 
-
 struct ThreadKey : HashObjectKey {
-	thread_id	id;
+	thread_id id;
 
-	ThreadKey(thread_id id)
-		:
-		id(id)
-	{
-	}
+	ThreadKey(thread_id id) : id(id) {}
 
-	virtual HashObjectType Type() const
-	{
-		return HASH_OBJECT_TYPE_THREAD;
-	}
+	virtual HashObjectType Type() const { return HASH_OBJECT_TYPE_THREAD; }
 
-	virtual uint32 HashKey() const
-	{
-		return (uint32)id;
-	}
+	virtual uint32 HashKey() const { return (uint32)id; }
 
-	virtual bool Equals(const HashObjectKey* _key) const
-	{
+	virtual bool Equals(const HashObjectKey* _key) const {
 		if (_key->Type() != HASH_OBJECT_TYPE_THREAD)
 			return false;
 		return static_cast<const ThreadKey*>(_key)->id == id;
 	}
 };
 
-
 struct Thread : HashObject, scheduling_analysis_thread {
-	virtual HashObjectType Type() const
-	{
-		return HASH_OBJECT_TYPE_THREAD;
-	}
+	virtual HashObjectType Type() const { return HASH_OBJECT_TYPE_THREAD; }
 
 	ScheduleState state;
 	bigtime_t lastTime;
@@ -98,12 +74,10 @@ struct Thread : HashObject, scheduling_analysis_thread {
 	ThreadWaitObject* waitObject;
 
 	Thread(thread_id id)
-		:
-		state(UNKNOWN),
-		lastTime(0),
+		: state(UNKNOWN),
+		  lastTime(0),
 
-		waitObject(NULL)
-	{
+		  waitObject(NULL) {
 		this->id = id;
 		name[0] = '\0';
 
@@ -129,13 +103,9 @@ struct Thread : HashObject, scheduling_analysis_thread {
 		wait_objects = NULL;
 	}
 
-	virtual uint32 HashKey() const
-	{
-		return (uint32)id;
-	}
+	virtual uint32 HashKey() const { return (uint32)id; }
 
-	virtual bool Equals(const HashObjectKey* _key) const
-	{
+	virtual bool Equals(const HashObjectKey* _key) const {
 		if (_key->Type() != HASH_OBJECT_TYPE_THREAD)
 			return false;
 		const ThreadKey* key = static_cast<const ThreadKey*>(_key);
@@ -143,30 +113,17 @@ struct Thread : HashObject, scheduling_analysis_thread {
 	}
 };
 
-
 struct WaitObjectKey : HashObjectKey {
-	uint32	type;
-	void*	object;
+	uint32 type;
+	void* object;
 
-	WaitObjectKey(uint32 type, void* object)
-		:
-		type(type),
-		object(object)
-	{
-	}
+	WaitObjectKey(uint32 type, void* object) : type(type), object(object) {}
 
-	virtual HashObjectType Type() const
-	{
-		return HASH_OBJECT_TYPE_WAIT_OBJECT;
-	}
+	virtual HashObjectType Type() const { return HASH_OBJECT_TYPE_WAIT_OBJECT; }
 
-	virtual uint32 HashKey() const
-	{
-		return type ^ (uint32)(addr_t)object;
-	}
+	virtual uint32 HashKey() const { return type ^ (uint32)(addr_t)object; }
 
-	virtual bool Equals(const HashObjectKey* _key) const
-	{
+	virtual bool Equals(const HashObjectKey* _key) const {
 		if (_key->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
 			return false;
 		const WaitObjectKey* key = static_cast<const WaitObjectKey*>(_key);
@@ -174,28 +131,19 @@ struct WaitObjectKey : HashObjectKey {
 	}
 };
 
-
 struct WaitObject : HashObject, scheduling_analysis_wait_object {
-	virtual HashObjectType Type() const
-	{
-		return HASH_OBJECT_TYPE_WAIT_OBJECT;
-	}
+	virtual HashObjectType Type() const { return HASH_OBJECT_TYPE_WAIT_OBJECT; }
 
-	WaitObject(uint32 type, void* object)
-	{
+	WaitObject(uint32 type, void* object) {
 		this->type = type;
 		this->object = object;
 		name[0] = '\0';
 		referenced_object = NULL;
 	}
 
-	virtual uint32 HashKey() const
-	{
-		return type ^ (uint32)(addr_t)object;
-	}
+	virtual uint32 HashKey() const { return type ^ (uint32)(addr_t)object; }
 
-	virtual bool Equals(const HashObjectKey* _key) const
-	{
+	virtual bool Equals(const HashObjectKey* _key) const {
 		if (_key->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
 			return false;
 		const WaitObjectKey* key = static_cast<const WaitObjectKey*>(_key);
@@ -203,44 +151,34 @@ struct WaitObject : HashObject, scheduling_analysis_wait_object {
 	}
 };
 
-
 struct ThreadWaitObjectKey : HashObjectKey {
-	thread_id				thread;
-	uint32					type;
-	void*					object;
+	thread_id thread;
+	uint32 type;
+	void* object;
 
 	ThreadWaitObjectKey(thread_id thread, uint32 type, void* object)
-		:
-		thread(thread),
-		type(type),
-		object(object)
-	{
-	}
+		: thread(thread), type(type), object(object) {}
 
-	virtual HashObjectType Type() const
-	{
+	virtual HashObjectType Type() const {
 		return HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT;
 	}
 
-	virtual uint32 HashKey() const
-	{
+	virtual uint32 HashKey() const {
 		return (uint32)thread ^ type ^ (uint32)(addr_t)object;
 	}
 
-	virtual bool Equals(const HashObjectKey* _key) const
-	{
+	virtual bool Equals(const HashObjectKey* _key) const {
 		if (_key->Type() != HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT)
 			return false;
-		const ThreadWaitObjectKey* key
-			= static_cast<const ThreadWaitObjectKey*>(_key);
-		return key->thread == thread && key->type == type && key->object == object;
+		const ThreadWaitObjectKey* key =
+			static_cast<const ThreadWaitObjectKey*>(_key);
+		return key->thread == thread && key->type == type &&
+			   key->object == object;
 	}
 };
 
-
 struct ThreadWaitObject : HashObject, scheduling_analysis_thread_wait_object {
-	ThreadWaitObject(thread_id thread, WaitObject* waitObject)
-	{
+	ThreadWaitObject(thread_id thread, WaitObject* waitObject) {
 		this->thread = thread;
 		wait_object = waitObject;
 		wait_time = 0;
@@ -248,44 +186,38 @@ struct ThreadWaitObject : HashObject, scheduling_analysis_thread_wait_object {
 		next_in_list = NULL;
 	}
 
-	virtual HashObjectType Type() const
-	{
+	virtual HashObjectType Type() const {
 		return HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT;
 	}
 
-	virtual uint32 HashKey() const
-	{
-		return (uint32)thread ^ wait_object->type ^ (uint32)(addr_t)wait_object->object;
+	virtual uint32 HashKey() const {
+		return (uint32)thread ^ wait_object->type ^
+			   (uint32)(addr_t)wait_object->object;
 	}
 
-	virtual bool Equals(const HashObjectKey* _key) const
-	{
+	virtual bool Equals(const HashObjectKey* _key) const {
 		if (_key->Type() != HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT)
 			return false;
-		const ThreadWaitObjectKey* key
-			= static_cast<const ThreadWaitObjectKey*>(_key);
-		return key->thread == thread && key->type == wait_object->type
-			&& key->object == wait_object->object;
+		const ThreadWaitObjectKey* key =
+			static_cast<const ThreadWaitObjectKey*>(_key);
+		return key->thread == thread && key->type == wait_object->type &&
+			   key->object == wait_object->object;
 	}
 };
 
-
 class SchedulingAnalysisManager {
-public:
+   public:
 	SchedulingAnalysisManager(void* buffer, size_t size)
-		:
-		fBuffer(buffer),
-		fSize(size),
-		fHashTable(NULL),
-		fHashTableSize(0)
-	{
+		: fBuffer(buffer), fSize(size), fHashTable(NULL), fHashTableSize(0) {
 		fAnalysis.thread_count = 0;
 		fAnalysis.threads = NULL;
 		fAnalysis.wait_object_count = 0;
 		fAnalysis.thread_wait_object_count = 0;
 
 		size_t maxObjectSize = (max_c(max_c(sizeof(Thread), sizeof(WaitObject)),
-			sizeof(ThreadWaitObject)) + 7) & ~(size_t)7;
+									  sizeof(ThreadWaitObject)) +
+								7) &
+							   ~(size_t)7;
 		size_t entrySize = maxObjectSize + sizeof(HashObject*);
 		fHashTableSize = size / entrySize;
 		if (fHashTableSize == 0) {
@@ -300,13 +232,9 @@ public:
 		fRemainingBytes = (uintptr_t)fHashTable - (uintptr_t)fBuffer;
 	}
 
-	const scheduling_analysis* Analysis() const
-	{
-		return &fAnalysis;
-	}
+	const scheduling_analysis* Analysis() const { return &fAnalysis; }
 
-	void* Allocate(size_t size)
-	{
+	void* Allocate(size_t size) {
 		size = (size + 7) & ~(size_t)7;
 		for (int32 i = 0; i < 1000; i++) {
 #if B_HAIKU_64_BIT
@@ -321,20 +249,21 @@ public:
 					(uint64)newAlloc, (uint64)current) == current) {
 				scheduler_atomic_add64(
 					reinterpret_cast<uint64 volatile*>(&fRemainingBytes),
-					(uint64)-(int64)size);
+					(uint64) - (int64)size);
 				return (void*)(uintptr_t)current;
 			}
 #else
-			int32 current32 = atomic_get(
-				reinterpret_cast<int32 volatile*>(&fNextAllocation));
+			int32 current32 =
+				LoadAcquire(reinterpret_cast<const int32&>(fNextAllocation));
 			int32 newAlloc32 = current32 + (int32)size;
 			int32 hashTableAddr32 = (int32)(uintptr_t)fHashTable;
 			if (size > (size_t)B_INT32_MAX || newAlloc32 > hashTableAddr32)
 				return NULL;
-			if (atomic_test_and_set(
+			if (scheduler_atomic_test_and_set(
 					reinterpret_cast<int32 volatile*>(&fNextAllocation),
 					newAlloc32, current32) == current32) {
-				atomic_add(reinterpret_cast<int32 volatile*>(&fRemainingBytes),
+				scheduler_atomic_add(
+					reinterpret_cast<int32 volatile*>(&fRemainingBytes),
 					-(int32)size);
 				return (void*)(uintptr_t)current32;
 			}
@@ -343,8 +272,7 @@ public:
 		return NULL;
 	}
 
-	void Insert(HashObject* object)
-	{
+	void Insert(HashObject* object) {
 		if (fHashTable == NULL)
 			return;
 
@@ -353,68 +281,62 @@ public:
 		fHashTable[index] = object;
 	}
 
-	void Remove(HashObject* object)
-	{
+	void Remove(HashObject* object) {
 		if (fHashTable == NULL)
 			return;
 
 		uint32 index = object->HashKey() % fHashTableSize;
 		HashObject** slot = &fHashTable[index];
-		while (*slot != NULL && *slot != object)
-			slot = &(*slot)->next;
+		while (*slot != NULL && *slot != object) slot = &(*slot)->next;
 
 		if (*slot != NULL)
 			*slot = object->next;
 	}
 
-	HashObject* Lookup(const HashObjectKey& key) const
-	{
+	HashObject* Lookup(const HashObjectKey& key) const {
 		if (fHashTable == NULL)
 			return NULL;
 
 		uint32 index = key.HashKey() % fHashTableSize;
 		HashObject* object = fHashTable[index];
-		while (object != NULL && !object->Equals(&key))
-			object = object->next;
+		while (object != NULL && !object->Equals(&key)) object = object->next;
 		return object;
 	}
 
-	Thread* ThreadFor(thread_id id) const
-	{
+	Thread* ThreadFor(thread_id id) const {
 		HashObject* object = Lookup(ThreadKey(id));
 		if (object == NULL || object->Type() != HASH_OBJECT_TYPE_THREAD)
 			return NULL;
 		return static_cast<Thread*>(object);
 	}
 
-	WaitObject* WaitObjectFor(uint32 type, void* object) const
-	{
+	WaitObject* WaitObjectFor(uint32 type, void* object) const {
 		HashObject* hashObject = Lookup(WaitObjectKey(type, object));
-		if (hashObject == NULL || hashObject->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
+		if (hashObject == NULL ||
+			hashObject->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
 			return NULL;
 		return static_cast<WaitObject*>(hashObject);
 	}
 
 	ThreadWaitObject* ThreadWaitObjectFor(thread_id thread, uint32 type,
-		void* object) const
-	{
-		HashObject* hashObject = Lookup(ThreadWaitObjectKey(thread, type, object));
-		if (hashObject == NULL
-			|| hashObject->Type() != HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT) {
+										  void* object) const {
+		HashObject* hashObject =
+			Lookup(ThreadWaitObjectKey(thread, type, object));
+		if (hashObject == NULL ||
+			hashObject->Type() != HASH_OBJECT_TYPE_THREAD_WAIT_OBJECT) {
 			return NULL;
 		}
 		return static_cast<ThreadWaitObject*>(hashObject);
 	}
 
-	status_t AddThread(thread_id id, const char* name)
-	{
+	status_t AddThread(thread_id id, const char* name) {
 		Thread* thread = ThreadFor(id);
 		if (thread == NULL) {
 			void* memory = Allocate(sizeof(Thread));
 			if (memory == NULL)
 				return B_NO_MEMORY;
 
-			thread = new(memory) Thread(id);
+			thread = new (memory) Thread(id);
 			Insert(thread);
 			fAnalysis.thread_count++;
 		}
@@ -426,8 +348,7 @@ public:
 	}
 
 	status_t AddWaitObject(uint32 type, void* object,
-		WaitObject** _waitObject = NULL)
-	{
+						   WaitObject** _waitObject = NULL) {
 		WaitObject* waitObject = WaitObjectFor(type, object);
 		if (waitObject != NULL) {
 			if (_waitObject != NULL)
@@ -439,12 +360,12 @@ public:
 		if (memory == NULL)
 			return B_NO_MEMORY;
 
-		waitObject = new(memory) WaitObject(type, object);
+		waitObject = new (memory) WaitObject(type, object);
 		Insert(waitObject);
 		fAnalysis.wait_object_count++;
 
-		if (type == THREAD_BLOCK_TYPE_SNOOZE
-			|| type == THREAD_BLOCK_TYPE_SIGNAL) {
+		if (type == THREAD_BLOCK_TYPE_SNOOZE ||
+			type == THREAD_BLOCK_TYPE_SIGNAL) {
 			strcpy(waitObject->name, "?");
 		}
 
@@ -455,8 +376,7 @@ public:
 	}
 
 	status_t UpdateWaitObject(uint32 type, void* object, const char* name,
-		void* referencedObject)
-	{
+							  void* referencedObject) {
 		WaitObject* waitObject = WaitObjectFor(type, object);
 		if (waitObject == NULL)
 			return B_OK;
@@ -478,8 +398,7 @@ public:
 	}
 
 	bool UpdateWaitObjectDontAdd(uint32 type, void* object, const char* name,
-		void* referencedObject)
-	{
+								 void* referencedObject) {
 		WaitObject* waitObject = WaitObjectFor(type, object);
 		if (waitObject == NULL || waitObject->name[0] != '\0')
 			return false;
@@ -493,17 +412,16 @@ public:
 		return B_OK;
 	}
 
-	status_t AddThreadWaitObject(Thread* thread, uint32 type, void* object)
-	{
+	status_t AddThreadWaitObject(Thread* thread, uint32 type, void* object) {
 		WaitObject* waitObject = WaitObjectFor(type, object);
 		if (waitObject == NULL) {
 			return B_ERROR;
 		}
 
-		ThreadWaitObject* threadWaitObject = ThreadWaitObjectFor(thread->id,
-			type, object);
-		if (threadWaitObject == NULL
-			|| threadWaitObject->wait_object != waitObject) {
+		ThreadWaitObject* threadWaitObject =
+			ThreadWaitObjectFor(thread->id, type, object);
+		if (threadWaitObject == NULL ||
+			threadWaitObject->wait_object != waitObject) {
 			if (threadWaitObject != NULL)
 				Remove(threadWaitObject);
 
@@ -511,8 +429,8 @@ public:
 			if (memory == NULL)
 				return B_NO_MEMORY;
 
-			threadWaitObject = new(memory) ThreadWaitObject(thread->id,
-				waitObject);
+			threadWaitObject =
+				new (memory) ThreadWaitObject(thread->id, waitObject);
 			Insert(threadWaitObject);
 			fAnalysis.thread_wait_object_count++;
 
@@ -525,8 +443,7 @@ public:
 		return B_OK;
 	}
 
-	int32 MissingWaitObjects() const
-	{
+	int32 MissingWaitObjects() const {
 		if (fHashTable == NULL)
 			return 0;
 
@@ -547,11 +464,10 @@ public:
 		return count;
 	}
 
-	status_t FinishAnalysis()
-	{
-		scheduling_analysis_thread** threads
-			= (scheduling_analysis_thread**)Allocate(
-				sizeof(Thread*) * fAnalysis.thread_count);
+	status_t FinishAnalysis() {
+		scheduling_analysis_thread** threads =
+			(scheduling_analysis_thread**)Allocate(sizeof(Thread*) *
+												   fAnalysis.thread_count);
 		if (threads == NULL)
 			return B_NO_MEMORY;
 
@@ -565,9 +481,10 @@ public:
 				switch (object->Type()) {
 					case HASH_OBJECT_TYPE_THREAD:
 						if (index >= (int32)fAnalysis.thread_count) {
-							dprintf("scheduling_analysis: more threads found in"
-								" hash table than expected (%" B_PRId32 " > %"
-								B_PRId32 "); truncating\n",
+							dprintf(
+								"scheduling_analysis: more threads found in"
+								" hash table than expected (%" B_PRId32
+								" > %" B_PRId32 "); truncating\n",
 								index + 1, (int32)fAnalysis.thread_count);
 							break;
 						}
@@ -588,44 +505,41 @@ public:
 
 		fAnalysis.threads = threads;
 #if SCHEDULING_ANALYSIS_TRACING
-		dprintf("scheduling analysis: free bytes: %" B_PRIu64 "/%" B_PRIu64 "\n",
-			(uint64)fRemainingBytes, (uint64)fSize);
+		dprintf("scheduling analysis: free bytes: %" B_PRIu64 "/%" B_PRIu64
+				"\n",
+				(uint64)fRemainingBytes, (uint64)fSize);
 #endif
 		return B_OK;
 	}
 
-private:
-	void _PolishWaitObject(WaitObject* waitObject)
-	{
+   private:
+	void _PolishWaitObject(WaitObject* waitObject) {
 		if (waitObject->name[0] != '\0')
 			return;
 
 		switch (waitObject->type) {
-			case THREAD_BLOCK_TYPE_SEMAPHORE:
-			{
+			case THREAD_BLOCK_TYPE_SEMAPHORE: {
 				sem_info info;
-				if (get_sem_info((sem_id)(addr_t)waitObject->object, &info)
-						== B_OK) {
+				if (get_sem_info((sem_id)(addr_t)waitObject->object, &info) ==
+					B_OK) {
 					strlcpy(waitObject->name, info.name,
-						sizeof(waitObject->name));
+							sizeof(waitObject->name));
 				}
 				break;
 			}
-			case THREAD_BLOCK_TYPE_CONDITION_VARIABLE:
-			{
-				ConditionVariable* variable
-					= (ConditionVariable*)waitObject->object;
+			case THREAD_BLOCK_TYPE_CONDITION_VARIABLE: {
+				ConditionVariable* variable =
+					(ConditionVariable*)waitObject->object;
 				if (!_IsInKernelImage(variable))
 					break;
 
 				waitObject->referenced_object = (void*)variable->Object();
 				strlcpy(waitObject->name, variable->ObjectType(),
-					sizeof(waitObject->name));
+						sizeof(waitObject->name));
 				break;
 			}
 
-			case THREAD_BLOCK_TYPE_MUTEX:
-			{
+			case THREAD_BLOCK_TYPE_MUTEX: {
 				mutex* lock = (mutex*)waitObject->object;
 				if (!_IsInKernelImage(lock))
 					break;
@@ -634,8 +548,7 @@ private:
 				break;
 			}
 
-			case THREAD_BLOCK_TYPE_RW_LOCK:
-			{
+			case THREAD_BLOCK_TYPE_RW_LOCK: {
 				rw_lock* lock = (rw_lock*)waitObject->object;
 				if (!_IsInKernelImage(lock))
 					break;
@@ -644,8 +557,7 @@ private:
 				break;
 			}
 
-			case THREAD_BLOCK_TYPE_OTHER:
-			{
+			case THREAD_BLOCK_TYPE_OTHER: {
 				const char* name = (const char*)waitObject->object;
 				if (name == NULL || _IsInKernelImage(name))
 					return;
@@ -667,27 +579,23 @@ private:
 		strcpy(waitObject->name, "?");
 	}
 
-	bool _IsInKernelImage(const void* _address)
-	{
+	bool _IsInKernelImage(const void* _address) {
 		return IS_KERNEL_ADDRESS((addr_t)_address);
 	}
 
-private:
-	scheduling_analysis	fAnalysis;
-	void*				fBuffer;
-	size_t				fSize;
-	HashObject**		fHashTable;
-	uint32				fHashTableSize;
+   private:
+	scheduling_analysis fAnalysis;
+	void* fBuffer;
+	size_t fSize;
+	HashObject** fHashTable;
+	uint32 fHashTableSize;
 
-	uintptr_t	fNextAllocation __attribute__((aligned(8)));
-	size_t		fRemainingBytes __attribute__((aligned(8)));
+	uintptr_t fNextAllocation __attribute__((aligned(8)));
+	size_t fRemainingBytes __attribute__((aligned(8)));
 };
 
-
-static status_t
-analyze_scheduling(bigtime_t from, bigtime_t until,
-	SchedulingAnalysisManager& manager)
-{
+static status_t analyze_scheduling(bigtime_t from, bigtime_t until,
+								   SchedulingAnalysisManager& manager) {
 	TraceEntryIterator iterator;
 	iterator.MoveTo(INT_MAX);
 	while (TraceEntry* _entry = iterator.Previous()) {
@@ -702,15 +610,15 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 
 		uint16 entryType = baseEntry->EntryType();
 
-		if (entryType < SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD
-			|| entryType > SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD) {
+		if (entryType < SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD ||
+			entryType > SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD) {
 			continue;
 		}
 
 		SchedulerTraceEntry* schedulerEntry = (SchedulerTraceEntry*)baseEntry;
 
 		status_t error = manager.AddThread(schedulerEntry->ThreadID(),
-			schedulerEntry->Name());
+										   schedulerEntry->Name());
 		if (error != B_OK)
 			return error;
 
@@ -737,7 +645,7 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 				}
 
 				error = manager.AddWaitObject(entry->PreviousWaitObjectType(),
-					waitObject);
+											  waitObject);
 				if (error != B_OK)
 					return error;
 			}
@@ -757,12 +665,13 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 		uint16 entryType = abstractEntry->EntryType();
 
 		// Check if it's one of ours.
-		if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE
-			&& entryType <= WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK) {
-			WaitObjectTraceEntry* waitObjectEntry = (WaitObjectTraceEntry*)abstractEntry;
-			status_t error = manager.UpdateWaitObject(waitObjectEntry->Type(),
-				waitObjectEntry->Object(), waitObjectEntry->Name(),
-				waitObjectEntry->ReferencedObject());
+		if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE &&
+			entryType <= WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK) {
+			WaitObjectTraceEntry* waitObjectEntry =
+				(WaitObjectTraceEntry*)abstractEntry;
+			status_t error = manager.UpdateWaitObject(
+				waitObjectEntry->Type(), waitObjectEntry->Object(),
+				waitObjectEntry->Name(), waitObjectEntry->ReferencedObject());
 			if (error != B_OK)
 				return error;
 			continue;
@@ -791,8 +700,8 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 			} else if (thread->state == PREEMPTED) {
 				thread->reruns++;
 				thread->total_rerun_time += diffTime;
-				if (thread->min_rerun_time < 0
-						|| diffTime < thread->min_rerun_time) {
+				if (thread->min_rerun_time < 0 ||
+					diffTime < thread->min_rerun_time) {
 					thread->min_rerun_time = diffTime;
 				}
 				if (diffTime > thread->max_rerun_time)
@@ -850,8 +759,8 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 							break;
 					}
 
-					status_t error = manager.AddThreadWaitObject(thread,
-						entry->PreviousWaitObjectType(), waitObject);
+					status_t error = manager.AddThreadWaitObject(
+						thread, entry->PreviousWaitObjectType(), waitObject);
 					if (error != B_OK)
 						return error;
 				}
@@ -860,8 +769,8 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 				thread->state = WAITING;
 			} else if (thread->state == UNKNOWN) {
 				uint32 threadState = entry->PreviousState();
-				if (threadState == B_THREAD_WAITING
-					|| threadState == B_THREAD_SUSPENDED) {
+				if (threadState == B_THREAD_WAITING ||
+					threadState == B_THREAD_SUSPENDED) {
 					thread->lastTime = entry->Time();
 					thread->state = WAITING;
 				} else if (threadState == B_THREAD_READY) {
@@ -908,7 +817,6 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 		}
 	}
 
-
 #if SCHEDULING_ANALYSIS_TRACING
 	int32 missingWaitObjects = manager.MissingWaitObjects();
 	if (missingWaitObjects > 0) {
@@ -919,9 +827,10 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 
 			AbstractTraceEntry* abstractEntry = (AbstractTraceEntry*)_entry;
 			uint16 entryType = abstractEntry->EntryType();
-			if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE
-				&& entryType <= WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK) {
-				WaitObjectTraceEntry* waitObjectEntry = (WaitObjectTraceEntry*)abstractEntry;
+			if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE &&
+				entryType <= WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK) {
+				WaitObjectTraceEntry* waitObjectEntry =
+					(WaitObjectTraceEntry*)abstractEntry;
 				if (manager.UpdateWaitObjectDontAdd(
 						waitObjectEntry->Type(), waitObjectEntry->Object(),
 						waitObjectEntry->Name(),
@@ -937,15 +846,12 @@ analyze_scheduling(bigtime_t from, bigtime_t until,
 	return B_OK;
 }
 
-}	// namespace SchedulingAnalysis
+}  // namespace SchedulingAnalysis
 
 #endif	// SCHEDULER_TRACING
 
-
-status_t
-_user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
-	size_t size, scheduling_analysis* analysis)
-{
+status_t _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
+								  size_t size, scheduling_analysis* analysis) {
 #if SCHEDULER_TRACING
 	using namespace SchedulingAnalysis;
 
@@ -989,7 +895,7 @@ _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 	if (error == B_OK) {
 		error = user_memcpy(analysis, manager.Analysis(),
-			sizeof(scheduling_analysis));
+							sizeof(scheduling_analysis));
 	}
 
 	return error;

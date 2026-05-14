@@ -8,61 +8,41 @@
 
 #include <debug.h>
 
-
 #if SCHEDULER_TRACING
 
 namespace SchedulerTracing {
 
 // #pragma mark - EnqueueThread
 
-
-void
-EnqueueThread::AddDump(TraceOutput& out)
-{
-	out.Print("scheduler enqueue %" B_PRId32 " \"%s\", effective priority %"
-		B_PRId32 ", real priority %" B_PRId32, fID, fName, fEffectivePriority,
-		fPriority);
+void EnqueueThread::AddDump(TraceOutput& out) {
+	out.Print("scheduler enqueue %" B_PRId32
+			  " \"%s\", effective priority %" B_PRId32
+			  ", real priority %" B_PRId32,
+			  fID, fName, fEffectivePriority, fPriority);
 }
 
-
-const char*
-EnqueueThread::Name() const
-{
-	return fName;
-}
-
+const char* EnqueueThread::Name() const { return fName; }
 
 // #pragma mark - RemoveThread
 
-
-void
-RemoveThread::AddDump(TraceOutput& out)
-{
+void RemoveThread::AddDump(TraceOutput& out) {
 	out.Print("scheduler remove %" B_PRId32 ", priority %" B_PRId32, fID,
-		fPriority);
+			  fPriority);
 }
 
-const char*
-RemoveThread::Name() const
-{
-	return NULL;
-}
-
+const char* RemoveThread::Name() const { return NULL; }
 
 // #pragma mark - ScheduleThread
 
-
-void
-ScheduleThread::AddDump(TraceOutput& out)
-{
-	out.Print("schedule %" B_PRId32 " \"%s\", priority %" B_PRId32 ", CPU %"
-		B_PRId32 ", previous thread: %" B_PRId32 " (", fID, fName, fPriority,
-		fCPU, fPreviousID);
+void ScheduleThread::AddDump(TraceOutput& out) {
+	out.Print("schedule %" B_PRId32 " \"%s\", priority %" B_PRId32
+			  ", CPU %" B_PRId32 ", previous thread: %" B_PRId32 " (",
+			  fID, fName, fPriority, fCPU, fPreviousID);
 	if (fPreviousState == B_THREAD_WAITING) {
 		switch (fPreviousWaitObjectType) {
 			case THREAD_BLOCK_TYPE_SEMAPHORE:
 				out.Print("sem %" B_PRId32,
-					(sem_id)(addr_t)fPreviousWaitObject);
+						  (sem_id)(addr_t)fPreviousWaitObject);
 				break;
 			case THREAD_BLOCK_TYPE_CONDITION_VARIABLE:
 				out.Print("cvar %p", fPreviousWaitObject);
@@ -102,22 +82,14 @@ ScheduleThread::AddDump(TraceOutput& out)
 	out.Print(")");
 }
 
-
-const char*
-ScheduleThread::Name() const
-{
-	return fName;
-}
+const char* ScheduleThread::Name() const { return fName; }
 
 // #pragma mark -
 
-
-int
-cmd_scheduler(int argc, char** argv)
-{
+int cmd_scheduler(int argc, char** argv) {
 	int64 threadID;
-	if (argc != 2
-		|| !evaluate_debug_expression(argv[1], (uint64*)&threadID, true)) {
+	if (argc != 2 ||
+		!evaluate_debug_expression(argv[1], (uint64*)&threadID, true)) {
 		print_debugger_command_usage(argv[0]);
 		return 0;
 	}
@@ -280,7 +252,7 @@ cmd_scheduler(int argc, char** argv)
 	kprintf("  total:   %" B_PRIdBIGTIME " us\n", totalRunTime);
 	if (runs > 0) {
 		kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
-			totalRunTime / runs, (totalRunTime % runs) * 100 / runs);
+				totalRunTime / runs, (totalRunTime % runs) * 100 / runs);
 	}
 	kprintf("  min:     %" B_PRIdBIGTIME " us\n", minRunTime);
 	kprintf("  max:     %" B_PRIdBIGTIME " us\n", maxRunTime);
@@ -291,11 +263,13 @@ cmd_scheduler(int argc, char** argv)
 		kprintf("  total:   %" B_PRIdBIGTIME " us\n", totalLatency);
 		if (latencies > 0) {
 			kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
-				totalLatency / latencies, (totalLatency % latencies) * 100 / latencies);
+					totalLatency / latencies,
+					(totalLatency % latencies) * 100 / latencies);
 		}
 		kprintf("  min:     %" B_PRIdBIGTIME " us\n", minLatency);
 		kprintf("  max:     %" B_PRIdBIGTIME " us (at tracing entry %" B_PRId32
-			")\n", maxLatency, maxLatencyEntry);
+				")\n",
+				maxLatency, maxLatencyEntry);
 	} else
 		kprintf("thread was never run after having been woken up\n");
 
@@ -305,11 +279,13 @@ cmd_scheduler(int argc, char** argv)
 		kprintf("  total:   %" B_PRIdBIGTIME " us\n", totalRerunTime);
 		if (reruns > 0) {
 			kprintf("  average: %" B_PRIdBIGTIME ".%02" B_PRIdBIGTIME " us\n",
-				totalRerunTime / reruns, (totalRerunTime % reruns) * 100 / reruns);
+					totalRerunTime / reruns,
+					(totalRerunTime % reruns) * 100 / reruns);
 		}
 		kprintf("  min:     %" B_PRIdBIGTIME " us\n", minRerunTime);
 		kprintf("  max:     %" B_PRIdBIGTIME " us (at tracing entry %" B_PRId32
-			")\n", maxRerunTime, maxRerunEntry);
+				")\n",
+				maxRerunTime, maxRerunEntry);
 	} else
 		kprintf("thread was never rerun after preemption\n");
 
@@ -321,6 +297,6 @@ cmd_scheduler(int argc, char** argv)
 	return 0;
 }
 
-}	// namespace SchedulerTracing
+}  // namespace SchedulerTracing
 
 #endif	// SCHEDULER_TRACING
