@@ -174,12 +174,12 @@ typedef AutoLocker<CoreEntry, CoreCPULocking> CoreCPULocker;
 class SchedulerModeLocking {
    public:
 	bool Lock(int* /* lockable */) {
-		CPUEntry::GetCPU(smp_get_current_cpu())->EnterScheduler();
+		// RCU Read Section: Wait-free on Haiku.
+		// reschedule() ensures the CPU's fRCULastGeneration is updated.
 		return true;
 	}
 
 	void Unlock(int* /* lockable */) {
-		CPUEntry::GetCPU(smp_get_current_cpu())->ExitScheduler();
 	}
 };
 
@@ -197,12 +197,10 @@ class InterruptsSchedulerModeLocking {
    public:
 	bool Lock(int* lockable) {
 		*lockable = disable_interrupts();
-		CPUEntry::GetCPU(smp_get_current_cpu())->EnterScheduler();
 		return true;
 	}
 
 	void Unlock(int* lockable) {
-		CPUEntry::GetCPU(smp_get_current_cpu())->ExitScheduler();
 		restore_interrupts(*lockable);
 	}
 };
@@ -223,18 +221,15 @@ class InterruptsBigSchedulerLocking {
    public:
 	bool Lock(int* lockable) {
 		*lockable = disable_interrupts();
-		// Optimization: Cache cpuCount to avoid repeated function calls in O(N)
-		// loop
-		int32 cpuCount = smp_get_num_cpus();
-		for (int32 i = 0; i < cpuCount; i++)
-			CPUEntry::GetCPU(i)->LockScheduler();
+		acquire_spinlock(&gSchedulerUpdateLock);
 		return true;
 	}
 
 	void Unlock(int* lockable) {
-		int32 cpuCount = smp_get_num_cpus();
-		for (int32 i = 0; i < cpuCount; i++)
-			CPUEntry::GetCPU(i)->UnlockScheduler();
+		// RCU Update: Wait for all CPUs to pass through a quiescent state.
+		scheduler_synchronize();
+
+		release_spinlock(&gSchedulerUpdateLock);
 		restore_interrupts(*lockable);
 	}
 };

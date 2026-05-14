@@ -366,9 +366,10 @@ bigtime_t ThreadData::ComputeQuantum() const {
 			reinterpret_cast<const uint64*>(&fBaseQuantum)));
 
 	// Note: ComputeQuantum is only called while the caller holds
-	// SchedulerModeLocker (a read lock on CPUEntry::fSchedulerModeLock).
-	// Mode switches require InterruptsBigSchedulerLocker which takes the
-	// write lock on every CPU, fully serialising against this read path.
+	// SchedulerModeLocker (RCU read-side).
+	// Mode switches require InterruptsBigSchedulerLocker which performs
+	// an RCU synchronize, ensuring all CPUs pass through a quiescent state
+	// (reschedule) before the change is considered complete.
 	// Plain struct-field reads are therefore safe and avoid potential
 	// undefined behaviour from casting unaligned bigtime_t pointers to
 	// int64* on 32-bit targets where atomic-get64 requires 8-byte alignment
@@ -655,8 +656,9 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 		now = system_time();
 
 	// Note: _UpdateDeadline is called from HasQuantumEnded which is
-	// called under SchedulerModeLocker (read lock). gDeadlineBucketSize won't
-	// change while any CPU holds the read lock. A plain read suffices and
+	// called under SchedulerModeLocker (RCU read-side).
+	// gDeadlineBucketSize won't change without an RCU synchronize call,
+	// ensuring all CPUs pass through reschedule(). A plain read suffices and
 	// avoids the memory barrier cost of atomic-get64 on ARM/RISC-V.
 	// We still use atomic-get64 for correctness on 32-bit targets where
 	// plain reads of 64-bit values are not atomic.
@@ -698,7 +700,7 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 	// Note: bucketSize was already computed via the mode struct
 	// field read at the top of this function. Re-read via atomic-get64
 	// only if the value is not already cached. Since we are under
-	// SchedulerModeLocker (read), gDeadlineBucketSize is stable.
+	// SchedulerModeLocker (RCU read-side), gDeadlineBucketSize is stable.
 	// Use the direct field read to avoid a redundant memory barrier.
 
 	// Floor at one bucket width so the deadline is always in the future.

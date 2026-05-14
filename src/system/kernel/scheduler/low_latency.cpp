@@ -718,14 +718,11 @@ static void rebalance_irqs(bool idle) {
 
 	// Note: rebalance_irqs is called from CPUEntry::ComputeLoad
 	// which is called from TrackLoad which is called from reschedule() under
-	// SchedulerModeLocker (read lock on fSchedulerModeLock). DPCQueue::Add
+	// SchedulerModeLocker (RCU read-side). DPCQueue::Add
 	// wakes a thread which eventually calls scheduler_enqueue_in_run_queue
-	// → SchedulerModeLocker. Read locks are reentrant on Haiku (rw_spinlock),
-	// so this is safe today. Document explicitly to prevent future regression
-	// if the locking model changes.
-	// NOTE: If this function is ever called from a write-lock context, the
-	// DPCQueue::Add path will deadlock. Add an explicit assertion here.
-	// (Cannot assert read-lock held without a scheduler-internal API.)
+	// → SchedulerModeLocker. This is wait-free under the RCU model.
+	// Document explicitly to prevent future regression if the locking model
+	// changes.
 
 	cpu_ent* cpu = get_cpu_struct();
 	// Snapshot currentCore BEFORE releasing irqs_lock.  A

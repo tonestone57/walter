@@ -88,12 +88,6 @@ class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 	void Start();
 	void Stop();
 
-	inline void EnterScheduler();
-	inline void ExitScheduler();
-
-	inline void LockScheduler();
-	inline void UnlockScheduler();
-
 	inline void LockRunQueue();
 	inline bool TryLockRunQueue();
 	inline void UnlockRunQueue();
@@ -102,6 +96,8 @@ class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 	// Used by UpdatePriorityBoostScalable for round-robin epoch ownership.
 	// Public because UpdatePriorityBoostScalable is a file-scope function.
 	int32 fCoreLocalIndex;
+
+	uint64 fRCULastGeneration __attribute__((aligned(8)));
 
 	void PushFront(ThreadData* thread, int32 priority);
 	void PushBack(ThreadData* thread, int32 priority);
@@ -150,8 +146,6 @@ class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 
 	int32 fCPUNumber;
 	CoreEntry* fCore;
-
-	rw_spinlock fSchedulerModeLock;
 
 	ThreadRunQueue fRunQueue;
 	spinlock fQueueLock;
@@ -447,26 +441,6 @@ extern SchedulerNode* gSchedulerNodes;
 extern uint64 gIdleNodeMask __attribute__((aligned(8)));
 extern int32 gNodeCount;
 
-inline void CPUEntry::EnterScheduler() {
-	SCHEDULER_ENTER_FUNCTION();
-	acquire_read_spinlock(&fSchedulerModeLock);
-}
-
-inline void CPUEntry::ExitScheduler() {
-	SCHEDULER_ENTER_FUNCTION();
-	release_read_spinlock(&fSchedulerModeLock);
-}
-
-inline void CPUEntry::LockScheduler() {
-	SCHEDULER_ENTER_FUNCTION();
-	acquire_write_spinlock(&fSchedulerModeLock);
-}
-
-inline void CPUEntry::UnlockScheduler() {
-	SCHEDULER_ENTER_FUNCTION();
-	release_write_spinlock(&fSchedulerModeLock);
-}
-
 inline void CPUEntry::LockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fQueueLock);
@@ -760,7 +734,7 @@ inline native_cpu_mask_t SchedulerNode::IdlePackageMask() const {
 // fCoreLock (write). CoreGoesIdle calls PackageEntry::CoreGoesIdle, which
 // now also acquires fCoreLock (write) for explicit serialization. This
 // ensures package-level state transitions are atomic even when triggered
-// outside of the global InterruptsBigSchedulerLocker path.
+// outside of the RCU-synchronized global update path.
 inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 	if (gSingleCore)
 		return;

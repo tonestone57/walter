@@ -547,7 +547,7 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 	// Fix: take ONE snapshot under a read of fCore, then use only the snapshot.
 	// MigrateTo() is only called from ChooseCoreAndCPU which holds
 	// CoreCPULocker; GoesAway is called from reschedule() which holds
-	// SchedulerModeLocker (read). These are different locks, so the race
+	// SchedulerModeLocker (RCU read-side). These are different mechanisms, so
 	// is real. The snapshot approach is the minimal safe fix.
 	{
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(

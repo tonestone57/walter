@@ -69,6 +69,47 @@ uint64 gIdleMask __attribute__((aligned(8))) = 0;
 
 spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
 
+uint64 gRCUGeneration __attribute__((aligned(8))) = 1;
+spinlock gSchedulerUpdateLock = B_SPINLOCK_INITIALIZER;
+
+void scheduler_synchronize() {
+	SCHEDULER_ENTER_FUNCTION();
+
+	int32 thisCPU = smp_get_current_cpu();
+
+	// Increment the global generation counter.  All future reschedules
+	// will observe the new value.
+	uint64 targetGen = scheduler_atomic_add64(
+						   reinterpret_cast<uint64 volatile*>(&gRCUGeneration), 1) +
+					   1;
+
+	// Broadcast an ICI to all other CPUs to force them into a quiescent
+	// state (reschedule).
+	int32 cpuCount = smp_get_num_cpus();
+	for (int32 i = 0; i < cpuCount; i++) {
+		if (i == thisCPU)
+			continue;
+		smp_send_ici(i, SMP_MSG_RESCHEDULE, 0, 0, 0, NULL, SMP_MSG_FLAG_ASYNC);
+	}
+
+	// Wait until all OTHER CPUs have reported a generation >= targetGen.
+	// The current CPU is already in a quiescent state (as a writer).
+	for (int32 i = 0; i < cpuCount; i++) {
+		if (i == thisCPU)
+			continue;
+
+		CPUEntry* cpu = CPUEntry::GetCPU(i);
+		while (scheduler_atomic_get64(&cpu->fRCULastGeneration) < targetGen) {
+			cpu_pause();
+		}
+	}
+
+	// Update current CPU generation to match, so future synchronizations
+	// don't wait for us unnecessarily.
+	scheduler_atomic_set64(&CPUEntry::GetCPU(thisCPU)->fRCULastGeneration,
+						   targetGen);
+}
+
 static timer sInteractionTimer;
 static int64 sLastInteractionTime __attribute__((aligned(8)));
 static int32 sDPCPending = 0;
@@ -755,11 +796,18 @@ static void reschedule(int32 nextState) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	int32 thisCPU = smp_get_current_cpu();
+	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);
+
+	// RCU Quiescent State: Report current generation.
+	// Since reschedule() runs with interrupts disabled, it forms a
+	// natural RCU critical section boundary.
+	scheduler_atomic_set64(&cpu->fRCULastGeneration,
+						   scheduler_atomic_get64(&gRCUGeneration));
+
 	gCPU[thisCPU].invoke_scheduler = false;
 
 	bigtime_t now = system_time();
 
-	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);
 	cpu->ClearReschedulePending();
 	CoreEntry* core = CoreEntry::GetCore(thisCPU);
 
@@ -1058,17 +1106,16 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 			// Fix: complete AddCPU FIRST while disabled is still true, then
 			// clear the disabled flag and publish the CPU via gCPUEnabled.
 			core->AddCPU(cpu);
+
+			// Initialize CPU state before publishing it.
+			cpu->Start();
+
 			// Note: set disabled=false and SetBitAtomic atomically
 			// under CoreCPUHeapLocker. GetCPUMask reads gCPUEnabled; enqueue
 			// checks !gCPU[id].disabled. Both must agree simultaneously.
 			gCPU[cpuID].disabled = false;
 			gCPUEnabled.SetBitAtomic(cpuID);
 		}
-
-		// Start the CPU after publishing all scheduler state and after
-		// releasing scheduler/core locks to avoid lock-order inversions if the
-		// startup path enters the scheduler immediately.
-		cpu->Start();
 	} else {
 		// Improve serialization of queue migration/removal:
 		// hold the global scheduler lock scope so concurrent scheduling on

@@ -230,7 +230,7 @@ CPUEntry::CPUEntry()
 	  fReschedulePending(0),
 	  fLastLocalPackageIndex(0),
 	  lastReschedule(0) {
-	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
+	fRCULastGeneration = 0;
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
 }
 
@@ -1377,7 +1377,7 @@ void PackageEntry::AddIdleCore(CoreEntry* core) {
 	if (oldMask == 0) {
 		// Note: document that fCoreLock is held here but NOT held
 		// in CoreGoesIdle. The two paths are serialized at a higher level
-		// (InterruptsBigSchedulerLocker for AddIdleCore vs. normal scheduling
+		// (RCU synchronization for AddIdleCore vs. normal scheduling
 		// for CoreGoesIdle). If this serialization is ever relaxed, an
 		// explicit atomic CAS must guard the PackageGoesIdle transition.
 		if (fNode != NULL)

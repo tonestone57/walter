@@ -324,6 +324,11 @@ extern int64 gDeadlineBucketSize __attribute__((aligned(8)));
 extern int32 gTotalRunnableThreads;
 extern uint64 gIdleMask __attribute__((aligned(8)));
 
+extern uint64 gRCUGeneration __attribute__((aligned(8)));
+extern spinlock gSchedulerUpdateLock;
+
+void scheduler_synchronize();
+
 extern CoreType gMinCoreType;
 extern CoreType gMaxCoreType;
 
