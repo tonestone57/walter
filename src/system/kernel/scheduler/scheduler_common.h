@@ -45,11 +45,6 @@ inline void AddRelease(int32 volatile& value, int v) {
 	atomic_add(const_cast<int32 volatile*>(&value), v);
 }
 
-static inline int32 scheduler_atomic_add(int32 volatile* value,
-										 int32 addValue) {
-	return atomic_add(const_cast<int32 volatile*>(value), addValue);
-}
-
 inline void SubAcquireRelease(int32 volatile& value, int v) {
 	atomic_add(const_cast<int32 volatile*>(&value), -v);
 }
@@ -113,7 +108,7 @@ typedef uint32 native_cpu_mask_t;
 // Helpers for atomic operations and bit manipulation on native_cpu_mask_t
 // These wrappers provide architecture-independent atomic access (32/64-bit).
 
-static inline native_cpu_mask_t scheduler_atomic_or(native_cpu_mask_t* value,
+static inline native_cpu_mask_t cpu_mask_or_atomic(native_cpu_mask_t* value,
 													native_cpu_mask_t orValue) {
 #if SCHEDULER_MASK_IS_64_BIT
 	return (native_cpu_mask_t)atomic_or64(
@@ -122,27 +117,6 @@ static inline native_cpu_mask_t scheduler_atomic_or(native_cpu_mask_t* value,
 	return (native_cpu_mask_t)atomic_or(
 		reinterpret_cast<int32 volatile*>(value), (int32)orValue);
 #endif
-}
-
-static inline uint64 scheduler_atomic_get64(uint64 volatile* value) {
-	return (uint64)atomic_get64(reinterpret_cast<int64 volatile*>(value));
-}
-
-static inline void scheduler_atomic_set64(uint64 volatile* value,
-										  uint64 newValue) {
-	atomic_set64(reinterpret_cast<int64 volatile*>(value), (int64)newValue);
-}
-
-static inline uint64 scheduler_atomic_add64(uint64 volatile* value,
-											uint64 addValue) {
-	return (uint64)atomic_add64(reinterpret_cast<int64 volatile*>(value),
-								(int64)addValue);
-}
-
-static inline uint64 scheduler_atomic_and64(uint64 volatile* value,
-											uint64 andValue) {
-	return (uint64)atomic_and64(reinterpret_cast<int64 volatile*>(value),
-								(int64)andValue);
 }
 
 static inline int scheduler_ffs(uint32 value) { return __builtin_ffs(value); }
@@ -169,31 +143,7 @@ static inline int scheduler_ctz(native_cpu_mask_t value) {
 #endif
 }
 
-static inline uint64 scheduler_atomic_test_and_set64(uint64 volatile* value,
-													 uint64 newValue,
-													 uint64 expectedValue) {
-	return (uint64)atomic_test_and_set64(reinterpret_cast<int64 volatile*>(value),
-										 (int64)newValue, (int64)expectedValue);
-}
-
-static inline uint64 scheduler_atomic_or64(uint64 volatile* value,
-										   uint64 orValue) {
-	return (uint64)atomic_or64(reinterpret_cast<int64 volatile*>(value),
-							   (int64)orValue);
-}
-
-static inline int32 scheduler_atomic_get_and_set(int32 volatile* value,
-												 int32 newValue) {
-	return atomic_get_and_set(value, newValue);
-}
-
-static inline int32 scheduler_atomic_test_and_set(int32 volatile* value,
-												  int32 newValue,
-												  int32 expectedValue) {
-	return atomic_test_and_set(value, newValue, expectedValue);
-}
-
-static inline native_cpu_mask_t scheduler_atomic_and(
+static inline native_cpu_mask_t cpu_mask_and_atomic(
 	native_cpu_mask_t* value, native_cpu_mask_t andValue) {
 #if SCHEDULER_MASK_IS_64_BIT
 	return (native_cpu_mask_t)atomic_and64(
@@ -204,7 +154,7 @@ static inline native_cpu_mask_t scheduler_atomic_and(
 #endif
 }
 
-static inline native_cpu_mask_t scheduler_atomic_get(native_cpu_mask_t* value) {
+static inline native_cpu_mask_t cpu_mask_get_atomic(native_cpu_mask_t* value) {
 #if SCHEDULER_MASK_IS_64_BIT
 	return (native_cpu_mask_t)atomic_get64(
 		reinterpret_cast<int64 volatile*>(value));
@@ -214,7 +164,7 @@ static inline native_cpu_mask_t scheduler_atomic_get(native_cpu_mask_t* value) {
 #endif
 }
 
-static inline void scheduler_atomic_set(native_cpu_mask_t* value,
+static inline void cpu_mask_set_atomic(native_cpu_mask_t* value,
 										native_cpu_mask_t newValue) {
 #if SCHEDULER_MASK_IS_64_BIT
 	atomic_set64(reinterpret_cast<int64 volatile*>(value), (int64)newValue);
@@ -223,7 +173,7 @@ static inline void scheduler_atomic_set(native_cpu_mask_t* value,
 #endif
 }
 
-static inline native_cpu_mask_t scheduler_atomic_test_and_set(
+static inline native_cpu_mask_t cpu_mask_test_and_set_atomic(
 	native_cpu_mask_t* value, native_cpu_mask_t newValue,
 	native_cpu_mask_t expectedValue) {
 #if SCHEDULER_MASK_IS_64_BIT
@@ -243,7 +193,7 @@ template <typename T>
 static inline T* atomic_pointer_get(T* volatile* pointer) {
 #if SCHEDULER_MASK_IS_64_BIT
 	T* value = reinterpret_cast<T*>(
-		scheduler_atomic_get64(reinterpret_cast<uint64 volatile*>(pointer)));
+		atomic_get64(reinterpret_cast<int64 volatile*>(pointer)));
 #else
 	T* value = reinterpret_cast<T*>(
 		atomic_get(reinterpret_cast<int32 volatile*>(pointer)));
@@ -256,8 +206,8 @@ template <typename T>
 static inline void atomic_pointer_set(T* volatile* pointer, T* value) {
 	memory_write_barrier();
 #if SCHEDULER_MASK_IS_64_BIT
-	scheduler_atomic_set64(reinterpret_cast<uint64 volatile*>(pointer),
-						   reinterpret_cast<uint64>(value));
+	atomic_set64(reinterpret_cast<int64 volatile*>(pointer),
+				 (int64)reinterpret_cast<addr_t>(value));
 #else
 	atomic_set(reinterpret_cast<int32 volatile*>(pointer),
 			   reinterpret_cast<int32>(value));
@@ -268,10 +218,10 @@ template <typename T>
 static inline T* atomic_pointer_test_and_set(T* volatile* pointer, T* newValue,
 											 T* expectedValue) {
 #if SCHEDULER_MASK_IS_64_BIT
-	return reinterpret_cast<T*>(scheduler_atomic_test_and_set64(
-		reinterpret_cast<uint64 volatile*>(pointer),
-		reinterpret_cast<uint64>(newValue),
-		reinterpret_cast<uint64>(expectedValue)));
+	return reinterpret_cast<T*>(atomic_test_and_set64(
+		reinterpret_cast<int64 volatile*>(pointer),
+		(int64)reinterpret_cast<addr_t>(newValue),
+		(int64)reinterpret_cast<addr_t>(expectedValue)));
 #else
 	return reinterpret_cast<T*>(
 		atomic_test_and_set(reinterpret_cast<int32 volatile*>(pointer),
@@ -324,7 +274,7 @@ extern int64 gDeadlineBucketSize __attribute__((aligned(8)));
 extern int32 gTotalRunnableThreads;
 extern uint64 gIdleMask __attribute__((aligned(8)));
 
-extern uint64 gRCUGeneration __attribute__((aligned(8)));
+extern int64 gRCUGeneration __attribute__((aligned(8)));
 extern spinlock gSchedulerUpdateLock;
 
 void scheduler_synchronize();
@@ -354,22 +304,23 @@ inline void AssertThreadQueued(Thread* thread) {
 inline void SetCPUIDle(uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	scheduler_atomic_or64(reinterpret_cast<uint64 volatile*>(&mask),
-						  1ULL << cpu);
+	atomic_or64(reinterpret_cast<int64 volatile*>(&mask),
+				(int64)1 << cpu);
 }
 
 inline void ClearCPUIDle(uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	scheduler_atomic_and64(reinterpret_cast<uint64 volatile*>(&mask),
-						   ~(1ULL << cpu));
+	atomic_and64(reinterpret_cast<int64 volatile*>(&mask),
+				 ~((int64)1 << cpu));
 }
 
 inline bool IsCPUIDle(const uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return false;
-	return (scheduler_atomic_get64(const_cast<uint64 volatile*>(&mask)) &
-			(1ULL << cpu)) != 0;
+	return (atomic_get64(reinterpret_cast<int64 volatile*>(
+							 const_cast<uint64 volatile*>(&mask))) &
+			((int64)1 << cpu)) != 0;
 }
 
 struct SchedulerSnapshot {
@@ -383,7 +334,8 @@ inline SchedulerSnapshot MakeSchedulerSnapshot(const int32& total,
 											   const uint64& idleMask) {
 	SchedulerSnapshot s;
 	s.totalRunnable = LoadAcquire(total);
-	s.idleMask = scheduler_atomic_get64(const_cast<uint64 volatile*>(&idleMask));
+	s.idleMask = (uint64)atomic_get64(reinterpret_cast<int64 volatile*>(
+		const_cast<uint64 volatile*>(&idleMask)));
 	return s;
 }
 

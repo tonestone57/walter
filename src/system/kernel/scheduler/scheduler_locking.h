@@ -226,9 +226,6 @@ class InterruptsBigSchedulerLocking {
 	}
 
 	void Unlock(int* lockable) {
-		// RCU Update: Wait for all CPUs to pass through a quiescent state.
-		scheduler_synchronize();
-
 		release_spinlock(&gSchedulerUpdateLock);
 		restore_interrupts(*lockable);
 	}

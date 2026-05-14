@@ -69,7 +69,7 @@ uint64 gIdleMask __attribute__((aligned(8))) = 0;
 
 spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
 
-uint64 gRCUGeneration __attribute__((aligned(8))) = 1;
+int64 gRCUGeneration __attribute__((aligned(8))) = 1;
 spinlock gSchedulerUpdateLock = B_SPINLOCK_INITIALIZER;
 
 void scheduler_synchronize() {
@@ -79,8 +79,8 @@ void scheduler_synchronize() {
 
 	// Increment the global generation counter.  All future reschedules
 	// will observe the new value.
-	uint64 targetGen = scheduler_atomic_add64(
-						   reinterpret_cast<uint64 volatile*>(&gRCUGeneration), 1) +
+	int64 targetGen = atomic_add64(
+						   reinterpret_cast<int64 volatile*>(&gRCUGeneration), 1) +
 					   1;
 
 	// Broadcast an ICI to all other CPUs to force them into a quiescent
@@ -99,15 +99,17 @@ void scheduler_synchronize() {
 			continue;
 
 		CPUEntry* cpu = CPUEntry::GetCPU(i);
-		while (scheduler_atomic_get64(&cpu->fRCULastGeneration) < targetGen) {
+		while (atomic_get64(reinterpret_cast<int64 volatile*>(
+				   &cpu->fRCULastGeneration)) < targetGen) {
 			cpu_pause();
 		}
 	}
 
 	// Update current CPU generation to match, so future synchronizations
 	// don't wait for us unnecessarily.
-	scheduler_atomic_set64(&CPUEntry::GetCPU(thisCPU)->fRCULastGeneration,
-						   targetGen);
+	atomic_set64(reinterpret_cast<int64 volatile*>(
+					 &CPUEntry::GetCPU(thisCPU)->fRCULastGeneration),
+				 targetGen);
 }
 
 static timer sInteractionTimer;
@@ -149,14 +151,13 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 
 	{
 		InterruptsBigSchedulerLocker locker;
-		if ((int64)scheduler_atomic_get64(reinterpret_cast<uint64 volatile*>(
-				&gDeadlineBucketSize)) != targetResolution) {
-			scheduler_atomic_set64(
-				reinterpret_cast<uint64 volatile*>(&gDeadlineBucketSize),
-				(uint64)targetResolution);
+		if (atomic_get64(reinterpret_cast<int64 volatile*>(&gDeadlineBucketSize)) != targetResolution) {
+			atomic_set64(reinterpret_cast<int64 volatile*>(&gDeadlineBucketSize),
+						 (int64)targetResolution);
 			UpdateDeadlineScalingScalable();
 		}
 	}
+	scheduler_synchronize();
 
 	StoreRelease(sDPCPending, 0);
 }
@@ -175,7 +176,7 @@ static status_t interaction_timer_hook(struct timer* timer) {
 	StoreRelease(sTimerArmed, 0);
 
 	StoreRelease(sPendingDPCTarget, 5000);
-	if (scheduler_atomic_get_and_set(&sDPCPending, 1) == 0) {
+	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
@@ -210,13 +211,13 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// read twice below and the two reads could observe different values if a
 	// concurrent DPC is updating it.  A single cached read is also cheaper on
 	// the hot path.
-	int64 currentBucketSize = (int64)scheduler_atomic_get64(
-		reinterpret_cast<uint64 volatile*>(&gDeadlineBucketSize));
+	int64 currentBucketSize = (int64)atomic_get64(reinterpret_cast<int64 volatile*>(
+		reinterpret_cast<uint64 volatile*>(&gDeadlineBucketSize)));
 
 	if (now == 0)
 		now = system_time();
-	bigtime_t lastTime = (bigtime_t)scheduler_atomic_get64(
-		reinterpret_cast<uint64 volatile*>(&sLastInteractionTime));
+	bigtime_t lastTime = (bigtime_t)atomic_get64(reinterpret_cast<int64 volatile*>(
+		reinterpret_cast<uint64 volatile*>(&sLastInteractionTime)));
 	// Note: Scheduler::MinimalQuantum() reads sCurrentMode->minimal_quantum
 	// in two separate memory accesses (pointer load + field read). On 32-bit
 	// targets, a concurrent mode switch can change sCurrentMode between these,
@@ -229,15 +230,14 @@ void scheduler_update_interaction_state(bigtime_t now) {
 							  : 1200;  // fallback: 1.2ms minimal quantum
 
 	while (now - lastTime >= threshold) {
-		if ((bigtime_t)scheduler_atomic_test_and_set64(
-				reinterpret_cast<uint64 volatile*>(&sLastInteractionTime),
-				(uint64)now, (uint64)lastTime) == lastTime) {
+		if ((bigtime_t)atomic_test_and_set64(reinterpret_cast<int64 volatile*>(
+				reinterpret_cast<uint64 volatile*>(&sLastInteractionTime)), (int64)((uint64)now), (int64)((uint64))lastTime) == lastTime) {
 			lastTime = now;
 			break;
 		}
 
-		lastTime = (bigtime_t)scheduler_atomic_get64(
-			reinterpret_cast<uint64 volatile*>(&sLastInteractionTime));
+		lastTime = (bigtime_t)atomic_get64(reinterpret_cast<int64 volatile*>(
+			reinterpret_cast<uint64 volatile*>(&sLastInteractionTime)));
 		if (now - lastTime < threshold)
 			return;
 	}
@@ -245,7 +245,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	if (currentBucketSize == 1000) {
 		// Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
-		if (scheduler_atomic_get_and_set(&sTimerArmed, 1) == 0) {
+		if (atomic_get_and_set(&sTimerArmed, 1) == 0) {
 			add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 					  B_ONE_SHOT_RELATIVE_TIMER);
 		}
@@ -265,7 +265,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
 	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
 	StoreRelease(sPendingDPCTarget, 1000);
-	if (scheduler_atomic_get_and_set(&sDPCPending, 1) == 0) {
+	if (atomic_get_and_set(&sDPCPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
@@ -285,7 +285,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// Only arm the timer if the DPC was successfully queued above.
 	// Note: sTimerArmed must not be set if Add() failed, since we
 	// returned early above in that case and never reach this line.
-	if (scheduler_atomic_get_and_set(&sTimerArmed, 1) == 0) {
+	if (atomic_get_and_set(&sTimerArmed, 1) == 0) {
 		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 				  B_ONE_SHOT_RELATIVE_TIMER);
 	}
@@ -449,7 +449,7 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	// Calculate a dense local index using the fLocalIndices bitmask.
 	// This ensures fair round-robin ownership even if there are holes
 	// in the assigned local indices.
-	native_cpu_mask_t localMask = scheduler_atomic_get(&core->fLocalIndices);
+	native_cpu_mask_t localMask = cpu_mask_get_atomic(&core->fLocalIndices);
 	int32 denseLocalIndex = scheduler_popcount(
 		localMask & (((native_cpu_mask_t)1 << cpu->fCoreLocalIndex) - 1));
 
@@ -602,14 +602,13 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 			// Note: this IPI dispatch was unreachable before; now
 			// correctly wakes the target CPU when a thread is enqueued.
 			if (ShouldReschedule(now,
-								 (bigtime_t)scheduler_atomic_get64(
+								 (bigtime_t)atomic_get64(reinterpret_cast<int64 volatile*>(
 									 reinterpret_cast<uint64 volatile*>(
-										 &targetCPU->lastReschedule)),
+										 &targetCPU->lastReschedule))),
 								 kRescheduleCooldown)) {
 				if (targetCPU->SetReschedulePending()) {
-					scheduler_atomic_set64(reinterpret_cast<uint64 volatile*>(
-											   &targetCPU->lastReschedule),
-										   (uint64)now);
+					atomic_set64(reinterpret_cast<int64 volatile*>(reinterpret_cast<uint64 volatile*>(
+											   &targetCPU->lastReschedule)), (int64)((uint64))now);
 					smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
 								 NULL, SMP_MSG_FLAG_ASYNC);
 				}
@@ -801,8 +800,8 @@ static void reschedule(int32 nextState) {
 	// RCU Quiescent State: Report current generation.
 	// Since reschedule() runs with interrupts disabled, it forms a
 	// natural RCU critical section boundary.
-	scheduler_atomic_set64(&cpu->fRCULastGeneration,
-						   scheduler_atomic_get64(&gRCUGeneration));
+	atomic_set64(reinterpret_cast<int64 volatile*>(&cpu->fRCULastGeneration),
+				 atomic_get64(reinterpret_cast<int64 volatile*>(&gRCUGeneration)));
 
 	gCPU[thisCPU].invoke_scheduler = false;
 
@@ -1024,7 +1023,7 @@ void scheduler_on_thread_init(Thread* thread) {
 
 	if (thread_is_idle_thread(thread)) {
 		static int32 sIdleThreadsID;
-		int32 cpuID = scheduler_atomic_add(&sIdleThreadsID, 1);
+		int32 cpuID = atomic_add(&sIdleThreadsID, 1);
 
 		thread->previous_cpu = &gCPU[cpuID];
 		thread->pinned_to_cpu = 1;
@@ -1060,12 +1059,15 @@ status_t scheduler_set_operation_mode(scheduler_mode mode) {
 
 	dprintf("scheduler: switching to %s mode\n", sSchedulerModes[mode]->name);
 
-	InterruptsBigSchedulerLocker _;
+	{
+		InterruptsBigSchedulerLocker _;
 
-	Scheduler::SetOperationMode(mode, sSchedulerModes[mode]);
-	Scheduler::SwitchToMode();
+		Scheduler::SetOperationMode(mode, sSchedulerModes[mode]);
+		Scheduler::SwitchToMode();
 
-	ThreadData::ComputeQuantumLengths();
+		ThreadData::ComputeQuantumLengths();
+	}
+	scheduler_synchronize();
 
 	return B_OK;
 }
@@ -1106,16 +1108,20 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 			// Fix: complete AddCPU FIRST while disabled is still true, then
 			// clear the disabled flag and publish the CPU via gCPUEnabled.
 			core->AddCPU(cpu);
-
-			// Initialize CPU state before publishing it.
-			cpu->Start();
-
 			// Note: set disabled=false and SetBitAtomic atomically
 			// under CoreCPUHeapLocker. GetCPUMask reads gCPUEnabled; enqueue
 			// checks !gCPU[id].disabled. Both must agree simultaneously.
 			gCPU[cpuID].disabled = false;
 			gCPUEnabled.SetBitAtomic(cpuID);
 		}
+
+		// Start the CPU after publishing all scheduler state and after
+		// releasing scheduler/core locks to avoid lock-order inversions if the
+		// startup path enters the scheduler immediately.
+		cpu->Start();
+
+		// RCU Update: Wait for all CPUs to see the new CPU.
+		scheduler_synchronize();
 	} else {
 		// Improve serialization of queue migration/removal:
 		// hold the global scheduler lock scope so concurrent scheduling on
@@ -1170,6 +1176,9 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 			cpu->Stop();
 			sendRescheduleICI = smp_get_current_cpu() != cpuID;
 		}
+		// RCU Update: Wait for all CPUs to see that the CPU is disabled.
+		scheduler_synchronize();
+
 		// don't wait until the thread quantum ends
 		if (sendRescheduleICI)
 			smp_send_ici(cpuID, SMP_MSG_RESCHEDULE, 0, 0, 0, NULL,

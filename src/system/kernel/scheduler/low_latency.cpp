@@ -170,8 +170,8 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	CoreEntry* core = NULL;
 
 	// Thread Coloring: Search for a core of the preferred type first
-	uint64 idleNodeMask = scheduler_atomic_get64(
-		reinterpret_cast<uint64 volatile*>(&gIdleNodeMask));
+	uint64 idleNodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(
+		reinterpret_cast<uint64 volatile*>(&gIdleNodeMask)));
 
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
@@ -720,9 +720,12 @@ static void rebalance_irqs(bool idle) {
 	// which is called from TrackLoad which is called from reschedule() under
 	// SchedulerModeLocker (RCU read-side). DPCQueue::Add
 	// wakes a thread which eventually calls scheduler_enqueue_in_run_queue
-	// → SchedulerModeLocker. This is wait-free under the RCU model.
-	// Document explicitly to prevent future regression if the locking model
-	// changes.
+	// → SchedulerModeLocker. Read locks are reentrant on Haiku (rw_spinlock),
+	// so this is safe today. Document explicitly to prevent future regression
+	// if the locking model changes.
+	// NOTE: If this function is ever called from a write-lock context, the
+	// DPCQueue::Add path will deadlock. Add an explicit assertion here.
+	// (Cannot assert read-lock held without a scheduler-internal API.)
 
 	cpu_ent* cpu = get_cpu_struct();
 	// Snapshot currentCore BEFORE releasing irqs_lock.  A
