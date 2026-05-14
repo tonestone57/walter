@@ -107,3 +107,32 @@ Lock-free run queues are **conceptually architecture-independent** but **impleme
 #### **The "Biggest Gain" Winner:**
 1.  **RCU for Topology & Modes:** This gives the biggest **throughput** gain. Currently, every CPU must acquire a read-lock on topology and mode structures during every `reschedule()`. Eliminating this lock-trip entirely removes a significant amount of cache-line bouncing and "bus-lock" overhead in the kernel's most frequent path.
 2.  **EEVDF:** This gives the biggest **user-perceived responsiveness** gain. For a media-focused OS like Haiku, EEVDF's ability to provide deterministic latency for audio threads without "gaming" the priority system is a transformative upgrade.
+
+---
+
+## 7. Architecture Independence Summary
+
+This section categorizes the discussed improvements based on their level of architecture independence.
+
+### 7.1 Purely Architecture-Independent
+These optimizations are algorithmic and behave identically regardless of the underlying CPU architecture (x86, ARM, RISC-V), provided the kernel's basic atomic and timing APIs are present.
+
+- **EEVDF Algorithm:** A mathematical model for scheduling; entirely portable.
+- **Timestamp Propagation:** The logic of passing timestamps through the call stack is purely C++.
+- **Scalable Priority Boosting (O(1)):** Operates on generic run-queue structures.
+- **Load Tracking Resolution (1s):** Algorithmic change to the EMA (Exponential Moving Average).
+- **Lockless Load Averaging:** Uses standard atomic RMW operations abstracted by the kernel.
+
+### 7.2 Conceptually Independent / Implementation Dependent
+These features are portable in theory but require architecture-specific tuning or primitive support to be efficient.
+
+- **Lock-Free/Wait-Free Run Queues:** While the logic is portable, they often require **Double-Word CAS (DWCAS)** and strict **Memory Ordering** (Memory Barriers) which vary significantly between TSO (x86) and Weakly-Ordered (ARM/RISC-V) systems.
+- **RCU for Topology:** Relies on memory barriers. While portable via abstractions, the performance impact of those barriers is arch-dependent.
+- **Thread Coloring (Hybrid Awareness):** The *logic* of choosing P-cores vs E-cores is portable, but the *detection* mechanism (CPUID vs Device Tree) and the core type definitions are highly architecture-specific.
+
+### 7.3 Architecture-Dependent
+These optimizations rely on specific hardware features or knowledge of the physical CPU layout.
+
+- **Adaptive Spinlocks:** Requires hardware support for observing remote CPU state or low-power hints (e.g., Intel `PAUSE`/`MWAIT` or ARM `WFE`).
+- **Cache-Occupancy Awareness:** Dependent on hardware performance monitoring units (PMUs) or specific vendor extensions like **Intel RDT** (Resource Director Technology) or **ARM MPAM**.
+- **3-Phase Work Stealing:** While the 3 phases are a generic concept, the **Topology Detection** that feeds it (identifying SMT vs L2 vs L3 vs NUMA boundaries) is unique to each architecture's boot process.
