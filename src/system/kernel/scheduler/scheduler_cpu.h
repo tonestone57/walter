@@ -892,7 +892,7 @@ inline bool CoreEntry::HasHighPriorityThread() const {
 	const uint32* bitmap = fRunQueue.GetBitmap();
 	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
 		uint32 val =
-			(uint32)LoadAcquire(reinterpret_cast<const int32&>(bitmap[i]));
+			(uint32)LoadAcquire(*reinterpret_cast<const int32 volatile*>(&bitmap[i]));
 		if (i == ThreadRunQueue::kBitmapSize - 1)
 			val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
 		if (val != 0) {

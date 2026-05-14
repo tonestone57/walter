@@ -42,10 +42,10 @@ void ScheduleThread::AddDump(TraceOutput& out) {
 		switch (fPreviousWaitObjectType) {
 			case THREAD_BLOCK_TYPE_SEMAPHORE:
 				out.Print("sem %" B_PRId32,
-						  (sem_id)(addr_t)fPreviousWaitObject);
+						  (sem_id)(addr_t)fWait.fPreviousWaitObject);
 				break;
 			case THREAD_BLOCK_TYPE_CONDITION_VARIABLE:
-				out.Print("cvar %p", fPreviousWaitObject);
+				out.Print("cvar %p", fWait.fPreviousWaitObject);
 				break;
 			case THREAD_BLOCK_TYPE_SNOOZE:
 				out.Print("snooze()");
@@ -54,27 +54,27 @@ void ScheduleThread::AddDump(TraceOutput& out) {
 				out.Print("signal");
 				break;
 			case THREAD_BLOCK_TYPE_MUTEX:
-				out.Print("mutex %p", fPreviousWaitObject);
+				out.Print("mutex %p", fWait.fPreviousWaitObject);
 				break;
 			case THREAD_BLOCK_TYPE_RW_LOCK:
-				out.Print("rwlock %p", fPreviousWaitObject);
+				out.Print("rwlock %p", fWait.fPreviousWaitObject);
 				break;
 			case THREAD_BLOCK_TYPE_USER:
 				out.Print("_user_block_thread()");
 				break;
 			case THREAD_BLOCK_TYPE_OTHER:
-				out.Print("other \"%s\"", (const char*)fPreviousWaitObject);
+				out.Print("other \"%s\"", (const char*)fWait.fPreviousWaitObject);
 				break;
 			case THREAD_BLOCK_TYPE_OTHER_OBJECT:
-				out.Print("other object (%p)", fPreviousWaitObject);
+				out.Print("other object (%p)", fWait.fPreviousWaitObject);
 				break;
 			default:
-				out.Print("unknown (%p)", fPreviousWaitObject);
+				out.Print("unknown (%p)", fWait.fPreviousWaitObject);
 				break;
 		}
 #if SCHEDULER_TRACING >= 2
 	} else if (fPreviousState == B_THREAD_READY) {
-		out.Print("ready at %p", fPreviousPC);
+		out.Print("ready at %p", fWait.fPreviousPC);
 #endif
 	} else
 		out.Print("%s", thread_state_to_text(NULL, fPreviousState));

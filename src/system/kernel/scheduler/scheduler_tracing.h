@@ -98,16 +98,16 @@ class ScheduleThread : public SchedulerTraceEntry {
 
 #if SCHEDULER_TRACING >= 2
 		if (fPreviousState == B_THREAD_READY)
-			fPreviousPC = arch_debug_get_interrupt_pc(NULL);
+			fWait.fPreviousPC = arch_debug_get_interrupt_pc(NULL);
 		else
 #endif
 		{
 			if (fPreviousWaitObjectType == THREAD_BLOCK_TYPE_OTHER) {
-				fPreviousWaitObject = alloc_tracing_buffer_strcpy(
+				fWait.fPreviousWaitObject = alloc_tracing_buffer_strcpy(
 					(const char*)previous->wait.object, B_OS_NAME_LENGTH,
 					false);
 			} else
-				fPreviousWaitObject = previous->wait.object;
+				fWait.fPreviousWaitObject = previous->wait.object;
 		}
 
 		Initialized();

@@ -285,7 +285,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekMaximum() const {
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val =
-			(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
+			(uint32)LoadAcquire(*reinterpret_cast<const int32 volatile*>(&fBitmap[i]));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
 				// Note: guard MaxPriority % 32 == 31.
@@ -566,7 +566,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const {
 	for (int i = kBitmapSize - 1;
 		 i >= 0 && levelsSearched < kDeadlineLookaheadLevels; i--) {
 		uint32 val =
-			(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
+			(uint32)LoadAcquire(*reinterpret_cast<const int32 volatile*>(&fBitmap[i]));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
 				// Note: guard MaxPriority % 32 == 31.
@@ -615,7 +615,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const {
 	if (globalBest == NULL && LoadAcquire(fTotalCount) > 0) {
 		for (int i = kBitmapSize - 1; i >= 0; i--) {
 			uint32 val =
-				(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
+				(uint32)LoadAcquire(*reinterpret_cast<const int32 volatile*>(&fBitmap[i]));
 			if (i == kBitmapSize - 1 && (MaxPriority % 32) != 31)
 				val &= (uint32)((2ULL << (MaxPriority % 32)) - 1);
 			if (val == 0)
@@ -655,7 +655,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 
 	for (int i = kBitmapSize - 1; i >= 0; i--) {
 		uint32 val =
-			(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
+			(uint32)LoadAcquire(*reinterpret_cast<const int32 volatile*>(&fBitmap[i]));
 		if (val != 0) {
 			if (i == kBitmapSize - 1) {
 				// Note: guard MaxPriority % 32 == 31.
@@ -717,7 +717,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const {
 			return NULL;
 
 		uint32 val =
-			(uint32)LoadAcquire(reinterpret_cast<const int32&>(fBitmap[i]));
+			(uint32)LoadAcquire(*reinterpret_cast<const int32 volatile*>(&fBitmap[i]));
 
 		if (i == kBitmapSize - 1) {
 			// Note: guard MaxPriority % 32 == 31.

@@ -254,7 +254,7 @@ class SchedulingAnalysisManager {
 			}
 #else
 			int32 current32 =
-				LoadAcquire(reinterpret_cast<const int32&>(fNextAllocation));
+				LoadAcquire(*reinterpret_cast<const int32 volatile*>(&fNextAllocation));
 			int32 newAlloc32 = current32 + (int32)size;
 			int32 hashTableAddr32 = (int32)(uintptr_t)fHashTable;
 			if (size > (size_t)B_INT32_MAX || newAlloc32 > hashTableAddr32)
