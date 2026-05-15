@@ -175,6 +175,8 @@ public:
 	static void ComputeQuantumLengths();
 
 private:
+	// Must be called with the appropriate run-queue lock held (either
+	// CPUEntry::fQueueLock or CoreEntry::fQueueLock).
 	SCHEDULER_INLINE void _UpdatePriorityBoost(bigtime_t now);
 
 	void _ComputeNeededLoad(bigtime_t now = 0);
@@ -293,31 +295,21 @@ inline void ThreadData::_UpdatePriorityBoost(bigtime_t now) {
 			ASSERT(fThread->pinned_to_cpu > 0);
 			CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
 
+			// Note: lock is already held by caller.
 			cpu->Remove(this);
 			cpu->PushBack(this, newPriority);
 
 			fEnqueued = true;
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// Note: capture fCore under the CoreRunQueueLocker to
-			// prevent a MigrateTo() race between the NULL check and the lock
-			// acquisition. The previous code read fCore twice without holding
-			// the lock: once for the NULL guard, and again implicitly inside
-			// the RAII locker constructor. A concurrent MigrateTo() between
-			// these two reads could lock the NEW core while Remove() operated
-			// on the OLD core, corrupting both run queues.
-			//
-			// Strategy: take a snapshot, acquire the lock on that snapshot,
-			// then re-validate under the lock before proceeding.
+			// Note: capture fCore under the assumption that the caller
+			// ALREADY holds the CoreRunQueueLocker for this core.
+			// The previous code attempted to acquire it again, causing a
+			// deadlock.  Re-acquisition is also unnecessary because
+			// MigrateTo() cannot change fCore while we hold the run-queue lock
+			// of the core we are currently enqueued in.
 			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 			if (core != NULL) {
-				CoreRunQueueLocker coreLocker(core);
-				// Re-validate: fCore may have changed while we waited.
-				if (atomic_pointer_get<CoreEntry>(&fCore) != core) {
-					// Migration occurred; abandon and let the new core handle
-					// it.
-					return;
-				}
 				// Set state BEFORE removing to ensure no one sees a
 				// ready-but-not-enqueued thread.
 				fEnqueued = false;
