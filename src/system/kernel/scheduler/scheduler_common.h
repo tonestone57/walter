@@ -29,53 +29,79 @@
 
 namespace Scheduler {
 
-inline int LoadAcquire(const int32 volatile& value) {
-	int v = atomic_get(const_cast<int32 volatile*>(&value));
+template <typename T>
+inline int32 LoadAcquire(const T volatile& value) {
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
+	int32 v = atomic_get(
+		reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)));
 	memory_read_barrier();
 	return v;
 }
 
-inline void StoreRelease(int32 volatile& value, int v) {
+template <typename T>
+inline void StoreRelease(T volatile& value, int32 v) {
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
 	memory_write_barrier();
-	atomic_set(const_cast<int32 volatile*>(&value), v);
+	atomic_set(reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), v);
 }
 
-inline int32 AddAcquireRelease(int32 volatile& value, int32 v) {
+template <typename T>
+inline int32 AddAcquireRelease(T volatile& value, int32 v) {
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
 	memory_write_barrier();
-	int32 old = atomic_add(const_cast<int32 volatile*>(&value), v);
+	int32 old = atomic_add(
+		reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), v);
 	memory_read_barrier();
 	return old;
 }
 
-inline void AddRelease(int32 volatile& value, int32 v) {
+template <typename T>
+inline void AddRelease(T volatile& value, int32 v) {
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
 	memory_write_barrier();
-	atomic_add(const_cast<int32 volatile*>(&value), v);
+	atomic_add(reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), v);
 }
 
-inline void SubAcquireRelease(int32 volatile& value, int32 v) {
-	atomic_add(const_cast<int32 volatile*>(&value), -v);
+template <typename T>
+inline void SubAcquireRelease(T volatile& value, int32 v) {
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
+	atomic_add(
+		reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), -v);
 }
 
-inline int32 TestAndSet(int32 volatile& value, int32 newValue,
+template <typename T>
+inline int32 TestAndSet(T volatile& value, int32 newValue,
 						int32 expectedValue) {
-	return atomic_test_and_set(const_cast<int32 volatile*>(&value),
-							   newValue, expectedValue);
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
+	return atomic_test_and_set(
+		reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), newValue,
+		expectedValue);
 }
 
-inline int32 GetAndSet(int32 volatile& value, int32 newValue) {
-	return atomic_get_and_set(const_cast<int32 volatile*>(&value), newValue);
+template <typename T>
+inline int32 GetAndSet(T volatile& value, int32 newValue) {
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
+	return atomic_get_and_set(
+		reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), newValue);
 }
 
-inline int32 OrAtomic(int32 volatile& value, int32 orValue) {
-	return atomic_or(const_cast<int32 volatile*>(&value), orValue);
+template <typename T>
+inline int32 OrAtomic(T volatile& value, int32 orValue) {
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
+	return atomic_or(
+		reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), orValue);
 }
 
-inline int32 AndAtomic(int32 volatile& value, int32 andValue) {
-	return atomic_and(const_cast<int32 volatile*>(&value), andValue);
+template <typename T>
+inline int32 AndAtomic(T volatile& value, int32 andValue) {
+	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
+	return atomic_and(
+		reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), andValue);
 }
 
 template <typename T>
 inline int64 LoadAcquire64(const T volatile& value) {
+	static_assert(sizeof(T) == sizeof(int64), "Type size mismatch for 64-bit atomic");
 	int64 v = atomic_get64(
 		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)));
 	memory_read_barrier();
@@ -84,12 +110,14 @@ inline int64 LoadAcquire64(const T volatile& value) {
 
 template <typename T>
 inline void StoreRelease64(T volatile& value, int64 v) {
+	static_assert(sizeof(T) == sizeof(int64), "Type size mismatch for 64-bit atomic");
 	memory_write_barrier();
 	atomic_set64(reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), v);
 }
 
 template <typename T>
 inline int64 AddAcquireRelease64(T volatile& value, int64 v) {
+	static_assert(sizeof(T) == sizeof(int64), "Type size mismatch for 64-bit atomic");
 	memory_write_barrier();
 	int64 old = atomic_get64(
 		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)));
@@ -108,6 +136,7 @@ inline int64 AddAcquireRelease64(T volatile& value, int64 v) {
 
 template <typename T>
 inline void AddRelease64(T volatile& value, int64 v) {
+	static_assert(sizeof(T) == sizeof(int64), "Type size mismatch for 64-bit atomic");
 	memory_write_barrier();
 	atomic_add64(reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), v);
 }
@@ -115,6 +144,7 @@ inline void AddRelease64(T volatile& value, int64 v) {
 template <typename T>
 inline int64 TestAndSet64(T volatile& value, int64 newValue,
 						  int64 expectedValue) {
+	static_assert(sizeof(T) == sizeof(int64), "Type size mismatch for 64-bit atomic");
 	return atomic_test_and_set64(
 		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), newValue,
 		expectedValue);
@@ -122,12 +152,14 @@ inline int64 TestAndSet64(T volatile& value, int64 newValue,
 
 template <typename T>
 inline int64 OrAtomic64(T volatile& value, int64 orValue) {
+	static_assert(sizeof(T) == sizeof(int64), "Type size mismatch for 64-bit atomic");
 	return atomic_or64(
 		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), orValue);
 }
 
 template <typename T>
 inline int64 AndAtomic64(T volatile& value, int64 andValue) {
+	static_assert(sizeof(T) == sizeof(int64), "Type size mismatch for 64-bit atomic");
 	return atomic_and64(
 		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), andValue);
 }
@@ -282,11 +314,11 @@ static inline native_cpu_mask_t cpu_mask_test_and_set_atomic(
 template <typename T>
 static inline T* atomic_pointer_get(T* const volatile* pointer) {
 #if SCHEDULER_MASK_IS_64_BIT
-	T* value = reinterpret_cast<T*>(
-		atomic_get64(reinterpret_cast<int64 volatile*>(const_cast<T**>(reinterpret_cast<T* const*>(pointer)))));
+	T* value = reinterpret_cast<T*>(atomic_get64(
+		reinterpret_cast<int64 volatile*>(const_cast<T* const volatile*>(pointer))));
 #else
-	T* value = reinterpret_cast<T*>(
-		atomic_get(reinterpret_cast<int32 volatile*>(const_cast<T**>(reinterpret_cast<T* const*>(pointer)))));
+	T* value = reinterpret_cast<T*>(atomic_get(
+		reinterpret_cast<int32 volatile*>(const_cast<T* const volatile*>(pointer))));
 #endif
 	memory_read_barrier();
 	return value;
