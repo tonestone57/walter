@@ -136,7 +136,7 @@ class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 	inline int32 ThreadCount() const { return LoadAcquire(fThreadCount); }
 
 	bool SetReschedulePending() {
-		return atomic_get_and_set(reinterpret_cast<int32 volatile*>(&fReschedulePending), 1) == 0;
+		return GetAndSet(fReschedulePending, 1) == 0;
 	}
 	void ClearReschedulePending() { StoreRelease(fReschedulePending, 0); }
 
@@ -170,7 +170,7 @@ class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 	uint32 fRescheduleCount;
 	uint32 fInteractionUpdateCounter;
 
-	int32 fReschedulePending;
+	int32 fReschedulePending __attribute__((aligned(8)));
 	// Moved from CoreEntry to eliminate false sharing.
 	// This field is written on every search_local_node call by
 	// the searching CPU.  Placing it in CoreEntry dirtied the
@@ -268,12 +268,10 @@ class CoreEntry {
 	inline uint32 ScoreFactor() const { return fScoreFactor; }
 	bigtime_t GetMinVirtualRuntime() const;
 	inline uint32 LoadMeasurementEpoch() const {
-		return (uint32)atomic_get64(const_cast<int64 volatile*>(
-			reinterpret_cast<const int64*>(&fCombinedLoad)));
+		return (uint32)LoadAcquire64(fCombinedLoad);
 	}
 	inline int32 CurrentLoad() const {
-		return (int32)(atomic_get64(const_cast<int64 volatile*>(
-						   reinterpret_cast<const int64*>(&fCombinedLoad))) >>
+		return (int32)(LoadAcquire64(fCombinedLoad) >>
 					   32);
 	}
 
@@ -308,17 +306,16 @@ class CoreEntry {
 
 	CoreType fType;
 
-	int32 fCPUCount;
-	int32 fCapacity;
+	int32 fCPUCount __attribute__((aligned(8)));
+	int32 fIdleCPUCount __attribute__((aligned(8)));
 	CPUSet fCPUSet;
-	int32 fIdleCPUCount;
 	CPUPriorityHeap fCPUHeap;
 	spinlock fCPULock;
 
 	spinlock fQueueLock;
-	int32 fThreadCount;
-	int32 fTotalThreadCount;
-	int32 fDisplayThreadCount;
+	int32 fThreadCount __attribute__((aligned(8)));
+	int32 fTotalThreadCount __attribute__((aligned(8)));
+	int32 fDisplayThreadCount __attribute__((aligned(8)));
 	ThreadRunQueue fRunQueue;
 
 	int32 fLoad;
@@ -417,7 +414,7 @@ class PackageEntry {
 
 	CoreEntry* fCores[kMaxCoresPerPackage] __attribute__((aligned(8)));
 	native_cpu_mask_t fIdleCoreMask __attribute__((aligned(8)));
-	int32 fIdleCoreCount;
+	int32 fIdleCoreCount __attribute__((aligned(8)));
 	int32 fCoreCount;
 	int32 fRegisteredCoreCount;
 	int32 fMaxAttempts;
@@ -522,13 +519,12 @@ inline void CoreEntry::UnlockRunQueue() {
 
 inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 	SCHEDULER_ENTER_FUNCTION();
-	atomic_add64(reinterpret_cast<int64 volatile*>(&fActiveTime),
+	AddRelease64(fActiveTime,
 				 (int64)activeTime);
 }
 
 inline bigtime_t CoreEntry::GetActiveTime() const {
-	return (bigtime_t)atomic_get64(const_cast<int64 volatile*>(
-		reinterpret_cast<const int64*>(&fActiveTime)));
+	return (bigtime_t)LoadAcquire64(fActiveTime);
 }
 
 inline int32 CoreEntry::GetLoad() const { return LoadAcquire(fLoad); }
@@ -544,8 +540,7 @@ inline void CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad,
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = atomic_add64(
-		reinterpret_cast<int64 volatile*>(&fCombinedLoad),
+	int64 oldCombined = AddAcquireRelease64(fCombinedLoad,
 		(int64)load << 32);
 	if ((uint32)oldCombined != epoch)
 		AddRelease(fLoad, load);
@@ -560,8 +555,7 @@ inline uint32 CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now) {
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = atomic_add64(
-		reinterpret_cast<int64 volatile*>(&fCombinedLoad),
+	int64 oldCombined = AddAcquireRelease64(fCombinedLoad,
 		(int64)(-load) << 32);
 	if (force) {
 		AddRelease(fLoad, -load);
@@ -581,8 +575,7 @@ inline void CoreEntry::ChangeLoad(int32 delta, bigtime_t now) {
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 
 	if (delta != 0) {
-		atomic_add64(
-			reinterpret_cast<int64 volatile*>(&fCombinedLoad),
+		AddRelease64(fCombinedLoad,
 			(int64)delta << 32);
 		AddRelease(fLoad, delta);
 	}
@@ -647,8 +640,7 @@ inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 		&fIdlePackageMask, (native_cpu_mask_t)1 << package->NodeIndex());
 
 	if (oldMask == 0 && fNodeID < 64) {
-		atomic_or64(
-			reinterpret_cast<int64 volatile*>(&gIdleNodeMask),
+		OrAtomic64(gIdleNodeMask,
 			(int64)1 << fNodeID);
 	}
 }
@@ -693,7 +685,7 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 			const int kMaxWakeupRetries = 64;
 			int wakeupRetries = 0;
 			while (true) {
-				nodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask));
+				nodeMask = LoadAcquire64(gIdleNodeMask);
 				if (!(nodeMask & nodeBit))
 					break;	// already cleared by a concurrent PackageWakesUp
 
@@ -704,16 +696,14 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 					break;
 				}
 
-				if (atomic_test_and_set64(
-						reinterpret_cast<int64 volatile*>(&gIdleNodeMask),
+				if (TestAndSet64(gIdleNodeMask,
 						(int64)(nodeMask & ~nodeBit), (int64)nodeMask) == (int64)nodeMask) {
 					// Successfully cleared. Re-check for safety to catch the
 					// race where a package went idle between our last check
 					// and the CAS.
 					if (cpu_mask_get_atomic(&fIdlePackageMask) !=
 						(native_cpu_mask_t)0) {
-						atomic_or64(
-							reinterpret_cast<int64 volatile*>(&gIdleNodeMask),
+						OrAtomic64(gIdleNodeMask,
 							(int64)nodeBit);
 					}
 					break;
@@ -748,7 +738,7 @@ inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 	// barrier between atomic-add(fIdleCPUCount) and atomic-get(fCPUCount),
 	// the CPU could observe fCPUCount before fIdleCPUCount increment is
 	// globally visible, causing a spurious PackageGoesIdle call.
-	int32 newIdleCount = atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), 1) + 1;
+	int32 newIdleCount = AddAcquireRelease(fIdleCPUCount, 1) + 1;
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
 	if (cpuCount > 0 && newIdleCount >= cpuCount)
@@ -770,7 +760,7 @@ inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
-	if (atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1) == cpuCount)
+	if (AddAcquireRelease(fIdleCPUCount, -1) == cpuCount)
 		fPackage->CoreWakesUp(this);
 }
 
@@ -840,8 +830,7 @@ inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 			// package, but we document it explicitly here.
 			if (current->fNode == NULL)
 				continue;
-			int32 count = atomic_get(const_cast<int32 volatile*>(
-				reinterpret_cast<const int32*>(&current->fIdleCoreCount)));
+			int32 count = LoadAcquire(current->fIdleCoreCount);
 			if (count != 0 && (package == NULL || count < bestIdleCount)) {
 				package = current;
 				bestIdleCount = count;

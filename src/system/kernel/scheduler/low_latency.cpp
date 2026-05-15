@@ -170,7 +170,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	CoreEntry* core = NULL;
 
 	// Thread Coloring: Search for a core of the preferred type first
-	uint64 idleNodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask));
+	uint64 idleNodeMask = LoadAcquire64(gIdleNodeMask);
 
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;

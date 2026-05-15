@@ -42,7 +42,7 @@ class Profiler {
 	struct FunctionData {
 		const char* fFunction;
 
-		int32 fCalled;
+		int32 fCalled __attribute__((aligned(8)));
 
 		bigtime_t fTimeInclusive __attribute__((aligned(8)));
 		bigtime_t fTimeExclusive __attribute__((aligned(8)));

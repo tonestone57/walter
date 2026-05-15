@@ -237,7 +237,7 @@ CPUEntry::CPUEntry()
 void CPUEntry::Init(int32 id, CoreEntry* core) {
 	fCPUNumber = id;
 	atomic_pointer_set<CoreEntry>(&fCore, core);
-	atomic_set64(reinterpret_cast<int64 volatile*>(&fRCULastGeneration), 0);
+	StoreRelease64(fRCULastGeneration, 0);
 	// Note: improve per-CPU RNG seed entropy. On boot, system_time()
 	// returns small values with low entropy; successive CPUs initialized
 	// microseconds apart get highly correlated seeds. Fold in the address of
@@ -272,9 +272,9 @@ void CPUEntry::Init(int32 id, CoreEntry* core) {
 void CPUEntry::Start() {
 	// fThreadCount and fLoad are already initialized in CoreEntry::AddCPU
 	// while holding the necessary locks.
-	atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureTime),
+	StoreRelease64(fMeasureTime,
 				 system_time());
-	atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureActiveTime), 0);
+	StoreRelease64(fMeasureActiveTime, 0);
 }
 
 void CPUEntry::Stop() {
@@ -431,20 +431,17 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int oldLoad;
 	do {
-		bigtime_t measureTime = atomic_get64(
-			reinterpret_cast<int64 volatile*>(&fMeasureTime));
-		measureActiveTime = atomic_get64(
-			reinterpret_cast<int64 volatile*>(&fMeasureActiveTime));
+		bigtime_t measureTime = LoadAcquire64(fMeasureTime);
+		measureActiveTime = LoadAcquire64(fMeasureActiveTime);
 		bigtime_t tempMeasureTime = measureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
 		oldLoad = compute_load(tempMeasureTime, tempMeasureActiveTime,
 							   currentLoad, now);
 		if (oldLoad < 0)
 			break;
-		if ((bigtime_t)atomic_test_and_set64(
-				reinterpret_cast<int64 volatile*>(&fMeasureActiveTime),
+		if ((bigtime_t)TestAndSet64(fMeasureActiveTime,
 				tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
-			atomic_set64(reinterpret_cast<int64 volatile*>(&fMeasureTime),
+			StoreRelease64(fMeasureTime,
 						 tempMeasureTime);
 			break;
 		}
@@ -617,7 +614,7 @@ void CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now) {
 		cpuEntry->active_time += active;
 		locker.Unlock();
 
-		atomic_add64(reinterpret_cast<int64 volatile*>(&fMeasureActiveTime), (int64)(active));
+		AddRelease64(fMeasureActiveTime, (int64)(active));
 		atomic_pointer_get<CoreEntry>(&fCore)->IncreaseActiveTime(active);
 
 		// Use the provided timestamp for UpdateActivity.
@@ -1022,7 +1019,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 	if (firstCPU) {
 		didAddIdle = true;
 		StoreRelease(fLoad, 0);
-		atomic_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), 0);
+		StoreRelease64(fCombinedLoad, 0);
 
 		StoreRelease(fPackage->fCoreLoads[fPackageIndex], 0);
 		cpu_mask_or_atomic(&fPackage->fEnabledCoreMask, (native_cpu_mask_t)1 << fPackageIndex);
@@ -1036,7 +1033,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 		cpu_mask_and_atomic(&fLocalIndices, ~((native_cpu_mask_t)1 << localIndex));
 		if (firstCPU) {
 			StoreRelease(fLoad, 0);
-			atomic_set64(reinterpret_cast<int64 volatile*>(&fCombinedLoad), 0);
+			StoreRelease64(fCombinedLoad, 0);
 			StoreRelease(fPackage->fCoreLoads[fPackageIndex], 0);
 			if (didAddIdle)
 				fPackage->RemoveIdleCore(this);
@@ -1058,10 +1055,10 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 
 	// The CPU is guaranteed to be idle and accounted for in fIdleCPUCount
 	// before RemoveCPU is called (set by scheduler_set_cpu_enabled).
-	int32 oldIdleCount = atomic_add(reinterpret_cast<int32 volatile*>(&fIdleCPUCount), -1);
+	int32 oldIdleCount = AddAcquireRelease(fIdleCPUCount, -1);
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
-	int32 oldCPUCount = atomic_add(reinterpret_cast<int32 volatile*>(&fCPUCount), -1);
+	int32 oldCPUCount = AddAcquireRelease(fCPUCount, -1);
 
 	if (oldCPUCount == 1) {
 		// core has been disabled
@@ -1210,17 +1207,17 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 
 	// one system_time() call shared by both branches eliminates
 	// a redundant syscall and ensures consistent timestamps.
-	bigtime_t lastUpdate = atomic_get64(reinterpret_cast<int64 volatile*>(&fLastLoadUpdate));
+	bigtime_t lastUpdate = LoadAcquire64(fLastLoadUpdate);
 	if (!forceUpdate) {
 		if (now < kLoadMeasureInterval + lastUpdate)
 			return;
-		if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&fLastLoadUpdate), (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
+		if (TestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
 			return;
 		}
 	} else {
 		// on CAS failure another CPU won the update race; that
 		// update is sufficient, so return rather than silently skipping.
-		if (atomic_test_and_set64(reinterpret_cast<int64 volatile*>(&fLastLoadUpdate), (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
+		if (TestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
 			return;
 		}
 	}
@@ -1233,16 +1230,14 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 	// added to fLoad) or the new epoch (and are captured in the next snapshot),
 	// with no double-counting or loss.
 	int32 currentLoad = 0;
-	int64 oldCombined __attribute__((aligned(8))) = atomic_get64(
-		reinterpret_cast<int64 volatile*>(&fCombinedLoad));
+	int64 oldCombined __attribute__((aligned(8))) = LoadAcquire64(fCombinedLoad);
 	int outerRetryCount = 0;
 	while (true) {
 		currentLoad = (int32)(oldCombined >> 32);
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch;  // Load reset to 0
 
-		int64 actual = atomic_test_and_set64(
-			reinterpret_cast<int64 volatile*>(&fCombinedLoad),
+		int64 actual = TestAndSet64(fCombinedLoad,
 			newCombined, oldCombined);
 		if (actual == oldCombined) {
 			// Note: snapshot prevLoad immediately after winning the
@@ -1277,8 +1272,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 				if (newFLoad < 0)
 					newFLoad = 0;
 
-				int32 actualLoad = atomic_test_and_set(reinterpret_cast<int32 volatile*>(
-					&fLoad), (int32)(newFLoad), (int32)(currentFLoad));
+				int32 actualLoad = TestAndSet(fLoad, (int32)(newFLoad), (int32)(currentFLoad));
 				if (actualLoad == currentFLoad)
 					break;
 
@@ -1900,7 +1894,7 @@ static int dump_cpu_heap(int /* argc */, char** /* argv */) {
 
 static int dump_idle_cores(int /* argc */, char** /* argv */) {
 	kprintf("Idle packages:\n");
-	uint64 nodeMask = atomic_get64(reinterpret_cast<int64 volatile*>(&gIdleNodeMask));
+	uint64 nodeMask = LoadAcquire64(gIdleNodeMask);
 
 	if (nodeMask != 0) {
 		kprintf("node package cores\n");

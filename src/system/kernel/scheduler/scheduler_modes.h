@@ -14,10 +14,10 @@ struct scheduler_mode_operations {
 	const char* name;
 
 	// Configuration constants grouped to stay in one cache line
-	bigtime_t base_quantum;
-	bigtime_t minimal_quantum;
-	bigtime_t quantum_multipliers[2];
-	bigtime_t maximum_latency;
+	bigtime_t base_quantum __attribute__((aligned(8)));
+	bigtime_t minimal_quantum __attribute__((aligned(8)));
+	bigtime_t quantum_multipliers[2] __attribute__((aligned(8)));
+	bigtime_t maximum_latency __attribute__((aligned(8)));
 
 	// Dispatch table
 	void (*switch_to_mode)();

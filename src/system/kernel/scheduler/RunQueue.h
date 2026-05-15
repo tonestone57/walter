@@ -136,13 +136,13 @@ class RunQueue {
 
 	mutable Element* fBest __attribute__((aligned(8)));
 
-	int32 fTotalCount;
+	int32 fTotalCount __attribute__((aligned(8)));
 
 	// Prevent false sharing (hot structure)
 	char _pad0[64] __attribute__((aligned(64)));
 
 #ifdef DEBUG_SCHEDULER
-	int32 fDebugEnqueueCount;
+	int32 fDebugEnqueueCount __attribute__((aligned(8)));
 #endif
 
 	static GetLink sGetLink;
@@ -336,7 +336,7 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority) {
 	AddRelease(fTotalCount, 1);
 
 #ifdef DEBUG_SCHEDULER
-	atomic_add(const_cast<int32 volatile*>(&fDebugEnqueueCount), 1);
+	AddRelease(fDebugEnqueueCount, 1);
 #endif
 
 	Traits::SetInRunQueue(element, true);
@@ -353,7 +353,7 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority) {
 		atomic_pointer_set<Element>(&fTails[priority], element);
 		atomic_pointer_set<Element>(&fHeads[priority], element);
 		memory_write_barrier();
-		atomic_or(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
+		OrAtomic(fBitmap[priority / 32],
 				  (int32)(1U << (priority % 32)));
 	}
 
@@ -406,7 +406,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority) {
 	AddRelease(fTotalCount, 1);
 
 #ifdef DEBUG_SCHEDULER
-	atomic_add(const_cast<int32 volatile*>(&fDebugEnqueueCount), 1);
+	AddRelease(fDebugEnqueueCount, 1);
 #endif
 
 	Traits::SetInRunQueue(element, true);
@@ -423,7 +423,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority) {
 		atomic_pointer_set<Element>(&fHeads[priority], element);
 		atomic_pointer_set<Element>(&fTails[priority], element);
 		memory_write_barrier();
-		atomic_or(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
+		OrAtomic(fBitmap[priority / 32],
 				  (int32)(1U << (priority % 32)));
 	}
 
@@ -475,7 +475,7 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 			atomic_pointer_get<Element>(&fTails[priority]) != NULL));
 
 	if (atomic_pointer_get<Element>(&fHeads[priority]) == NULL) {
-		atomic_and(reinterpret_cast<int32 volatile*>(&fBitmap[priority / 32]),
+		AndAtomic(fBitmap[priority / 32],
 				   (int32) ~(1U << (priority % 32)));
 		memory_write_barrier();
 	}

@@ -40,13 +40,86 @@ inline void StoreRelease(int32 volatile& value, int v) {
 	atomic_set(const_cast<int32 volatile*>(&value), v);
 }
 
-inline void AddRelease(int32 volatile& value, int v) {
+inline int32 AddAcquireRelease(int32 volatile& value, int32 v) {
+	memory_write_barrier();
+	int32 old = atomic_add(const_cast<int32 volatile*>(&value), v);
+	memory_read_barrier();
+	return old;
+}
+
+inline void AddRelease(int32 volatile& value, int32 v) {
 	memory_write_barrier();
 	atomic_add(const_cast<int32 volatile*>(&value), v);
 }
 
-inline void SubAcquireRelease(int32 volatile& value, int v) {
+inline void SubAcquireRelease(int32 volatile& value, int32 v) {
 	atomic_add(const_cast<int32 volatile*>(&value), -v);
+}
+
+inline int32 TestAndSet(int32 volatile& value, int32 newValue,
+						int32 expectedValue) {
+	return atomic_test_and_set(const_cast<int32 volatile*>(&value),
+							   newValue, expectedValue);
+}
+
+inline int32 GetAndSet(int32 volatile& value, int32 newValue) {
+	return atomic_get_and_set(const_cast<int32 volatile*>(&value), newValue);
+}
+
+inline int32 OrAtomic(int32 volatile& value, int32 orValue) {
+	return atomic_or(const_cast<int32 volatile*>(&value), orValue);
+}
+
+inline int32 AndAtomic(int32 volatile& value, int32 andValue) {
+	return atomic_and(const_cast<int32 volatile*>(&value), andValue);
+}
+
+inline int64 LoadAcquire64(const int64 volatile& value) {
+	int64 v = atomic_get64(
+		reinterpret_cast<int64 volatile*>(const_cast<int64*>(&value)));
+	memory_read_barrier();
+	return v;
+}
+
+inline void StoreRelease64(int64 volatile& value, int64 v) {
+	memory_write_barrier();
+	atomic_set64(const_cast<int64 volatile*>(&value), v);
+}
+
+inline int64 AddAcquireRelease64(int64 volatile& value, int64 v) {
+	memory_write_barrier();
+	int64 old = atomic_get64(
+		reinterpret_cast<int64 volatile*>(const_cast<int64*>(&value)));
+	while (true) {
+		int64 next = old + v;
+		int64 actual = atomic_test_and_set64(
+			reinterpret_cast<int64 volatile*>(const_cast<int64*>(&value)),
+			next, old);
+		if (actual == old)
+			break;
+		old = actual;
+	}
+	memory_read_barrier();
+	return old;
+}
+
+inline void AddRelease64(int64 volatile& value, int64 v) {
+	memory_write_barrier();
+	atomic_add64(const_cast<int64 volatile*>(&value), v);
+}
+
+inline int64 TestAndSet64(int64 volatile& value, int64 newValue,
+						  int64 expectedValue) {
+	return atomic_test_and_set64(const_cast<int64 volatile*>(&value),
+								 newValue, expectedValue);
+}
+
+inline int64 OrAtomic64(int64 volatile& value, int64 orValue) {
+	return atomic_or64(const_cast<int64 volatile*>(&value), orValue);
+}
+
+inline int64 AndAtomic64(int64 volatile& value, int64 andValue) {
+	return atomic_and64(const_cast<int64 volatile*>(&value), andValue);
 }
 
 }  // namespace Scheduler
@@ -190,13 +263,13 @@ static inline native_cpu_mask_t cpu_mask_test_and_set_atomic(
 // atomic_pointer: architecture-independent atomic pointer operations.
 // Necessary for 32/64-bit portability.
 template <typename T>
-static inline T* atomic_pointer_get(T* volatile* pointer) {
+static inline T* atomic_pointer_get(T* const volatile* pointer) {
 #if SCHEDULER_MASK_IS_64_BIT
 	T* value = reinterpret_cast<T*>(
-		atomic_get64(reinterpret_cast<int64 volatile*>(pointer)));
+		atomic_get64(reinterpret_cast<int64 volatile*>(const_cast<T**>(pointer))));
 #else
 	T* value = reinterpret_cast<T*>(
-		atomic_get(reinterpret_cast<int32 volatile*>(pointer)));
+		atomic_get(reinterpret_cast<int32 volatile*>(const_cast<T**>(pointer))));
 #endif
 	memory_read_barrier();
 	return value;
@@ -304,22 +377,19 @@ inline void AssertThreadQueued(Thread* thread) {
 inline void SetCPUIDle(uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	atomic_or64(reinterpret_cast<int64 volatile*>(&mask),
-				(int64)1 << cpu);
+	OrAtomic64(mask, (int64)1 << cpu);
 }
 
 inline void ClearCPUIDle(uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	atomic_and64(reinterpret_cast<int64 volatile*>(&mask),
-				 ~((int64)1 << cpu));
+	AndAtomic64(mask, ~((int64)1 << cpu));
 }
 
 inline bool IsCPUIDle(const uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return false;
-	return (atomic_get64(reinterpret_cast<int64 volatile*>(&mask)) &
-			((int64)1 << cpu)) != 0;
+	return (LoadAcquire64(mask) & ((int64)1 << cpu)) != 0;
 }
 
 struct SchedulerSnapshot {
@@ -333,7 +403,7 @@ inline SchedulerSnapshot MakeSchedulerSnapshot(const int32& total,
 											   const uint64& idleMask) {
 	SchedulerSnapshot s;
 	s.totalRunnable = LoadAcquire(total);
-	s.idleMask = (uint64)atomic_get64(reinterpret_cast<int64 volatile*>(&idleMask));
+	s.idleMask = (uint64)LoadAcquire64(idleMask);
 	return s;
 }
 
@@ -361,8 +431,7 @@ class Scheduler {
 										scheduler_mode_operations* operations) {
 		atomic_pointer_set<scheduler_mode_operations>(&sCurrentMode,
 													  operations);
-		atomic_set(reinterpret_cast<int32 volatile*>(&sCurrentModeID),
-				   (int32)mode);
+		atomic_set(const_cast<int32 volatile*>(&sCurrentModeID), (int32)mode);
 	}
 
 	// expose sCurrentMode via a public accessor.
@@ -429,8 +498,8 @@ class Scheduler {
 	}
 
    private:
-	static scheduler_mode sCurrentModeID;
-	static scheduler_mode_operations* sCurrentMode;
+	static scheduler_mode sCurrentModeID __attribute__((aligned(8)));
+	static scheduler_mode_operations* sCurrentMode __attribute__((aligned(8)));
 };
 
 }  // namespace Scheduler
