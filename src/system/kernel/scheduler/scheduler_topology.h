@@ -107,6 +107,7 @@ static void search_local_node(SchedulerNode* node, Action action) {
 	}
 }
 
+
 template <typename Action>
 static void search_global_random(Action action) {
 	// Note: snapshot gPackageCount once at the start of the function.
@@ -196,6 +197,7 @@ static void search_global_random(Action action) {
 	}
 }
 
+
 static inline bool CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry,
 										   const CPUSet* mask,
 										   CoreEntry*& bestCore,
@@ -223,6 +225,7 @@ static inline bool CheckPackageMinimumLoad(CPUEntry* cpu, PackageEntry* entry,
 
 	return false;  // continue searching
 }
+
 
 static inline void CheckMaskedPackagesMinimumLoad(
 	CPUEntry* cpu, const CPUSet& mask, CoreEntry*& bestCore, int32& bestLoad,

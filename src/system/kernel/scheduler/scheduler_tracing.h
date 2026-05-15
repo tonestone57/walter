@@ -24,7 +24,7 @@ enum SchedulerTraceEntryType {
 };
 
 class SchedulerTraceEntry : public AbstractTraceEntry {
-   public:
+public:
 	SchedulerTraceEntry(Thread* thread) : fID(thread->id) {}
 
 	thread_id ThreadID() const { return fID; }
@@ -32,12 +32,12 @@ class SchedulerTraceEntry : public AbstractTraceEntry {
 	virtual const char* Name() const = 0;
 	virtual uint16 EntryType() const = 0;
 
-   protected:
+protected:
 	thread_id fID;
 };
 
 class EnqueueThread : public SchedulerTraceEntry {
-   public:
+public:
 	virtual uint16 EntryType() const {
 		return SCHEDULER_TRACE_ENTRY_TYPE_ENQUEUE_THREAD;
 	}
@@ -55,14 +55,14 @@ class EnqueueThread : public SchedulerTraceEntry {
 
 	virtual const char* Name() const;
 
-   private:
+private:
 	char* fName;
 	int32 fPriority;
 	int32 fEffectivePriority;
 };
 
 class RemoveThread : public SchedulerTraceEntry {
-   public:
+public:
 	virtual uint16 EntryType() const {
 		return SCHEDULER_TRACE_ENTRY_TYPE_REMOVE_THREAD;
 	}
@@ -76,12 +76,12 @@ class RemoveThread : public SchedulerTraceEntry {
 
 	virtual const char* Name() const;
 
-   private:
+private:
 	int32 fPriority;
 };
 
 class ScheduleThread : public SchedulerTraceEntry {
-   public:
+public:
 	virtual uint16 EntryType() const {
 		return SCHEDULER_TRACE_ENTRY_TYPE_SCHEDULE_THREAD;
 	}
@@ -122,7 +122,7 @@ class ScheduleThread : public SchedulerTraceEntry {
 	uint16 PreviousWaitObjectType() const { return fPreviousWaitObjectType; }
 	const void* PreviousWaitObject() const { return fWait.fPreviousWaitObject; }
 
-   private:
+private:
 	char* fName;
 	thread_id fPreviousID;
 	int32 fCPU;

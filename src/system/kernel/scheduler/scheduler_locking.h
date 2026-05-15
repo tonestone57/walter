@@ -22,12 +22,12 @@ inline bool SchedulerLockHeld() {
 #define ASSERT_SCHED_LOCK() ASSERT(SchedulerLockHeld())
 
 class SchedulerLockGuard {
-   public:
+public:
 	SchedulerLockGuard() { Acquire(); }
 
 	~SchedulerLockGuard() { Release(); }
 
-   private:
+private:
 	void Acquire() {
 		fStatus = disable_interrupts();
 
@@ -75,6 +75,7 @@ inline void AssertLockOrder(int rank) {
 	}
 }
 
+
 inline void ReleaseLockOrder(int rank) {
 	Thread* thread = thread_get_current_thread();
 	if (thread != NULL) {
@@ -91,12 +92,12 @@ inline void ReleaseLockOrder(int) {}
 #endif
 
 class InterruptGuard {
-   public:
+public:
 	InterruptGuard() : fStatus(disable_interrupts()) {}
 
 	~InterruptGuard() { restore_interrupts(fStatus); }
 
-   private:
+private:
 	cpu_status fStatus;
 };
 
@@ -115,7 +116,7 @@ inline void AssertInterruptsDisabled() { ASSERT(!are_interrupts_enabled()); }
 #endif
 
 class CPURunQueueLocking {
-   public:
+public:
 	inline bool Lock(CPUEntry* cpu) {
 		cpu->LockRunQueue();
 		return true;
@@ -127,7 +128,7 @@ class CPURunQueueLocking {
 typedef AutoLocker<CPUEntry, CPURunQueueLocking> CPURunQueueLocker;
 
 class CoreRunQueueLocking {
-   public:
+public:
 	inline bool Lock(CoreEntry* core) {
 		core->LockRunQueue();
 		return true;
@@ -137,7 +138,7 @@ class CoreRunQueueLocking {
 };
 
 class CoreRunQueueTryLocking {
-   public:
+public:
 	inline bool Lock(CoreEntry* core) { return core->TryLockRunQueue(); }
 
 	inline void Unlock(CoreEntry* core) { core->UnlockRunQueue(); }
@@ -148,7 +149,7 @@ typedef AutoLocker<CoreEntry, CoreRunQueueTryLocking> CoreRunQueueTryLocker;
 typedef AutoLocker<CoreEntry, CoreRunQueueLocking> CoreRunQueueLocker;
 
 class CoreCPUHeapLocking {
-   public:
+public:
 	inline bool Lock(CoreEntry* core) {
 		core->LockCPUHeap();
 		return true;
@@ -160,7 +161,7 @@ class CoreCPUHeapLocking {
 typedef AutoLocker<CoreEntry, CoreCPUHeapLocking> CoreCPUHeapLocker;
 
 class CoreCPULocking {
-   public:
+public:
 	inline bool Lock(CoreEntry* core) {
 		core->LockCPU();
 		return true;
@@ -172,7 +173,7 @@ class CoreCPULocking {
 typedef AutoLocker<CoreEntry, CoreCPULocking> CoreCPULocker;
 
 class SchedulerModeLocking {
-   public:
+public:
 	bool Lock(int* /* lockable */) {
 		// RCU Read Section: Wait-free on Haiku.
 		// reschedule() ensures the CPU's fRCULastGeneration is updated.
@@ -184,17 +185,17 @@ class SchedulerModeLocking {
 };
 
 class SchedulerModeLocker : public AutoLocker<int, SchedulerModeLocking> {
-   public:
+public:
 	SchedulerModeLocker(bool alreadyLocked = false, bool lockIfNotLocked = true)
 		: AutoLocker<int, SchedulerModeLocking>(&fDummy, alreadyLocked,
 												lockIfNotLocked) {}
 
-   private:
+private:
 	int fDummy;
 };
 
 class InterruptsSchedulerModeLocking {
-   public:
+public:
 	bool Lock(int* lockable) {
 		*lockable = disable_interrupts();
 		return true;
@@ -207,18 +208,18 @@ class InterruptsSchedulerModeLocking {
 
 class InterruptsSchedulerModeLocker
 	: public AutoLocker<int, InterruptsSchedulerModeLocking> {
-   public:
+public:
 	InterruptsSchedulerModeLocker(bool alreadyLocked = false,
 								  bool lockIfNotLocked = true)
 		: AutoLocker<int, InterruptsSchedulerModeLocking>(
 			  &fState, alreadyLocked, lockIfNotLocked) {}
 
-   private:
+private:
 	int fState;
 };
 
 class InterruptsBigSchedulerLocking {
-   public:
+public:
 	bool Lock(int* lockable) {
 		*lockable = disable_interrupts();
 		acquire_spinlock(&gSchedulerUpdateLock);
@@ -227,18 +228,24 @@ class InterruptsBigSchedulerLocking {
 
 	void Unlock(int* lockable) {
 		release_spinlock(&gSchedulerUpdateLock);
+
+		// RCU Synchronization: Wait for all CPUs to reach a quiescent state
+		// (reschedule) before allowing the caller to proceed. This ensures
+		// that no CPU is still using the old scheduler mode data.
+		scheduler_synchronize();
+
 		restore_interrupts(*lockable);
 	}
 };
 
 class InterruptsBigSchedulerLocker
 	: public AutoLocker<int, InterruptsBigSchedulerLocking> {
-   public:
+public:
 	InterruptsBigSchedulerLocker()
 		: AutoLocker<int, InterruptsBigSchedulerLocking>(&fState, false, true) {
 	}
 
-   private:
+private:
 	int fState;
 };
 

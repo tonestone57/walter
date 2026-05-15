@@ -206,7 +206,7 @@ struct ThreadWaitObject : HashObject, scheduling_analysis_thread_wait_object {
 };
 
 class SchedulingAnalysisManager {
-   public:
+public:
 	SchedulingAnalysisManager(void* buffer, size_t size)
 		: fBuffer(buffer), fSize(size), fHashTable(NULL), fHashTableSize(0) {
 		fAnalysis.thread_count = 0;
@@ -503,7 +503,7 @@ class SchedulingAnalysisManager {
 		return B_OK;
 	}
 
-   private:
+private:
 	void _PolishWaitObject(WaitObject* waitObject) {
 		if (waitObject->name[0] != '\0')
 			return;
@@ -574,7 +574,7 @@ class SchedulingAnalysisManager {
 		return IS_KERNEL_ADDRESS((addr_t)_address);
 	}
 
-   private:
+private:
 	scheduling_analysis fAnalysis;
 	void* fBuffer;
 	size_t fSize;

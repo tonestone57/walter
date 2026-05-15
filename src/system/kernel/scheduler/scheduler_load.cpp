@@ -76,6 +76,7 @@ static void _LoadavgUpdate(void* data, int iteration) {
 	}
 }
 
+
 status_t scheduler_loadavg_init() {
 	// Note: the EMA decay constants sCExp are calibrated for a 1-second
 	// update interval.

@@ -25,28 +25,28 @@ struct RunQueueLink {
 
 template <typename Element>
 class RunQueueLinkImpl {
-   public:
+public:
 	inline RunQueueLink<Element>* GetRunQueueLink();
 
-   private:
+private:
 	RunQueueLink<Element> fRunQueueLink;
 };
 
 template <typename Element>
 class RunQueueStandardGetLink {
-   private:
+private:
 	typedef RunQueueLink<Element> Link;
 
-   public:
+public:
 	inline Link* operator()(Element* element) const;
 };
 
 template <typename Element, RunQueueLink<Element> Element::*LinkMember>
 class RunQueueMemberGetLink {
-   private:
+private:
 	typedef RunQueueLink<Element> Link;
 
-   public:
+public:
 	inline Link* operator()(Element* element) const;
 };
 
@@ -67,13 +67,13 @@ template <typename Element, unsigned int MaxPriority, typename Compare,
 class RunQueue {
 	typedef Scheduler::RunQueueTraits<Element> Traits;
 
-   public:
+public:
 	static const int kBitmapSize = (MaxPriority + 32) / 32;
 
 	inline bool IsEmpty() const { return LoadAcquire(fTotalCount) == 0; }
 
 	class ConstIterator {
-	   public:
+public:
 		ConstIterator();
 		ConstIterator(
 			const RunQueue<Element, MaxPriority, Compare, GetLink>* list);
@@ -85,7 +85,7 @@ class RunQueue {
 
 		void Rewind();
 
-	   private:
+private:
 		inline void _FindNextPriority();
 
 		const RUN_QUEUE_CLASS_NAME* fList;
@@ -126,7 +126,7 @@ class RunQueue {
 	Element* PeekBest(const Compare2& compare,
 					  const Predicate& predicate) const;
 
-   private:
+private:
 	status_t fInitStatus;
 
 	uint32 fBitmap[kBitmapSize] __attribute__((aligned(8)));
@@ -157,17 +157,20 @@ RunQueueLink<Element>* RunQueueLinkImpl<Element>::GetRunQueueLink() {
 	return &fRunQueueLink;
 }
 
+
 template <typename Element>
 RunQueueLink<Element>* RunQueueStandardGetLink<Element>::operator()(
 	Element* element) const {
 	return element->GetRunQueueLink();
 }
 
+
 template <typename Element, RunQueueLink<Element> Element::*LinkMember>
 RunQueueLink<Element>* RunQueueMemberGetLink<Element, LinkMember>::operator()(
 	Element* element) const {
 	return &(element->*LinkMember);
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::ConstIterator::ConstIterator()
@@ -180,6 +183,7 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::ConstIterator(
 	Rewind();
 }
 
+
 RUN_QUEUE_TEMPLATE_LIST
 typename RUN_QUEUE_CLASS_NAME::ConstIterator&
 RUN_QUEUE_CLASS_NAME::ConstIterator::operator=(const ConstIterator& other) {
@@ -190,10 +194,12 @@ RUN_QUEUE_CLASS_NAME::ConstIterator::operator=(const ConstIterator& other) {
 	return *this;
 }
 
+
 RUN_QUEUE_TEMPLATE_LIST
 bool RUN_QUEUE_CLASS_NAME::ConstIterator::HasNext() const {
 	return fNext != NULL;
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 Element* RUN_QUEUE_CLASS_NAME::ConstIterator::Next() {
@@ -209,6 +215,7 @@ Element* RUN_QUEUE_CLASS_NAME::ConstIterator::Next() {
 	return current;
 }
 
+
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::ConstIterator::Rewind() {
 	ASSERT(fList != NULL);
@@ -218,6 +225,7 @@ void RUN_QUEUE_CLASS_NAME::ConstIterator::Rewind() {
 	if (fNext == NULL)
 		_FindNextPriority();
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority() {
@@ -268,6 +276,7 @@ void RUN_QUEUE_CLASS_NAME::ConstIterator::_FindNextPriority() {
 	fNext = NULL;
 }
 
+
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
 	: fInitStatus(B_OK), fBest(NULL), fTotalCount(0) {
@@ -275,6 +284,7 @@ RUN_QUEUE_CLASS_NAME::RunQueue()
 	memset(fHeads, 0, sizeof(fHeads));
 	memset(fTails, 0, sizeof(fTails));
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 status_t RUN_QUEUE_CLASS_NAME::GetInitStatus() { return fInitStatus; }
@@ -313,6 +323,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekMaximum() const {
 
 	return NULL;
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority) {
@@ -381,6 +392,7 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority) {
 	}
 }
 
+
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -444,6 +456,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority) {
 		}
 	}
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
@@ -514,6 +527,7 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 	}
 }
 
+
 RUN_QUEUE_TEMPLATE_LIST
 Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -523,6 +537,7 @@ Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const {
 		const_cast<Element* volatile*>(&fHeads[priority]));
 }
 
+
 RUN_QUEUE_TEMPLATE_LIST
 const uint32* RUN_QUEUE_CLASS_NAME::GetBitmap() const { return fBitmap; }
 
@@ -531,6 +546,7 @@ typename RUN_QUEUE_CLASS_NAME::ConstIterator
 RUN_QUEUE_CLASS_NAME::GetConstIterator() const {
 	return ConstIterator(this);
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 Element* RUN_QUEUE_CLASS_NAME::PeekBest() const {
@@ -647,6 +663,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const {
 	return globalBest;
 }
 
+
 RUN_QUEUE_TEMPLATE_LIST
 template <typename Compare2, typename Predicate>
 Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
@@ -695,6 +712,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 	}
 	return NULL;
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 template <typename Predicate>
@@ -761,6 +779,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const {
 	}
 	return NULL;
 }
+
 
 RUN_QUEUE_TEMPLATE_LIST
 GetLink RUN_QUEUE_CLASS_NAME::sGetLink;

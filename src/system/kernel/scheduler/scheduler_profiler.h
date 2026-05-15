@@ -20,7 +20,7 @@ namespace Scheduler {
 namespace Profiling {
 
 class Profiler {
-   public:
+public:
 	Profiler();
 	~Profiler();
 
@@ -38,7 +38,7 @@ class Profiler {
 	static Profiler* Get();
 	static void Initialize();
 
-   private:
+private:
 	struct FunctionData {
 		const char* fFunction;
 
@@ -86,13 +86,13 @@ class Profiler {
 };
 
 class Function {
-   public:
+public:
 	inline Function(const char* functionName);
 	inline ~Function();
 
 	inline void Exit();
 
-   private:
+private:
 	const char* fFunctionName;
 	int32 fCPU;
 	bool fEntered;
@@ -107,10 +107,12 @@ Function::Function(const char* functionName)
 		fEntered = profiler->EnterFunction(fCPU, fFunctionName);
 }
 
+
 Function::~Function() {
 	if (fFunctionName != NULL)
 		Exit();
 }
+
 
 void Function::Exit() {
 	if (fEntered) {

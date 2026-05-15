@@ -123,12 +123,14 @@ static void switch_to_mode() {
 	}
 }
 
+
 static void set_cpu_enabled(int32 cpu, bool enabled) {
 	if (!enabled && sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
 			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[i], (CoreEntry*)NULL);
 	}
 }
+
 
 static bool has_cache_expired(const ThreadData* threadData, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -141,6 +143,7 @@ static bool has_cache_expired(const ThreadData* threadData, bigtime_t now) {
 	bigtime_t activeTime = core->GetActiveTime();
 	return activeTime - threadData->WentSleepActive() > kCacheExpire;
 }
+
 
 static void check_package_small_task(CPUEntry* cpu, PackageEntry* entry,
 									 CoreEntry*& core, int32& bestScore) {
@@ -188,6 +191,7 @@ static void check_package_small_task(CPUEntry* cpu, PackageEntry* entry,
 		}
 	}
 }
+
 
 static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -362,6 +366,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 	return core;
 }
 
+
 static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -403,6 +408,7 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 		return package->GetIdleCorePacking(cpu, mask);
 	return NULL;
 }
+
 
 static void check_package_packing(CPUEntry* cpu, PackageEntry* entry,
 								  const CPUSet* mask, CoreEntry*& other,
@@ -456,6 +462,7 @@ static void check_package_packing(CPUEntry* cpu, PackageEntry* entry,
 	}
 }
 
+
 static void check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 										  CoreEntry*& other, int32& bestScore,
 										  bool& foundNonOverloaded,
@@ -489,6 +496,7 @@ static void check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 		}
 	}
 }
+
 
 static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 							  bigtime_t now) {
@@ -724,6 +732,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	return core;
 }
 
+
 static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 							bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -926,6 +935,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 															  : core;
 }
 
+
 static void rebalance_irqs(bool idle) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -1080,6 +1090,7 @@ static void rebalance_irqs(bool idle) {
 	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
 }
+
 
 scheduler_mode_operations gSchedulerPowerSavingMode = {
 	"power saving",

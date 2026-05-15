@@ -22,6 +22,7 @@ static inline uint32 get_random_index(uint32 random, uint32 range) {
 	return (uint32)(((uint64)random * range) >> 32);
 }
 
+
 CPUEntry* gCPUEntries;
 
 CoreEntry* gCoreEntries;
@@ -181,14 +182,14 @@ struct CoreThreadsData {
 };
 
 class Scheduler::DebugDumper {
-   public:
+public:
 	static void DumpCPURunQueue(CPUEntry* cpu);
 	static void DumpCoreRunQueue(CoreEntry* core);
 	static void DumpCoreEntryLoad(CoreEntry* core);
 	static void DumpIdleCoresInPackage(PackageEntry* package);
 	static void DumpPackageCores(PackageEntry* package);
 
-   private:
+private:
 	static void _AnalyzeCoreThreads(Thread* thread, void* data);
 };
 
@@ -212,9 +213,11 @@ void ThreadRunQueue::Dump() const {
 	}
 }
 
+
 void IRQRebalanceDPC::DoDPC(DPCQueue* queue) {
 	assign_io_interrupt_to_cpu(fIRQ, fTargetCPU);
 }
+
 
 CPUEntry::CPUEntry()
 	: fThreadCount(0),
@@ -230,9 +233,9 @@ CPUEntry::CPUEntry()
 	  fReschedulePending(0),
 	  fLastLocalPackageIndex(0),
 	  lastReschedule(0) {
-	B_INITIALIZE_RW_SPINLOCK(&fSchedulerModeLock);
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
 }
+
 
 void CPUEntry::Init(int32 id, CoreEntry* core) {
 	fCPUNumber = id;
@@ -269,6 +272,7 @@ void CPUEntry::Init(int32 id, CoreEntry* core) {
 	}
 }
 
+
 void CPUEntry::Start() {
 	// fThreadCount and fLoad are already initialized in CoreEntry::AddCPU
 	// while holding the necessary locks.
@@ -276,6 +280,7 @@ void CPUEntry::Start() {
 				 system_time());
 	StoreRelease64(fMeasureActiveTime, 0);
 }
+
 
 void CPUEntry::Stop() {
 	cpu_ent* entry = &gCPU[fCPUNumber];
@@ -335,6 +340,7 @@ void CPUEntry::Stop() {
 	locker.Unlock();
 }
 
+
 void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushFront(thread, priority);
@@ -347,6 +353,7 @@ void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 	}
 }
 
+
 void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushBack(thread, priority);
@@ -358,6 +365,7 @@ void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 			Core()->IncrementDisplayThreadCount();
 	}
 }
+
 
 void CPUEntry::Remove(ThreadData* thread) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -381,20 +389,24 @@ void CPUEntry::Remove(ThreadData* thread) {
 	}
 }
 
+
 ThreadData* CoreEntry::PeekThread() const {
 	SCHEDULER_ENTER_FUNCTION();
 	return fRunQueue.PeekBest();
 }
+
 
 ThreadData* CPUEntry::PeekThread() const {
 	SCHEDULER_ENTER_FUNCTION();
 	return fRunQueue.PeekBest();
 }
 
+
 ThreadData* CPUEntry::PeekIdleThread() const {
 	SCHEDULER_ENTER_FUNCTION();
 	return fRunQueue.GetHead(B_IDLE_PRIORITY);
 }
+
 
 void CPUEntry::UpdatePriority(int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -416,6 +428,7 @@ void CPUEntry::UpdatePriority(int32 priority) {
 	else if (priority == B_IDLE_PRIORITY)
 		core->CPUGoesIdle(this);
 }
+
 
 void CPUEntry::ComputeLoad(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -460,6 +473,7 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 	if (GetLoad() > kVeryHighLoad)
 		Scheduler::RebalanceIRQs(false);
 }
+
 
 ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 									   bigtime_t now) {
@@ -599,6 +613,7 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 	return nextThread;
 }
 
+
 void CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -621,6 +636,7 @@ void CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now) {
 		oldThreadData->UpdateActivity(active, now);
 	}
 }
+
 
 void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -654,6 +670,7 @@ void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 	}
 }
 
+
 uint32 CPUEntry::GetRandom() {
 	uint64 x = fRandomState;
 	x ^= x >> 12;
@@ -664,6 +681,7 @@ uint32 CPUEntry::GetRandom() {
 	// is a large 64-bit prime constant used to distribute entropy.
 	return (uint32)((x * 0x2545F4914F6CDD1DULL) >> 32);
 }
+
 
 ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -799,6 +817,7 @@ phase3:
 	return NULL;
 }
 
+
 void CPUEntry::StartQuantumTimer(ThreadData* thread, bool wasPreempted) {
 	cpu_ent* cpu = &gCPU[ID()];
 
@@ -816,6 +835,7 @@ void CPUEntry::StartQuantumTimer(ThreadData* thread, bool wasPreempted) {
 		fUpdateLoadEvent = true;
 	}
 }
+
 
 void CPUEntry::_RequestPerformanceLevel(ThreadData* threadData, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -863,6 +883,7 @@ void CPUEntry::_RequestPerformanceLevel(ThreadData* threadData, bigtime_t now) {
 	return B_HANDLED_INTERRUPT;
 }
 
+
 CPUPriorityHeap::CPUPriorityHeap(int32 cpuCount)
 	: Heap<CPUEntry, int32>(cpuCount) {}
 
@@ -890,6 +911,7 @@ void CPUPriorityHeap::Dump() {
 	}
 }
 
+
 CoreEntry::CoreEntry()
 	: fPackage(NULL),
 	  fType(CORE_TYPE_UNKNOWN),
@@ -909,6 +931,7 @@ CoreEntry::CoreEntry()
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
 }
 
+
 void CoreEntry::Init(int32 id, PackageEntry* package) {
 	fCoreID = id;
 	fPackage = package;
@@ -921,6 +944,7 @@ void CoreEntry::Init(int32 id, PackageEntry* package) {
 		panic("CoreEntry::Init: failed to allocate CPU heap");
 }
 
+
 void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -931,6 +955,7 @@ void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
 		IncrementDisplayThreadCount();
 }
 
+
 void CoreEntry::PushBack(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -940,6 +965,7 @@ void CoreEntry::PushBack(ThreadData* thread, int32 priority) {
 	if (priority >= B_DISPLAY_PRIORITY)
 		IncrementDisplayThreadCount();
 }
+
 
 void CoreEntry::Remove(ThreadData* thread) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -960,6 +986,7 @@ void CoreEntry::Remove(ThreadData* thread) {
 	fRunQueue.Remove(thread);
 }
 
+
 ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -972,6 +999,7 @@ ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 	}
 	return thread;
 }
+
 
 void CoreEntry::AddCPU(CPUEntry* cpu) {
 	ASSERT(LoadAcquire(fCPUCount) >= 0);
@@ -1047,6 +1075,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 			  cpu->ID());
 	}
 }
+
 
 void CoreEntry::RemoveCPU(CPUEntry* cpu,
 						  ThreadProcessing& threadPostProcessing) {
@@ -1132,6 +1161,7 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 	ASSERT(fLoad >= 0);
 }
 
+
 bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -1143,6 +1173,7 @@ bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 	return thread->GetVirtualRuntime();
 }
 
+
 bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -1153,6 +1184,7 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 		return 0;
 	return thread->GetVirtualRuntime();
 }
+
 
 CPUEntry* CoreEntry::PeekMinimumLoadCPU() {
 	// Optimization: If a physical core is idle, explicitly return the
@@ -1190,10 +1222,12 @@ CPUEntry* CoreEntry::PeekMinimumLoadCPU() {
 	return fCPUHeap.PeekRoot();
 }
 
+
 void CoreEntry::SetCapacity(int32 capacity) {
 	fCapacity = capacity;
 	fScoreFactor = (kDefaultCapacity << 16) / fCapacity;
 }
+
 
 void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -1327,6 +1361,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 		threadData->UnassignCore();
 }
 
+
 SchedulerNode::SchedulerNode()
 	: fIdlePackageMask(0), fPackageStartIndex(0), fPackageCount(0) {}
 
@@ -1337,10 +1372,12 @@ void SchedulerNode::Init(int32 id) {
 	fPackageCount = 0;
 }
 
+
 PackageEntry::PackageEntry()
 	: fIdleCoreCount(0), fCoreCount(0), fRegisteredCoreCount(0) {
 	B_INITIALIZE_RW_SPINLOCK(&fCoreLock);
 }
+
 
 void PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex) {
 	fPackageID = id;
@@ -1360,6 +1397,7 @@ void PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex) {
 	fIdleCoreCount = 0;
 }
 
+
 void PackageEntry::AddIdleCore(CoreEntry* core) {
 	WriteSpinLocker coreLocker(fCoreLock);
 	native_cpu_mask_t oldMask = cpu_mask_or_atomic(&fIdleCoreMask, (native_cpu_mask_t)1 << core->PackageIndex());
@@ -1375,6 +1413,7 @@ void PackageEntry::AddIdleCore(CoreEntry* core) {
 			fNode->PackageGoesIdle(this);
 	}
 }
+
 
 void PackageEntry::RemoveIdleCore(CoreEntry* core) {
 	WriteSpinLocker coreLocker(fCoreLock);
@@ -1403,6 +1442,7 @@ void PackageEntry::RemoveIdleCore(CoreEntry* core) {
 	}
 }
 
+
 CoreEntry* PackageEntry::GetIdleCore(int32 index) const {
 	native_cpu_mask_t mask = cpu_mask_get_atomic(&fIdleCoreMask);
 	if (mask == 0)
@@ -1430,6 +1470,7 @@ CoreEntry* PackageEntry::GetIdleCore(int32 index) const {
 		return fCores[finalBit];
 	return NULL;
 }
+
 
 CoreEntry* PackageEntry::GetIdleCorePacking(CPUEntry* cpu,
 											const CPUSet* affinity) const {
@@ -1549,6 +1590,7 @@ CoreEntry* PackageEntry::GetIdleCorePacking(CPUEntry* cpu,
 	return NULL;
 }
 
+
 void PackageEntry::RegisterCore(int32 index, CoreEntry* core) {
 	// Note: ASSERT only fires in debug builds. Add a production
 	// guard to prevent out-of-bounds write corrupting adjacent PackageEntry
@@ -1575,6 +1617,7 @@ void PackageEntry::RegisterCore(int32 index, CoreEntry* core) {
 	} else
 		fMaxAttempts = 0;
 }
+
 
 CoreEntry* PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 											 CoreType type) const {
@@ -1658,6 +1701,7 @@ CoreEntry* PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	}
 	return minEntry;
 }
+
 
 CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 											 CoreType type) const {
@@ -1857,6 +1901,7 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		threadsData->fLoad += thread->scheduler_data->GetLoad();
 }
 
+
 static int dump_run_queue(int /* argc */, char** /* argv */) {
 	int32 cpuCount = smp_get_num_cpus();
 	int32 coreCount = gCoreCount;
@@ -1871,6 +1916,7 @@ static int dump_run_queue(int /* argc */, char** /* argv */) {
 
 	return 0;
 }
+
 
 static int dump_cpu_heap(int /* argc */, char** /* argv */) {
 	kprintf("core average_load current_load threads_load threads epoch\n");
@@ -1891,6 +1937,7 @@ static int dump_cpu_heap(int /* argc */, char** /* argv */) {
 
 	return 0;
 }
+
 
 static int dump_idle_cores(int /* argc */, char** /* argv */) {
 	kprintf("Idle packages:\n");
@@ -1923,6 +1970,7 @@ static int dump_idle_cores(int /* argc */, char** /* argv */) {
 
 	return 0;
 }
+
 
 void Scheduler::init_debug_commands() {
 	new (&sDebugCPUHeap) CPUPriorityHeap(smp_get_num_cpus());

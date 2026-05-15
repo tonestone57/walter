@@ -21,6 +21,7 @@ void EnqueueThread::AddDump(TraceOutput& out) {
 			  fID, fName, fEffectivePriority, fPriority);
 }
 
+
 const char* EnqueueThread::Name() const { return fName; }
 
 // #pragma mark - RemoveThread
@@ -29,6 +30,7 @@ void RemoveThread::AddDump(TraceOutput& out) {
 	out.Print("scheduler remove %" B_PRId32 ", priority %" B_PRId32, fID,
 			  fPriority);
 }
+
 
 const char* RemoveThread::Name() const { return NULL; }
 
@@ -81,6 +83,7 @@ void ScheduleThread::AddDump(TraceOutput& out) {
 
 	out.Print(")");
 }
+
 
 const char* ScheduleThread::Name() const { return fName; }
 

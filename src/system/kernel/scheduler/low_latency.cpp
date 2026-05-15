@@ -59,6 +59,7 @@ static bool has_cache_expired(const ThreadData* threadData, bigtime_t now) {
 	return activeTime - threadData->WentSleepActive() > kCacheExpire;
 }
 
+
 static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 							  bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -526,6 +527,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	return core;
 }
 
+
 static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 							bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -709,6 +711,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 	return other;
 }
 
+
 static void rebalance_irqs(bool idle) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -717,11 +720,10 @@ static void rebalance_irqs(bool idle) {
 
 	// Note: rebalance_irqs is called from CPUEntry::ComputeLoad
 	// which is called from TrackLoad which is called from reschedule() under
-	// SchedulerModeLocker (read lock on fSchedulerModeLock). DPCQueue::Add
+	// SchedulerModeLocker (wait-free RCU). DPCQueue::Add
 	// wakes a thread which eventually calls scheduler_enqueue_in_run_queue
-	// → SchedulerModeLocker. Read locks are reentrant on Haiku (rw_spinlock),
-	// so this is safe today. Document explicitly to prevent future regression
-	// if the locking model changes.
+	// → SchedulerModeLocker. This is safe today. Document explicitly to prevent
+	// future regression if the locking model changes.
 	// NOTE: If this function is ever called from a write-lock context, the
 	// DPCQueue::Add path will deadlock. Add an explicit assertion here.
 	// (Cannot assert read-lock held without a scheduler-internal API.)
@@ -826,6 +828,7 @@ static void rebalance_irqs(bool idle) {
 	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
 }
+
 
 scheduler_mode_operations gSchedulerLowLatencyMode = {
 	"low latency",

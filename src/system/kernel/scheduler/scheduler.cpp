@@ -45,7 +45,7 @@
 namespace Scheduler {
 
 class ThreadEnqueuer : public ThreadProcessing {
-   public:
+public:
 	void operator()(ThreadData* thread);
 };
 
@@ -110,6 +110,7 @@ void scheduler_synchronize() {
 				 targetGen);
 }
 
+
 static timer sInteractionTimer;
 static int64 sLastInteractionTime __attribute__((aligned(8)));
 static int32 sDPCPending __attribute__((aligned(8))) = 0;
@@ -127,6 +128,7 @@ static SchedulerSnapshot TakeSnapshot() {
 	return MakeSchedulerSnapshot(gTotalRunnableThreads, gIdleMask);
 }
 
+
 static const int kLoadBalanceThreshold = 2;
 static const bigtime_t kRescheduleCooldown = 500;
 
@@ -134,13 +136,16 @@ extern "C" void AcquireSchedulerSpinlock() {
 	acquire_spinlock(&gSchedulerLock);
 }
 
+
 extern "C" void ReleaseSchedulerSpinlock() {
 	release_spinlock(&gSchedulerLock);
 }
 
+
 static void UpdateDeadlineScalingScalable() {
 	ThreadData::ComputeQuantumLengths();
 }
+
 
 static void update_quantum_lengths_dpc(void* /*arg*/) {
 	// Use the latest requested target from sPendingDPCTarget
@@ -159,6 +164,7 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 
 	StoreRelease(sDPCPending, 0);
 }
+
 
 static status_t interaction_timer_hook(struct timer* timer) {
 	// Note: the timer callback must clear sTimerArmed BEFORE
@@ -191,6 +197,7 @@ static status_t interaction_timer_hook(struct timer* timer) {
 
 	return B_HANDLED_INTERRUPT;
 }
+
 
 void scheduler_update_interaction_state(bigtime_t now) {
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
@@ -285,6 +292,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 				  B_ONE_SHOT_RELATIVE_TIMER);
 	}
 }
+
 
 struct RunQueueScanner {
 	uint32 kTopWordMask;
@@ -386,6 +394,7 @@ static status_t topology_validation_error(status_t strictStatus,
 	return topology_validation_is_strict() ? strictStatus : B_OK;
 }
 
+
 static int32* sPackageToNode;
 static int32* sCPUToCluster = NULL;
 
@@ -480,6 +489,7 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	}
 }
 
+
 static bool enqueue(Thread* thread, bool newOne, Thread* waker,
 					bigtime_t now = 0);
 
@@ -487,9 +497,11 @@ void ThreadEnqueuer::operator()(ThreadData* thread) {
 	enqueue(thread->GetThread(), false, NULL);
 }
 
+
 void scheduler_dump_thread_data(Thread* thread) {
 	thread->scheduler_data->Dump();
 }
+
 
 static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -611,6 +623,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 	return true;
 }
 
+
 bool enqueue_safe(Thread* thread, bigtime_t now) {
 	// Use the same safety logic as ChooseNextThread retry loop
 	// Note: return the result of enqueue() which is more reliable
@@ -700,11 +713,13 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 	return oldPriority;
 }
 
+
 void scheduler_reschedule_ici() {
 	// This function is called as a result of an incoming ICI.
 	// Make sure the reschedule() is invoked.
 	get_cpu_struct()->invoke_scheduler = true;
 }
+
 
 static inline void stop_cpu_timers(Thread* fromThread, Thread* toThread) {
 	SpinLocker teamLocker(&fromThread->team->time_lock);
@@ -716,6 +731,7 @@ static inline void stop_cpu_timers(Thread* fromThread, Thread* toThread) {
 	}
 }
 
+
 static inline void continue_cpu_timers(Thread* thread, cpu_ent* cpu) {
 	SpinLocker teamLocker(&thread->team->time_lock);
 	SpinLocker threadLocker(&thread->time_lock);
@@ -725,6 +741,7 @@ static inline void continue_cpu_timers(Thread* thread, cpu_ent* cpu) {
 		user_timer_continue_cpu_timers(thread, cpu->previous_thread);
 	}
 }
+
 
 static void thread_resumes(Thread* thread) {
 	cpu_ent* cpu = thread->cpu;
@@ -744,6 +761,7 @@ static void thread_resumes(Thread* thread) {
 	if ((thread->flags & THREAD_FLAGS_DEBUGGER_INSTALLED) != 0)
 		user_debug_thread_scheduled(thread);
 }
+
 
 void scheduler_new_thread_entry(Thread* thread) {
 	thread_resumes(thread);
@@ -782,6 +800,7 @@ static inline void switch_thread(Thread* fromThread, Thread* toThread) {
 	// first time the same is done in thread.cpp:common_thread_entry().
 	thread_resumes(fromThread);
 }
+
 
 static void reschedule(int32 nextState) {
 	ASSERT(!are_interrupts_enabled());
@@ -1002,6 +1021,7 @@ void scheduler_reschedule(int32 nextState) {
 	reschedule(nextState);
 }
 
+
 status_t scheduler_on_thread_create(Thread* thread, bool idleThread) {
 	void* buffer = object_cache_alloc(sThreadDataCache, 0);
 	if (buffer == NULL)
@@ -1010,6 +1030,7 @@ status_t scheduler_on_thread_create(Thread* thread, bool idleThread) {
 	thread->scheduler_data = new (buffer) ThreadData(thread);
 	return B_OK;
 }
+
 
 void scheduler_on_thread_init(Thread* thread) {
 	ASSERT(thread->scheduler_data != NULL);
@@ -1025,6 +1046,7 @@ void scheduler_on_thread_init(Thread* thread) {
 	} else
 		thread->scheduler_data->Init();
 }
+
 
 void scheduler_on_thread_destroy(Thread* thread) {
 	if (thread->scheduler_data != NULL) {
@@ -1043,6 +1065,7 @@ void scheduler_start() {
 
 	reschedule(B_THREAD_READY);
 }
+
 
 status_t scheduler_set_operation_mode(scheduler_mode mode) {
 	if (mode != SCHEDULER_MODE_LOW_LATENCY &&
@@ -1064,6 +1087,7 @@ status_t scheduler_set_operation_mode(scheduler_mode mode) {
 
 	return B_OK;
 }
+
 
 void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 #if KDEBUG
@@ -1179,6 +1203,7 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 	}
 }
 
+
 static void traverse_topology_tree(const cpu_topology_node* node, int packageID,
 								   int coreID, int32& coreIndex,
 								   int32 cpuCount) {
@@ -1226,6 +1251,7 @@ static void traverse_topology_tree(const cpu_topology_node* node, int packageID,
 	}
 }
 
+
 static int32 get_topology_id(int32 cpuID) {
 	// Note: the original code evaluated cache_id[gCPUCacheLevelCount-1]
 	// before the branch. When gCPUCacheLevelCount==0, the subscript -1 is
@@ -1235,6 +1261,7 @@ static int32 get_topology_id(int32 cpuID) {
 		return sCPUToPackage[cpuID];
 	return gCPU[cpuID].cache_id[gCPUCacheLevelCount - 1];
 }
+
 
 static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 										int32& packageCount, int32& nodeCount) {
@@ -1471,6 +1498,7 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 	packageToNodeDeleter.Detach();
 	return B_OK;
 }
+
 
 static status_t init() {
 	gIdleNodeMask = 0;
@@ -1905,6 +1933,7 @@ static status_t init() {
 	return B_OK;
 }
 
+
 void scheduler_init() {
 	if (get_safemode_boolean("scheduler_topology_tolerant", false))
 		sTopologyValidationMode = TOPOLOGY_VALIDATION_TOLERANT;
@@ -1946,10 +1975,12 @@ void scheduler_init() {
 #endif
 }
 
+
 void scheduler_enable_scheduling() {
 	// use atomic store so all CPUs observe the flag immediately.
 	StoreRelease(sSchedulerEnabled, 1);
 }
+
 
 void scheduler_update_policy() {
 	gTrackCPULoad = increase_cpu_performance(0) == B_OK;
@@ -2025,6 +2056,7 @@ bigtime_t _user_estimate_max_scheduling_latency(thread_id id) {
 				 Scheduler::MaximumLatency());
 }
 
+
 status_t _user_set_scheduler_mode(int32 mode) {
 	scheduler_mode schedulerMode = static_cast<scheduler_mode>(mode);
 	status_t error = scheduler_set_operation_mode(schedulerMode);
@@ -2032,6 +2064,7 @@ status_t _user_set_scheduler_mode(int32 mode) {
 		cpu_set_scheduler_mode(schedulerMode);
 	return error;
 }
+
 
 int32 _user_get_scheduler_mode() { return Scheduler::Mode(); }
 

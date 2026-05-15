@@ -66,6 +66,7 @@ void ThreadData::_InitBase() {
 	fStolen = false;
 }
 
+
 inline CoreEntry* ThreadData::_ChooseCore(const CPUSet& mask,
 										  bigtime_t now) const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -76,6 +77,7 @@ inline CoreEntry* ThreadData::_ChooseCore(const CPUSet& mask,
 	ASSERT(!gSingleCore);
 	return Scheduler::ChooseCore(this, mask, now);
 }
+
 
 inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 										bool& rescheduleNeeded) const {
@@ -141,6 +143,7 @@ inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 	return cpu;
 }
 
+
 ThreadData::ThreadData(Thread* thread) : fThread(thread) {}
 
 void ThreadData::Init(bigtime_t now) {
@@ -186,6 +189,7 @@ void ThreadData::Init(bigtime_t now) {
 	}
 }
 
+
 void ThreadData::Init(CoreEntry* core) {
 	_InitBase();
 
@@ -194,6 +198,7 @@ void ThreadData::Init(CoreEntry* core) {
 	fReady = true;
 	fNeededLoad = 0;
 }
+
 
 void ThreadData::Dump() const {
 	kprintf("\thome_package:\t\t%" B_PRId32 "\n", LoadAcquire(fHomePackage));
@@ -225,6 +230,7 @@ void ThreadData::Dump() const {
 	else if (fEnqueued)
 		kprintf("\tenqueued in Core run queue\n");
 }
+
 
 bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 								  bigtime_t now) {
@@ -337,6 +343,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 	return false;
 }
 
+
 bigtime_t ThreadData::ComputeQuantum() const {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -344,9 +351,9 @@ bigtime_t ThreadData::ComputeQuantum() const {
 		return (bigtime_t)LoadAcquire64(fBaseQuantum);
 
 	// Note: ComputeQuantum is only called while the caller holds
-	// SchedulerModeLocker (a read lock on CPUEntry::fSchedulerModeLock).
+	// SchedulerModeLocker (wait-free RCU).
 	// Mode switches require InterruptsBigSchedulerLocker which takes the
-	// write lock on every CPU, fully serialising against this read path.
+	// increment gRCUGeneration and wait for quiescent state, fully serialising against this read path.
 	// Plain struct-field reads are therefore safe and avoid potential
 	// undefined behaviour from casting unaligned bigtime_t pointers to
 	// int64* on 32-bit targets where atomic-get64 requires 8-byte alignment
@@ -473,6 +480,7 @@ bigtime_t ThreadData::ComputeQuantum() const {
 	return min_c(max_c(quantum, kResultFloor), maxAllowed);
 }
 
+
 void ThreadData::UnassignCore(bool running) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -512,6 +520,7 @@ void ThreadData::UnassignCore(bool running) {
 		}
 	}
 }
+
 
 void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -557,6 +566,7 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 	StoreRelease64(fTimeUsed, (int64)quantum);
 }
 
+
 void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 	ASSERT(!IsIdle());
@@ -598,6 +608,7 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 	if (core != NULL)
 		core->ChangeLoad(fNeededLoad - oldLoad, now);
 }
+
 
 void ThreadData::_UpdateDeadline(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -665,6 +676,7 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 
 	_ComputeEffectivePriority(now);
 }
+
 
 void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -770,6 +782,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 	return maxQuantum - result;
 }
 
+
 void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -814,6 +827,7 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 
 	atomic_pointer_set<CoreEntry>(&fCore, targetCore);
 }
+
 
 ThreadProcessing::~ThreadProcessing() {}
 
