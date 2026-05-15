@@ -1091,7 +1091,6 @@ static void rebalance_irqs(bool idle) {
 	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
 }
 
-
 scheduler_mode_operations gSchedulerPowerSavingMode = {
 	"power saving",
 

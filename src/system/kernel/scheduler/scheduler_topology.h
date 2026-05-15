@@ -107,7 +107,6 @@ static void search_local_node(SchedulerNode* node, Action action) {
 	}
 }
 
-
 template <typename Action>
 static void search_global_random(Action action) {
 	// Note: snapshot gPackageCount once at the start of the function.

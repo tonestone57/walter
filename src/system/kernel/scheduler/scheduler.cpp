@@ -82,6 +82,12 @@ void scheduler_synchronize() {
 	int64 targetGen = AddAcquireRelease64(gRCUGeneration, 1) +
 					   1;
 
+	// Update current CPU generation to match, so future synchronizations
+	// don't wait for us unnecessarily, and so that we don't deadlock if another
+	// CPU is also waiting for us in scheduler_synchronize().
+	StoreRelease64(CPUEntry::GetCPU(thisCPU)->fRCULastGeneration,
+				 targetGen);
+
 	// Broadcast an ICI to all other enabled CPUs to force them into a quiescent
 	// state (reschedule).
 	int32 cpuCount = smp_get_num_cpus();
@@ -103,11 +109,6 @@ void scheduler_synchronize() {
 			cpu_pause();
 		}
 	}
-
-	// Update current CPU generation to match, so future synchronizations
-	// don't wait for us unnecessarily.
-	StoreRelease64(CPUEntry::GetCPU(thisCPU)->fRCULastGeneration,
-				 targetGen);
 }
 
 
@@ -292,7 +293,6 @@ void scheduler_update_interaction_state(bigtime_t now) {
 				  B_ONE_SHOT_RELATIVE_TIMER);
 	}
 }
-
 
 struct RunQueueScanner {
 	uint32 kTopWordMask;

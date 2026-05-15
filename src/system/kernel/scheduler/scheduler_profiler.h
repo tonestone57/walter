@@ -107,7 +107,6 @@ Function::Function(const char* functionName)
 		fEntered = profiler->EnterFunction(fCPU, fFunctionName);
 }
 
-
 Function::~Function() {
 	if (fFunctionName != NULL)
 		Exit();

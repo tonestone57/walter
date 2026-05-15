@@ -22,7 +22,6 @@ static inline uint32 get_random_index(uint32 random, uint32 range) {
 	return (uint32)(((uint64)random * range) >> 32);
 }
 
-
 CPUEntry* gCPUEntries;
 
 CoreEntry* gCoreEntries;
@@ -218,7 +217,6 @@ void IRQRebalanceDPC::DoDPC(DPCQueue* queue) {
 	assign_io_interrupt_to_cpu(fIRQ, fTargetCPU);
 }
 
-
 CPUEntry::CPUEntry()
 	: fThreadCount(0),
 	  fLoad(0),
@@ -389,18 +387,15 @@ void CPUEntry::Remove(ThreadData* thread) {
 	}
 }
 
-
 ThreadData* CoreEntry::PeekThread() const {
 	SCHEDULER_ENTER_FUNCTION();
 	return fRunQueue.PeekBest();
 }
 
-
 ThreadData* CPUEntry::PeekThread() const {
 	SCHEDULER_ENTER_FUNCTION();
 	return fRunQueue.PeekBest();
 }
-
 
 ThreadData* CPUEntry::PeekIdleThread() const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -473,7 +468,6 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 	if (GetLoad() > kVeryHighLoad)
 		Scheduler::RebalanceIRQs(false);
 }
-
 
 ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 									   bigtime_t now) {
@@ -670,7 +664,6 @@ void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 	}
 }
 
-
 uint32 CPUEntry::GetRandom() {
 	uint64 x = fRandomState;
 	x ^= x >> 12;
@@ -681,7 +674,6 @@ uint32 CPUEntry::GetRandom() {
 	// is a large 64-bit prime constant used to distribute entropy.
 	return (uint32)((x * 0x2545F4914F6CDD1DULL) >> 32);
 }
-
 
 ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -883,7 +875,6 @@ void CPUEntry::_RequestPerformanceLevel(ThreadData* threadData, bigtime_t now) {
 	return B_HANDLED_INTERRUPT;
 }
 
-
 CPUPriorityHeap::CPUPriorityHeap(int32 cpuCount)
 	: Heap<CPUEntry, int32>(cpuCount) {}
 
@@ -910,7 +901,6 @@ void CPUPriorityHeap::Dump() {
 		entry = sDebugCPUHeap.PeekRoot();
 	}
 }
-
 
 CoreEntry::CoreEntry()
 	: fPackage(NULL),
@@ -985,7 +975,6 @@ void CoreEntry::Remove(ThreadData* thread) {
 		DecrementDisplayThreadCount();
 	fRunQueue.Remove(thread);
 }
-
 
 ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -1161,7 +1150,6 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 	ASSERT(fLoad >= 0);
 }
 
-
 bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -1173,7 +1161,6 @@ bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 	return thread->GetVirtualRuntime();
 }
 
-
 bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -1184,7 +1171,6 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 		return 0;
 	return thread->GetVirtualRuntime();
 }
-
 
 CPUEntry* CoreEntry::PeekMinimumLoadCPU() {
 	// Optimization: If a physical core is idle, explicitly return the
@@ -1361,7 +1347,6 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 		threadData->UnassignCore();
 }
 
-
 SchedulerNode::SchedulerNode()
 	: fIdlePackageMask(0), fPackageStartIndex(0), fPackageCount(0) {}
 
@@ -1371,7 +1356,6 @@ void SchedulerNode::Init(int32 id) {
 	fPackageStartIndex = 0;
 	fPackageCount = 0;
 }
-
 
 PackageEntry::PackageEntry()
 	: fIdleCoreCount(0), fCoreCount(0), fRegisteredCoreCount(0) {
@@ -1442,7 +1426,6 @@ void PackageEntry::RemoveIdleCore(CoreEntry* core) {
 	}
 }
 
-
 CoreEntry* PackageEntry::GetIdleCore(int32 index) const {
 	native_cpu_mask_t mask = cpu_mask_get_atomic(&fIdleCoreMask);
 	if (mask == 0)
@@ -1470,7 +1453,6 @@ CoreEntry* PackageEntry::GetIdleCore(int32 index) const {
 		return fCores[finalBit];
 	return NULL;
 }
-
 
 CoreEntry* PackageEntry::GetIdleCorePacking(CPUEntry* cpu,
 											const CPUSet* affinity) const {
@@ -1618,7 +1600,6 @@ void PackageEntry::RegisterCore(int32 index, CoreEntry* core) {
 		fMaxAttempts = 0;
 }
 
-
 CoreEntry* PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 											 CoreType type) const {
 	CoreEntry* minEntry = NULL;
@@ -1701,7 +1682,6 @@ CoreEntry* PackageEntry::PeekMinimumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 	}
 	return minEntry;
 }
-
 
 CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 											 CoreType type) const {

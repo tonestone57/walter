@@ -60,7 +60,6 @@ Profiler::Profiler()
 	memset(fFunctionStackPointers, 0, sizeof(int32) * SMP_MAX_CPUS);
 }
 
-
 Profiler::~Profiler() {
 	delete[] fFunctionData;
 	delete[] fSortBuffer;
@@ -236,7 +235,6 @@ void Profiler::DumpTimeExclusivePerCall(uint32 maxCount) {
 		0);
 }
 
-
 uint32 Profiler::_FunctionCount() const { return fNextFunctionSlot; }
 
 void Profiler::_Dump(FunctionData* data, uint32 count) {
@@ -264,7 +262,6 @@ void Profiler::_Dump(FunctionData* data, uint32 count) {
 			function->fFunction);
 	}
 }
-
 
 Profiler::FunctionData* Profiler::_FindFunction(const char* function) {
 	uint32 hash = 0;
@@ -341,7 +338,6 @@ Profiler::FunctionData* Profiler::_FindFunction(const char* function) {
 	return NULL;
 }
 
-
 template <typename Type, Type Profiler::FunctionData::*Member>
 /* static */ int Profiler::_CompareFunctions(const void* _a, const void* _b) {
 	const FunctionData* a = static_cast<const FunctionData*>(_a);
@@ -353,7 +349,6 @@ template <typename Type, Type Profiler::FunctionData::*Member>
 		return -1;
 	return 0;
 }
-
 
 template <typename Type, Type Profiler::FunctionData::*Member>
 /* static */ int Profiler::_CompareFunctionsPerCall(const void* _a,

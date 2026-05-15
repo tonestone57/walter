@@ -75,7 +75,6 @@ inline void AssertLockOrder(int rank) {
 	}
 }
 
-
 inline void ReleaseLockOrder(int rank) {
 	Thread* thread = thread_get_current_thread();
 	if (thread != NULL) {

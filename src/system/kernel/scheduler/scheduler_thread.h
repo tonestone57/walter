@@ -235,11 +235,9 @@ inline bool ThreadData::IsRealTime() const {
 	return GetPriority() >= B_FIRST_REAL_TIME_PRIORITY;
 }
 
-
 inline bool ThreadData::IsIdle() const {
 	return GetPriority() == B_IDLE_PRIORITY;
 }
-
 
 inline bool ThreadData::HasCacheExpired(bigtime_t now) const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -247,7 +245,6 @@ inline bool ThreadData::HasCacheExpired(bigtime_t now) const {
 		now = system_time();
 	return Scheduler::HasCacheExpired(this, now);
 }
-
 
 inline CoreEntry* ThreadData::PreviousCore() const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -265,7 +262,6 @@ inline CoreEntry* ThreadData::PreviousCore() const {
 	return core;
 }
 
-
 inline CoreEntry* ThreadData::Rebalance(const CPUSet& mask,
 										bigtime_t now) const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -277,12 +273,10 @@ inline CoreEntry* ThreadData::Rebalance(const CPUSet& mask,
 	return Scheduler::Rebalance(this, mask, now);
 }
 
-
 inline int32 ThreadData::GetEffectivePriority() const {
 	SCHEDULER_ENTER_FUNCTION();
 	return fEffectivePriority;
 }
-
 
 inline void ThreadData::_UpdatePriorityBoost(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -337,14 +331,12 @@ inline void ThreadData::_UpdatePriorityBoost(bigtime_t now) {
 	}
 }
 
-
 inline void ThreadData::StartCPUTime(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	SpinLocker threadTimeLocker(fThread->time_lock);
 	fThread->last_time = now;
 }
-
 
 inline void ThreadData::StopCPUTime(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -361,7 +353,6 @@ inline void ThreadData::StopCPUTime(bigtime_t now) {
 	if (team->HasActiveUserTimeUserTimers())
 		user_timer_check_team_user_timers(team);
 }
-
 
 inline void ThreadData::SetStolenInterruptTime(bigtime_t interruptTime) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -387,7 +378,6 @@ inline void ThreadData::SetStolenInterruptTime(bigtime_t interruptTime) {
 	// the caller; this function only handles the fStolenTime accumulation.
 }
 
-
 inline bigtime_t ThreadData::GetQuantumLeft() {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -406,12 +396,10 @@ inline bigtime_t ThreadData::GetQuantumLeft() {
 	return quantum;
 }
 
-
 inline void ThreadData::StartQuantum(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 	StoreRelease64(fQuantumStart, (int64)now);
 }
-
 
 inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 										bigtime_t now) {
@@ -471,7 +459,6 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 	return false;
 }
 
-
 inline void ThreadData::Continues(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -491,7 +478,6 @@ inline void ThreadData::Continues(bigtime_t now) {
 	if (gTrackCoreLoad)
 		_ComputeNeededLoad(now);
 }
-
 
 inline void ThreadData::GoesAway(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -550,7 +536,6 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 	fReady = false;
 }
 
-
 inline void ThreadData::Dies(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -581,7 +566,6 @@ inline void ThreadData::Dies(bigtime_t now) {
 	}
 	fReady = false;
 }
-
 
 inline void ThreadData::PutBack(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -619,7 +603,6 @@ inline void ThreadData::PutBack(bigtime_t now) {
 		core->PushFront(this, priority);
 	}
 }
-
 
 inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 								bool& updateInteraction, bigtime_t now) {
@@ -781,7 +764,6 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 	return true;
 }
 
-
 inline bool ThreadData::Dequeue() {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -807,12 +789,10 @@ inline bool ThreadData::Dequeue() {
 	return true;
 }
 
-
 inline void RunQueueTraits<ThreadData>::SetInRunQueue(ThreadData* element,
 													  bool inQueue) {
 	element->GetThread()->inRunQueue = inQueue;
 }
-
 
 inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 											 bigtime_t maxLatency) {
@@ -853,7 +833,6 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 		vRuntime = old;
 	}
 }
-
 
 inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();

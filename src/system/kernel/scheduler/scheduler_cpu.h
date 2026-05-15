@@ -448,12 +448,10 @@ inline void CPUEntry::LockRunQueue() {
 	acquire_spinlock(&fQueueLock);
 }
 
-
 inline bool CPUEntry::TryLockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	return try_acquire_spinlock(&fQueueLock);
 }
-
 
 inline void CPUEntry::UnlockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
@@ -463,7 +461,6 @@ inline void CPUEntry::UnlockRunQueue() {
 /* static */ inline CPUEntry* CPUEntry::GetCPU(int32 cpu) {
 	return &gCPUEntries[cpu];
 }
-
 
 inline int32 CPUEntry::GetLoad() const {
 	int32 load = LoadAcquire(fLoad);
@@ -480,54 +477,45 @@ inline int32 CPUEntry::GetLoad() const {
 	return load;
 }
 
-
 inline void CoreEntry::LockCPUHeap() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fCPULock);
 }
-
 
 inline void CoreEntry::UnlockCPUHeap() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fCPULock);
 }
 
-
 inline void CoreEntry::LockCPU() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fCPULock);
 }
-
 
 inline void CoreEntry::UnlockCPU() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fCPULock);
 }
 
-
 inline CPUPriorityHeap* CoreEntry::CPUHeap() {
 	SCHEDULER_ENTER_FUNCTION();
 	return &fCPUHeap;
 }
-
 
 inline void CoreEntry::LockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	acquire_spinlock(&fQueueLock);
 }
 
-
 inline bool CoreEntry::TryLockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	return try_acquire_spinlock(&fQueueLock);
 }
 
-
 inline void CoreEntry::UnlockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fQueueLock);
 }
-
 
 inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -535,18 +523,15 @@ inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 				 (int64)activeTime);
 }
 
-
 inline bigtime_t CoreEntry::GetActiveTime() const {
 	return (bigtime_t)LoadAcquire64(fActiveTime);
 }
-
 
 inline int32 CoreEntry::GetLoad() const { return LoadAcquire(fLoad); }
 
 inline int32 CoreEntry::GetScore() const {
 	return ((int64)GetLoad() * fScoreFactor) >> 16;
 }
-
 
 inline void CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad,
 							   bigtime_t now) {
@@ -564,7 +549,6 @@ inline void CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad,
 		_UpdateLoad(true, now);
 }
 
-
 inline uint32 CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -580,7 +564,6 @@ inline uint32 CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now) {
 	}
 	return (uint32)oldCombined;
 }
-
 
 inline void CoreEntry::ChangeLoad(int32 delta, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -621,7 +604,6 @@ inline void PackageEntry::CoreGoesIdle(CoreEntry* core) {
 	}
 }
 
-
 inline void PackageEntry::CoreWakesUp(CoreEntry* core) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -644,7 +626,6 @@ inline void PackageEntry::CoreWakesUp(CoreEntry* core) {
 	}
 }
 
-
 inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -663,7 +644,6 @@ inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 			(int64)1 << fNodeID);
 	}
 }
-
 
 inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 	// Note: guard PackageWakesUp livelock.
@@ -736,7 +716,6 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 	}
 }
 
-
 inline native_cpu_mask_t SchedulerNode::IdlePackageMask() const {
 	SCHEDULER_ENTER_FUNCTION();
 	// use scheduler_atomic_get for 32-bit correctness.
@@ -766,7 +745,6 @@ inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 		fPackage->CoreGoesIdle(this);
 }
 
-
 inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 	if (gSingleCore)
 		return;
@@ -791,7 +769,6 @@ inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 	return gCPUEntries[cpu].Core();
 }
 
-
 inline native_cpu_mask_t PackageEntry::IdleCoreMask() const {
 	// Note: Packing rotation logic documentation. GetIdleCorePacking uses
 	// rotation arithmetic on this mask. The un-rotation formula origIdx = (pos
@@ -804,7 +781,6 @@ inline native_cpu_mask_t PackageEntry::IdleCoreMask() const {
 	SCHEDULER_ENTER_FUNCTION();
 	return cpu_mask_get_atomic(&fIdleCoreMask);
 }
-
 
 inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -865,7 +841,6 @@ inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 	return package;
 }
 
-
 inline void PackageEntry::ReadLockCore() { acquire_read_spinlock(&fCoreLock); }
 
 inline bool CoreEntry::HasHighPriorityThread() const {
@@ -894,7 +869,6 @@ inline bool CoreEntry::HasHighPriorityThread() const {
 	}
 	return false;
 }
-
 
 inline void PackageEntry::ReadUnlockCore() {
 	release_read_spinlock(&fCoreLock);

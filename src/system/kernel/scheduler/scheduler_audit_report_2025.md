@@ -3,10 +3,10 @@
 ## 1. GCC 13 Compatibility & Standardized Atomics
 - **Standardized Portability Layer**: Established a robust set of atomic helpers in `scheduler_common.h` (`scheduler_atomic_*64`, `LoadAcquire`, `StoreRelease`, etc.) using explicit `reinterpret_cast<int64 volatile*>` to satisfy GCC 13's stricter type checking.
 - **Type-Safe Wrappers**: Implemented `LoadAcquire`, `StoreRelease`, `AddRelease`, and `SubAcquireRelease` to provide a consistent, type-safe interface for `int32` atomic operations across the scheduler subsystem.
-- **Atomic Pointer Safety**: Refined `atomic_pointer_*` templates to leverage standardized helpers, ensuring proper 32/64-bit behavior and memory barriers. Simplified `atomic_pointer_get` to use a cleaner `const_cast` pattern for better GCC 13 compatibility.
+- **Atomic Pointer Safety**: Refined `atomic_pointer_*` templates to leverage standardized helpers, ensuring proper 32/64-bit behavior and memory barriers.
 
 ## 2. 32-bit & 64-bit Portability
-- **Alignment Attributes**: Enforced 8-byte alignment using `__attribute__((aligned(8)))` for all 64-bit variables accessed via atomic operations (e.g., `fStolenTime`, `fVirtualRuntime`, `gIdleMask`, `gIdleNodeMask`, `fHomePackage`, `fIdlePackageMask`). This ensures atomic safety on 32-bit platforms where unaligned 64-bit accesses are non-atomic.
+- **Alignment Attributes**: Enforced 8-byte alignment using `__attribute__((aligned(8)))` for all 64-bit variables accessed via atomic operations (e.g., `fStolenTime`, `fVirtualRuntime`, `gIdleMask`, `gIdleNodeMask`). This ensures atomic safety on 32-bit platforms where unaligned 64-bit accesses are non-atomic.
 - **Native Masking**: Utilized `native_cpu_mask_t` and portable bit manipulation intrinsics (`scheduler_ctz`, `scheduler_ffs64`, `scheduler_popcount`) to handle varying CPU mask widths and topologies.
 
 ## 3. Performance Optimizations
@@ -19,7 +19,6 @@
 - **RunQueue Hardening**: Implemented stale pointer detection for the `fBest` cache in `RunQueue.h`. Added an authoritative rescan in `PeekBest()` to guarantee finding a thread if the queue is non-empty, even under high contention.
 - **Hot-Unplug Safety**: Added explicit `NULL` guards for `Core()`, `Package()`, and `Node()` dereferences throughout the scheduler and load balancer to prevent kernel panics during CPU hot-unplug events.
 - **Counter Consistency**: Verified and corrected various atomic counter updates (e.g., `fThreadCount`, `gTotalRunnableThreads`) to ensure symmetric increments/decrements and avoid leaks.
-- **Wait-Free RCU Mode Switching**: Completed the transition to wait-free RCU for scheduler mode management. Implemented `scheduler_synchronize()` in `InterruptsBigSchedulerLocking::Unlock` to ensure all CPUs reach a quiescent state before mode-switch completion, eliminating heavy write-lock contention.
 - **IRQ Draining**: Refined the IRQ draining logic in `CPUEntry::Stop` with a 1000-iteration safety bound and progress verification to prevent infinite loops.
 
 ## 5. Maintenance & Style

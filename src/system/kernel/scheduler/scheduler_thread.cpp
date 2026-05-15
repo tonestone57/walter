@@ -66,7 +66,6 @@ void ThreadData::_InitBase() {
 	fStolen = false;
 }
 
-
 inline CoreEntry* ThreadData::_ChooseCore(const CPUSet& mask,
 										  bigtime_t now) const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -77,7 +76,6 @@ inline CoreEntry* ThreadData::_ChooseCore(const CPUSet& mask,
 	ASSERT(!gSingleCore);
 	return Scheduler::ChooseCore(this, mask, now);
 }
-
 
 inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 										bool& rescheduleNeeded) const {
@@ -142,7 +140,6 @@ inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 
 	return cpu;
 }
-
 
 ThreadData::ThreadData(Thread* thread) : fThread(thread) {}
 
@@ -342,7 +339,6 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 		MigrateTo(targetCore, now);
 	return false;
 }
-
 
 bigtime_t ThreadData::ComputeQuantum() const {
 	SCHEDULER_ENTER_FUNCTION();
@@ -827,7 +823,6 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 
 	atomic_pointer_set<CoreEntry>(&fCore, targetCore);
 }
-
 
 ThreadProcessing::~ThreadProcessing() {}
 

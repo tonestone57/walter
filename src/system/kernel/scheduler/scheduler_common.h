@@ -35,12 +35,10 @@ inline int LoadAcquire(const int32 volatile& value) {
 	return v;
 }
 
-
 inline void StoreRelease(int32 volatile& value, int v) {
 	memory_write_barrier();
 	atomic_set(const_cast<int32 volatile*>(&value), v);
 }
-
 
 inline int32 AddAcquireRelease(int32 volatile& value, int32 v) {
 	memory_write_barrier();
@@ -49,17 +47,14 @@ inline int32 AddAcquireRelease(int32 volatile& value, int32 v) {
 	return old;
 }
 
-
 inline void AddRelease(int32 volatile& value, int32 v) {
 	memory_write_barrier();
 	atomic_add(const_cast<int32 volatile*>(&value), v);
 }
 
-
 inline void SubAcquireRelease(int32 volatile& value, int32 v) {
 	atomic_add(const_cast<int32 volatile*>(&value), -v);
 }
-
 
 inline int32 TestAndSet(int32 volatile& value, int32 newValue,
 						int32 expectedValue) {
@@ -67,45 +62,42 @@ inline int32 TestAndSet(int32 volatile& value, int32 newValue,
 							   newValue, expectedValue);
 }
 
-
 inline int32 GetAndSet(int32 volatile& value, int32 newValue) {
 	return atomic_get_and_set(const_cast<int32 volatile*>(&value), newValue);
 }
-
 
 inline int32 OrAtomic(int32 volatile& value, int32 orValue) {
 	return atomic_or(const_cast<int32 volatile*>(&value), orValue);
 }
 
-
 inline int32 AndAtomic(int32 volatile& value, int32 andValue) {
 	return atomic_and(const_cast<int32 volatile*>(&value), andValue);
 }
 
-
-inline int64 LoadAcquire64(const int64 volatile& value) {
+template <typename T>
+inline int64 LoadAcquire64(const T volatile& value) {
 	int64 v = atomic_get64(
-		reinterpret_cast<int64 volatile*>(const_cast<int64*>(&value)));
+		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)));
 	memory_read_barrier();
 	return v;
 }
 
-
-inline void StoreRelease64(int64 volatile& value, int64 v) {
+template <typename T>
+inline void StoreRelease64(T volatile& value, int64 v) {
 	memory_write_barrier();
-	atomic_set64(const_cast<int64 volatile*>(&value), v);
+	atomic_set64(reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), v);
 }
 
-
-inline int64 AddAcquireRelease64(int64 volatile& value, int64 v) {
+template <typename T>
+inline int64 AddAcquireRelease64(T volatile& value, int64 v) {
 	memory_write_barrier();
 	int64 old = atomic_get64(
-		reinterpret_cast<int64 volatile*>(const_cast<int64*>(&value)));
+		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)));
 	while (true) {
 		int64 next = old + v;
 		int64 actual = atomic_test_and_set64(
-			reinterpret_cast<int64 volatile*>(const_cast<int64*>(&value)),
-			next, old);
+			reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), next,
+			old);
 		if (actual == old)
 			break;
 		old = actual;
@@ -114,27 +106,30 @@ inline int64 AddAcquireRelease64(int64 volatile& value, int64 v) {
 	return old;
 }
 
-
-inline void AddRelease64(int64 volatile& value, int64 v) {
+template <typename T>
+inline void AddRelease64(T volatile& value, int64 v) {
 	memory_write_barrier();
-	atomic_add64(const_cast<int64 volatile*>(&value), v);
+	atomic_add64(reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), v);
 }
 
-
-inline int64 TestAndSet64(int64 volatile& value, int64 newValue,
+template <typename T>
+inline int64 TestAndSet64(T volatile& value, int64 newValue,
 						  int64 expectedValue) {
-	return atomic_test_and_set64(const_cast<int64 volatile*>(&value),
-								 newValue, expectedValue);
+	return atomic_test_and_set64(
+		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), newValue,
+		expectedValue);
 }
 
-
-inline int64 OrAtomic64(int64 volatile& value, int64 orValue) {
-	return atomic_or64(reinterpret_cast<int64 volatile*>(&value), orValue);
+template <typename T>
+inline int64 OrAtomic64(T volatile& value, int64 orValue) {
+	return atomic_or64(
+		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), orValue);
 }
 
-
-inline int64 AndAtomic64(int64 volatile& value, int64 andValue) {
-	return atomic_and64(reinterpret_cast<int64 volatile*>(&value), andValue);
+template <typename T>
+inline int64 AndAtomic64(T volatile& value, int64 andValue) {
+	return atomic_and64(
+		reinterpret_cast<int64 volatile*>(const_cast<T*>(&value)), andValue);
 }
 
 }  // namespace Scheduler
@@ -288,17 +283,14 @@ template <typename T>
 static inline T* atomic_pointer_get(T* const volatile* pointer) {
 #if SCHEDULER_MASK_IS_64_BIT
 	T* value = reinterpret_cast<T*>(
-		atomic_get64(reinterpret_cast<int64 volatile*>(
-			const_cast<T* const volatile*>(pointer))));
+		atomic_get64(reinterpret_cast<int64 volatile*>(const_cast<T**>(reinterpret_cast<T* const*>(pointer)))));
 #else
 	T* value = reinterpret_cast<T*>(
-		atomic_get(reinterpret_cast<int32 volatile*>(
-			const_cast<T* const volatile*>(pointer))));
+		atomic_get(reinterpret_cast<int32 volatile*>(const_cast<T**>(reinterpret_cast<T* const*>(pointer)))));
 #endif
 	memory_read_barrier();
 	return value;
 }
-
 
 template <typename T>
 static inline void atomic_pointer_set(T* volatile* pointer, T* value) {
@@ -311,7 +303,6 @@ static inline void atomic_pointer_set(T* volatile* pointer, T* value) {
 			   reinterpret_cast<int32>(value));
 #endif
 }
-
 
 template <typename T>
 static inline T* atomic_pointer_test_and_set(T* volatile* pointer, T* newValue,
@@ -328,7 +319,6 @@ static inline T* atomic_pointer_test_and_set(T* volatile* pointer, T* newValue,
 							reinterpret_cast<int32>(expectedValue)));
 #endif
 }
-
 
 class CPUEntry;
 class CoreEntry;
@@ -396,33 +386,28 @@ inline void AssertThreadReady(Thread* thread) {
 	SCHED_ASSERT(!thread->inRunQueue);
 }
 
-
 inline void AssertThreadQueued(Thread* thread) {
 	SCHED_ASSERT(thread != NULL);
 	SCHED_ASSERT(thread->inRunQueue);
 }
 
-
 inline void SetCPUIDle(uint64 volatile& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	OrAtomic64(reinterpret_cast<int64 volatile&>(mask), (int64)1 << cpu);
+	OrAtomic64(mask, (int64)1 << cpu);
 }
-
 
 inline void ClearCPUIDle(uint64 volatile& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	AndAtomic64(reinterpret_cast<int64 volatile&>(mask), ~((int64)1 << cpu));
+	AndAtomic64(mask, ~((int64)1 << cpu));
 }
-
 
 inline bool IsCPUIDle(const uint64& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return false;
 	return (LoadAcquire64(mask) & ((int64)1 << cpu)) != 0;
 }
-
 
 struct SchedulerSnapshot {
 	int32 totalRunnable;
@@ -439,11 +424,9 @@ inline SchedulerSnapshot MakeSchedulerSnapshot(const int32& total,
 	return s;
 }
 
-
 inline bool ShouldMigrate(int sourceLoad, int targetLoad, int threshold) {
 	return sourceLoad > targetLoad + threshold;
 }
-
 
 inline bool ShouldReschedule(bigtime_t now, bigtime_t last,
 							 bigtime_t cooldown) {
