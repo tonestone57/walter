@@ -85,7 +85,7 @@ public:
 
 	// Eligible threads are ordered by virtual deadline (Compare).
 	inline Element* PeekRoot() const {
-		return fEligibleCount > 0 ? fEligibleHeap[0] : NULL;
+		return LoadAcquire(fEligibleCount) > 0 ? fEligibleHeap[0] : NULL;
 	}
 
 	inline Element* PeekMaximum() const { return PeekRoot(); }
@@ -136,10 +136,10 @@ private:
 	status_t fInitStatus;
 
 	Element* fEligibleHeap[kMaxThreadsPerCore];
-	int32 fEligibleCount;
+	int32 fEligibleCount __attribute__((aligned(8)));
 
 	Element* fIneligibleHeap[kMaxThreadsPerCore];
-	int32 fIneligibleCount;
+	int32 fIneligibleCount __attribute__((aligned(8)));
 
 	int32 fTotalCount __attribute__((aligned(8)));
 
@@ -190,7 +190,8 @@ void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt) {
 			}
 
 			// Remove from Ineligible
-			int32 lastIdx = --fIneligibleCount;
+			int32 lastIdx = fIneligibleCount - 1;
+			fIneligibleCount = lastIdx;
 			Element* last = fIneligibleHeap[lastIdx];
 			if (0 != lastIdx) {
 				fIneligibleHeap[0] = last;
@@ -200,10 +201,11 @@ void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt) {
 			sGetLink(root)->fIndex = 0x7FFFFFFF;
 
 			// Add to Eligible
-			int32 idx = fEligibleCount++;
+			int32 idx = fEligibleCount;
 			fEligibleHeap[idx] = root;
 			sGetLink(root)->fIndex = idx;
-			_BubbleUp(fEligibleHeap, fEligibleCount, idx, true);
+			_BubbleUp(fEligibleHeap, idx + 1, idx, true);
+			StoreRelease(fEligibleCount, idx + 1);
 		} else {
 			break;
 		}
@@ -221,22 +223,24 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 
 	if (element->IsRealTime() || element->IsIdle() || element->IsEligible(svt)) {
 		if (fEligibleCount >= kMaxThreadsPerCore) {
-			panic("scheduler: eligible heap overflow (count=%d)", fEligibleCount);
+			panic("scheduler: eligible heap overflow (count=%d)", (int32)fEligibleCount);
 		}
 		AddAcquireRelease(fTotalCount, 1);
-		int32 idx = fEligibleCount++;
+		int32 idx = fEligibleCount;
 		fEligibleHeap[idx] = element;
 		link->fIndex = idx;
-		_BubbleUp(fEligibleHeap, fEligibleCount, idx, true);
+		_BubbleUp(fEligibleHeap, idx + 1, idx, true);
+		StoreRelease(fEligibleCount, idx + 1);
 	} else {
 		if (fIneligibleCount >= kMaxThreadsPerCore) {
-			panic("scheduler: ineligible heap overflow (count=%d)", fIneligibleCount);
+			panic("scheduler: ineligible heap overflow (count=%d)", (int32)fIneligibleCount);
 		}
 		AddAcquireRelease(fTotalCount, 1);
-		int32 idx = fIneligibleCount++;
+		int32 idx = fIneligibleCount;
 		fIneligibleHeap[idx] = element;
 		link->fIndex = -idx - 1;
-		_BubbleUp(fIneligibleHeap, fIneligibleCount, idx, false);
+		_BubbleUp(fIneligibleHeap, idx + 1, idx, false);
+		StoreRelease(fIneligibleCount, idx + 1);
 	}
 }
 
@@ -262,16 +266,21 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 	if (index < 0 || index >= count || heap[index] != element)
 		return;
 
-	int32 lastIndex = --count;
+	int32 lastIndex = count - 1;
 	Element* last = heap[lastIndex];
 
 	if (index != lastIndex) {
 		heap[index] = last;
 		sGetLink(last)->fIndex = eligible ? index : (-index - 1);
 
-		_BubbleUp(heap, count, index, eligible);
-		_BubbleDown(heap, count, index, eligible);
+		_BubbleUp(heap, lastIndex, index, eligible);
+		_BubbleDown(heap, lastIndex, index, eligible);
 	}
+
+	if (eligible)
+		StoreRelease(fEligibleCount, lastIndex);
+	else
+		fIneligibleCount = lastIndex;
 
 	link->fIndex = 0x7FFFFFFF;
 	Traits::SetInRunQueue(element, false);

@@ -121,7 +121,7 @@ public:
 
 	inline int32 GetLoad() const;
 	bigtime_t GetMinVirtualRuntime() const;
-	void ComputeLoad(bigtime_t now = 0);
+	void ComputeLoad(ThreadData* nextThreadData, bigtime_t now = 0);
 
 	ThreadData* ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 								 bigtime_t now = 0);
@@ -175,8 +175,8 @@ private:
 	ThreadRunQueue fRunQueue;
 	spinlock fQueueLock;
 
-	int32 fThreadCount;
-	int32 fLoad;
+	int32 fThreadCount __attribute__((aligned(8)));
+	int32 fLoad __attribute__((aligned(8)));
 	bigtime_t lastReschedule __attribute__((aligned(8)));
 
 	int32 fPerformanceScale;

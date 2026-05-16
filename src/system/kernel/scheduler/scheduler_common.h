@@ -65,8 +65,10 @@ inline void AddRelease(T volatile& value, int32 v) {
 template <typename T>
 inline void SubAcquireRelease(T volatile& value, int32 v) {
 	static_assert(sizeof(T) == sizeof(int32), "Type size mismatch for 32-bit atomic");
+	memory_write_barrier();
 	atomic_add(
 		reinterpret_cast<int32 volatile*>(const_cast<T*>(&value)), -v);
+	memory_read_barrier();
 }
 
 template <typename T>

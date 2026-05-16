@@ -456,8 +456,11 @@ void CPUEntry::UpdatePriority(int32 priority) {
 }
 
 
-void CPUEntry::ComputeLoad(bigtime_t now) {
+void CPUEntry::ComputeLoad(ThreadData* nextThreadData, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
+
+	if (nextThreadData == NULL)
+		return;
 
 	ASSERT(gTrackCPULoad);
 	ASSERT(!gCPU[fCPUNumber].disabled);
@@ -707,7 +710,7 @@ void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 
 	if (gTrackCPULoad) {
 		if (!cpuEntry->disabled)
-			ComputeLoad(now);
+			ComputeLoad(nextThreadData, now);
 		_RequestPerformanceLevel(nextThreadData, now);
 	}
 }
