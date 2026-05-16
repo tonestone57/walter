@@ -296,16 +296,20 @@ void scheduler_update_interaction_state(bigtime_t now) {
 
 struct RunQueueScanner {
 	uint32 kTopWordMask;
-	int kMaxThreadsToCheckPerQueue;
+	int kMaxPrioritiesToCheckPerQueue;
 	bigtime_t now;
 
-	RunQueueScanner(uint32 topWordMask, int maxThreads, bigtime_t now)
+	RunQueueScanner(uint32 topWordMask, int maxPriorities, bigtime_t now)
 		: kTopWordMask(topWordMask),
-		  kMaxThreadsToCheckPerQueue(maxThreads),
+		  kMaxPrioritiesToCheckPerQueue(maxPriorities),
 		  now(now) {}
 
 	void operator()(const ThreadRunQueue* runQueue) const {
+		if (kMaxPrioritiesToCheckPerQueue <= 0)
+			return;
+
 		const uint32* bitmap = runQueue->GetBitmap();
+		int checked = 0;
 
 		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
 			uint32 val = bitmap[i];
@@ -323,11 +327,16 @@ struct RunQueueScanner {
 				// For priority boosting we update the most urgent thread
 				// in the requested priority bucket.
 				ThreadData* thread = runQueue->GetHead(priority);
+				// Count each visited priority slot toward the budget, even if
+				// the queue head is transiently NULL (e.g. concurrent dequeue or
+				// stale bitmap bit). This keeps scan work strictly bounded.
 				if (thread != NULL) {
 					thread->_UpdatePriorityBoost(now);
 				}
+				if (++checked >= kMaxPrioritiesToCheckPerQueue)
+					return;
 
-				val &= ~(1UL << bit);
+				val &= ~(1U << bit);
 				if (val == 0)
 					break;
 				bit = fls(val) - 1;
@@ -424,9 +433,12 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	// We verify if the longest-waiting thread in each queue is starving.
 	// This maintains O(1) complexity regardless of the number of threads.
 
-	const int kMaxThreadsToCheckPerQueue = 5;
+	// Budget is the number of priority buckets examined per run queue,
+	// not the number of threads.
+	const int kMaxPrioritiesToCheckPerQueue = 5;
 
-	RunQueueScanner scanRunQueue(kTopWordMask, kMaxThreadsToCheckPerQueue, now);
+	RunQueueScanner scanRunQueue(kTopWordMask, kMaxPrioritiesToCheckPerQueue,
+								 now);
 
 	// Check Core RunQueue first to maintain Core -> CPU lock ordering
 	// On an N-way SMT core, all N CPUs previously scanned the shared
@@ -453,8 +465,22 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	// This ensures fair round-robin ownership even if there are holes
 	// in the assigned local indices.
 	native_cpu_mask_t localMask = cpu_mask_get_atomic(&core->fLocalIndices);
-	int32 denseLocalIndex = scheduler_popcount(
-		localMask & (((native_cpu_mask_t)1 << cpu->fCoreLocalIndex) - 1));
+	const int32 maskBitCount = (int32)(sizeof(native_cpu_mask_t) * 8);
+	// 32/64-bit safety: shifting by the type width is undefined behavior.
+	// Clamp the shift domain so this remains valid on both 32-bit and 64-bit.
+	int32 localIndex = cpu->fCoreLocalIndex;
+	if (localIndex < 0)
+		localIndex = 0;
+	if (localIndex > maskBitCount)
+		localIndex = maskBitCount;
+
+	native_cpu_mask_t lowerMask = 0;
+	if (localIndex == maskBitCount)
+		lowerMask = localMask;
+	else if (localIndex > 0)
+		lowerMask = localMask & (((native_cpu_mask_t)1 << localIndex) - 1);
+
+	int32 denseLocalIndex = scheduler_popcount(lowerMask);
 
 	bool ownsCoreQueueScan = ((int32)(boostEpoch % (uint32)coreCPUCount) ==
 							  (int32)(denseLocalIndex % (uint32)coreCPUCount));

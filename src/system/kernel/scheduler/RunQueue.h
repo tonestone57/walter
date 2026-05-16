@@ -20,6 +20,9 @@ struct RunQueueLink {
 
 	int32 fIndex; // Positive for Eligible, Negative for Ineligible (-idx-1)
 	unsigned int fPriority;
+
+	Element* fNext;
+	Element* fPrev;
 } __attribute__((aligned(8)));
 
 template <typename Element>
@@ -69,11 +72,15 @@ class RunQueue {
 	typedef Scheduler::RunQueueTraits<Element> Traits;
 
 public:
+	static const int32 kBitmapSize = (MaxPriority + 31) / 32;
+
 	inline bool IsEmpty() const { return LoadAcquire(fTotalCount) == 0; }
 
 	RunQueue();
 
 	inline status_t GetInitStatus() { return fInitStatus; }
+
+	inline const uint32* GetBitmap() const { return fBitmap; }
 
 	// Ensure the heap array has enough space.
 	// Fixed-size avoids unsafe realloc in kernel hotpath.
@@ -143,6 +150,10 @@ private:
 
 	int32 fTotalCount __attribute__((aligned(8)));
 
+	uint32 fBitmap[kBitmapSize];
+	int32 fPriorityCounts[MaxPriority + 1];
+	Element* fPriorityHeads[MaxPriority + 1];
+
 	// Prevent false sharing
 	char _pad0[64] __attribute__((aligned(64)));
 
@@ -152,7 +163,7 @@ private:
 
 template <typename Element>
 RunQueueLink<Element>::RunQueueLink()
-	: fIndex(0x7FFFFFFF), fPriority(0) {}
+	: fIndex(0x7FFFFFFF), fPriority(0), fNext(NULL), fPrev(NULL) {}
 
 template <typename Element>
 RunQueueLink<Element>* RunQueueLinkImpl<Element>::GetRunQueueLink() {
@@ -176,6 +187,9 @@ RUN_QUEUE_CLASS_NAME::RunQueue()
 	: fInitStatus(B_OK), fEligibleCount(0), fIneligibleCount(0), fTotalCount(0) {
 	memset(fEligibleHeap, 0, sizeof(fEligibleHeap));
 	memset(fIneligibleHeap, 0, sizeof(fIneligibleHeap));
+	memset(fBitmap, 0, sizeof(fBitmap));
+	memset(fPriorityCounts, 0, sizeof(fPriorityCounts));
+	memset(fPriorityHeads, 0, sizeof(fPriorityHeads));
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -219,6 +233,25 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 	RunQueueLink<Element>* link = sGetLink(element);
 	link->fPriority = priority;
 
+	if (priority <= MaxPriority) {
+		if (fPriorityCounts[priority]++ == 0) {
+			fBitmap[priority / 32] |= (1U << (priority % 32));
+			fPriorityHeads[priority] = element;
+			link->fNext = element;
+			link->fPrev = element;
+		} else {
+			Element* head = fPriorityHeads[priority];
+			RunQueueLink<Element>* headLink = sGetLink(head);
+			Element* tail = headLink->fPrev;
+			RunQueueLink<Element>* tailLink = sGetLink(tail);
+
+			link->fNext = head;
+			link->fPrev = tail;
+			tailLink->fNext = element;
+			headLink->fPrev = element;
+		}
+	}
+
 	Traits::SetInRunQueue(element, true);
 
 	if (element->IsRealTime() || element->IsIdle() || element->IsEligible(svt)) {
@@ -257,6 +290,23 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 	int32 rawIndex = link->fIndex;
 
 	if (rawIndex == 0x7FFFFFFF) return;
+
+	unsigned int priority = link->fPriority;
+	if (priority <= MaxPriority) {
+		if (--fPriorityCounts[priority] == 0) {
+			fBitmap[priority / 32] &= ~(1U << (priority % 32));
+			fPriorityHeads[priority] = NULL;
+		} else {
+			Element* next = link->fNext;
+			Element* prev = link->fPrev;
+			sGetLink(next)->fPrev = prev;
+			sGetLink(prev)->fNext = next;
+			if (fPriorityHeads[priority] == element)
+				fPriorityHeads[priority] = next;
+		}
+		link->fNext = NULL;
+		link->fPrev = NULL;
+	}
 
 	bool eligible = (rawIndex >= 0);
 	int32 index = eligible ? rawIndex : (-rawIndex - 1);
@@ -349,14 +399,8 @@ Element* RUN_QUEUE_CLASS_NAME::ConstIterator::Next() {
 
 RUN_QUEUE_TEMPLATE_LIST
 Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const {
-	for (int32 i = 0; i < fEligibleCount; i++) {
-		if (fEligibleHeap[i]->GetEffectivePriority() == (int32)priority)
-			return fEligibleHeap[i];
-	}
-	for (int32 i = 0; i < fIneligibleCount; i++) {
-		if (fIneligibleHeap[i]->GetEffectivePriority() == (int32)priority)
-			return fIneligibleHeap[i];
-	}
+	if (priority <= MaxPriority)
+		return fPriorityHeads[priority];
 	return NULL;
 }
 
