@@ -319,10 +319,9 @@ struct RunQueueScanner {
 			int bit = fls(val) - 1;
 			while (true) {
 				unsigned int priority = i * 32 + bit;
-				// Note: RunQueue scanner logic updated for Deadline Heap.
-				// For scalable priority boosting we need to find threads in a
-				// specific priority bucket. Since the new RunQueue is a global
-				// heap, we use a custom predicate.
+				// Note: RunQueue scanner logic optimized for dual heaps.
+				// For priority boosting we update the most urgent thread
+				// in the requested priority bucket.
 				struct PriorityPredicate {
 					unsigned int priority;
 					PriorityPredicate(unsigned int p) : priority(p) {}
@@ -331,14 +330,9 @@ struct RunQueueScanner {
 					}
 				} predicate(priority);
 
-				ThreadData* thread = runQueue->PeekBest(ThreadDataDeadlineCompare(), predicate);
-				int count = 0;
-
-				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
-					// In a heap, we can't easily find the "next" in the same bucket
-					// without more state. For now, we'll just update the one we found.
+				ThreadData* thread = runQueue->GetHead(priority);
+				if (thread != NULL) {
 					thread->_UpdatePriorityBoost(now);
-					break; // Only update the best one for now to keep O(1)
 				}
 
 				val &= ~(1UL << bit);
@@ -619,12 +613,16 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 
 		// Note: Dynamic Preemption Granularity.
 		// Only trigger IPI if Delta(deadline) > epsilon.
+		// A more urgent thread (earlier deadline) only preempts if it is
+		// significantly more urgent (Delta > epsilon).
 		if (targetCPU->ID() != smp_get_current_cpu()) {
 			bigtime_t epsilon = (bigtime_t)LoadAcquire64(targetCPU->fPreemptionThreshold);
 			ThreadData* top = targetCPU->PeekThread();
 			if (top != NULL && !top->IsIdle()) {
-				if (threadData->GetVirtualDeadline() - top->GetVirtualDeadline() > epsilon) {
-					// Too early to preempt; let it run.
+				// new thread is 'threadData', running thread is 'top'.
+				// Preempt only if top->Deadline - threadData->Deadline > epsilon
+				if (top->GetVirtualDeadline() - threadData->GetVirtualDeadline() < epsilon) {
+					// Not urgent enough to justify preemption; preserve cache warmth.
 					return true;
 				}
 			}
@@ -946,6 +944,9 @@ static void reschedule(int32 nextState) {
 			useOldThreadMask && !oldThreadMask.GetBit(thisCPU);
 		if (oldThreadShouldMigrate)
 			enqueueOldThread = false;
+
+		// Note: Advance System Virtual Time and check eligibility before selection.
+		cpu->CheckEligibility(cpu->SystemVirtualTime());
 
 		nextThreadData = cpu->ChooseNextThread(
 			enqueueOldThread ? oldThreadData : NULL, putOldThreadAtBack, now);

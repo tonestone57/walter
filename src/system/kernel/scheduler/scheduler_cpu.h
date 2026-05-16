@@ -143,6 +143,18 @@ public:
 		StoreRelease64(fSystemVirtualTime, (int64)time);
 	}
 
+	inline int64 TotalWeight() const {
+		return LoadAcquire64(fTotalWeight);
+	}
+
+	inline void AddWeight(int64 weight) {
+		AddRelease64(fTotalWeight, weight);
+	}
+
+	inline void CheckEligibility(bigtime_t svt) {
+		fRunQueue.CheckEligibility(svt);
+	}
+
 	bool SetReschedulePending() {
 		return GetAndSet(fReschedulePending, 1) == 0;
 	}
@@ -180,6 +192,7 @@ private:
 
 	bigtime_t fSystemVirtualTime __attribute__((aligned(8)));
 	bigtime_t fPreemptionThreshold __attribute__((aligned(8)));
+	int64 fTotalWeight __attribute__((aligned(8)));
 
 	int32 fReschedulePending __attribute__((aligned(8)));
 	// Moved from CoreEntry to eliminate false sharing.

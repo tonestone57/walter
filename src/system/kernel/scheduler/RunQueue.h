@@ -4,7 +4,7 @@
  *
  * Authors:
  *      Paweł Dziepak, pdziepak@quarnos.org
- *      Jules (2025 Array-Based Deadline Heap implementation)
+ *      Jules (2025 Array-Based EEVDF Heap implementation)
  */
 #ifndef RUN_QUEUE_H
 #define RUN_QUEUE_H
@@ -18,7 +18,7 @@ template <typename Element>
 struct RunQueueLink {
 	RunQueueLink();
 
-	int32 fIndex;
+	int32 fIndex; // Positive for Eligible, Negative for Ineligible (-idx-1)
 	unsigned int fPriority;
 } __attribute__((aligned(8)));
 
@@ -61,6 +61,8 @@ struct RunQueueTraits {
 			  typename GetLink>
 #define RUN_QUEUE_CLASS_NAME RunQueue<Element, MaxPriority, Compare, GetLink>
 
+const int32 kMaxThreadsPerCore = 1024;
+
 template <typename Element, unsigned int MaxPriority, typename Compare,
 		  typename GetLink = RunQueueStandardGetLink<Element> >
 class RunQueue {
@@ -70,25 +72,27 @@ public:
 	inline bool IsEmpty() const { return LoadAcquire(fTotalCount) == 0; }
 
 	RunQueue();
-	~RunQueue();
 
 	inline status_t GetInitStatus() { return fInitStatus; }
 
-	// Ensure the heap array has enough space for 'count' elements.
-	// Must be called WITHOUT holding the run-queue spinlock.
-	status_t CheckCapacity(int32 count);
-
-	// Min-Heap Root is always at index 0.
-	inline Element* PeekRoot() const {
-		return fTotalCount > 0 ? fElements[0] : NULL;
+	// Ensure the heap array has enough space.
+	// Fixed-size avoids unsafe realloc in kernel hotpath.
+	status_t CheckCapacity(int32 count) {
+		return (count <= kMaxThreadsPerCore) ? B_OK : B_DEVICE_FULL;
 	}
 
-	// Compatibility aliases for the scheduler
+	void CheckEligibility(bigtime_t svt);
+
+	// Eligible threads are ordered by virtual deadline (Compare).
+	inline Element* PeekRoot() const {
+		return fEligibleCount > 0 ? fEligibleHeap[0] : NULL;
+	}
+
 	inline Element* PeekMaximum() const { return PeekRoot(); }
 	inline Element* PeekBest() const { return PeekRoot(); }
 
-	void PushBack(Element* element, unsigned int priority);
-	void PushFront(Element* element, unsigned int priority);
+	void PushBack(Element* element, unsigned int priority, bigtime_t svt = 0);
+	void PushFront(Element* element, unsigned int priority, bigtime_t svt = 0);
 
 	void Remove(Element* element);
 
@@ -100,11 +104,7 @@ public:
 		ConstIterator(const RunQueue* list) : fList(list), fIndex(0) {}
 
 		bool HasNext() const { return fIndex < fList->Count(); }
-		Element* Next() {
-			if (fIndex < fList->Count())
-				return fList->fElements[fIndex++];
-			return NULL;
-		}
+		Element* Next();
 		void Rewind() { fIndex = 0; }
 
 	private:
@@ -114,13 +114,7 @@ public:
 
 	inline ConstIterator GetConstIterator() const { return ConstIterator(this); }
 
-	inline Element* GetHead(unsigned int priority) const {
-		for (int32 i = 0; i < fTotalCount; i++) {
-			if (fElements[i]->GetEffectivePriority() == (int32)priority)
-				return fElements[i];
-		}
-		return NULL;
-	}
+	inline Element* GetHead(unsigned int priority) const;
 
 	template <typename Predicate>
 	Element* PeekOption(const Predicate& predicate) const;
@@ -130,14 +124,23 @@ public:
 					  const Predicate& predicate) const;
 
 private:
-	void _BubbleUp(int32 index);
-	void _BubbleDown(int32 index);
-	void _Swap(int32 i, int32 j);
+	void _BubbleUp(Element** heap, int32 count, int32 index, bool eligible);
+	void _BubbleDown(Element** heap, int32 count, int32 index, bool eligible);
+	void _Swap(Element** heap, int32 i, int32 j, bool eligible);
+
+	bool _CompareIneligible(Element* a, Element* b) const {
+		// Ineligible heap is ordered by VirtualRuntime (earliest first)
+		return (a->GetVirtualRuntime() - b->GetVirtualRuntime()) < 0;
+	}
 
 	status_t fInitStatus;
 
-	Element** fElements;
-	int32 fCapacity;
+	Element* fEligibleHeap[kMaxThreadsPerCore];
+	int32 fEligibleCount;
+
+	Element* fIneligibleHeap[kMaxThreadsPerCore];
+	int32 fIneligibleCount;
+
 	int32 fTotalCount __attribute__((aligned(8)));
 
 	// Prevent false sharing
@@ -149,7 +152,7 @@ private:
 
 template <typename Element>
 RunQueueLink<Element>::RunQueueLink()
-	: fIndex(-1), fPriority(0) {}
+	: fIndex(0x7FFFFFFF), fPriority(0) {}
 
 template <typename Element>
 RunQueueLink<Element>* RunQueueLinkImpl<Element>::GetRunQueueLink() {
@@ -170,56 +173,63 @@ RunQueueLink<Element>* RunQueueMemberGetLink<Element, LinkMember>::operator()(
 
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
-	: fInitStatus(B_OK), fElements(NULL), fCapacity(0), fTotalCount(0) {
-	fInitStatus = CheckCapacity(16); // Initial small capacity
+	: fInitStatus(B_OK), fEligibleCount(0), fIneligibleCount(0), fTotalCount(0) {
+	memset(fEligibleHeap, 0, sizeof(fEligibleHeap));
+	memset(fIneligibleHeap, 0, sizeof(fIneligibleHeap));
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-RUN_QUEUE_CLASS_NAME::~RunQueue() {
-	free(fElements);
+void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt) {
+	while (fIneligibleCount > 0) {
+		Element* root = fIneligibleHeap[0];
+		if (root->IsEligible(svt)) {
+			// Remove from Ineligible
+			int32 lastIdx = --fIneligibleCount;
+			Element* last = fIneligibleHeap[lastIdx];
+			if (0 != lastIdx) {
+				fIneligibleHeap[0] = last;
+				sGetLink(last)->fIndex = -1; // Temp index for bubble
+				_BubbleDown(fIneligibleHeap, fIneligibleCount, 0, false);
+			}
+			sGetLink(root)->fIndex = 0x7FFFFFFF;
+
+			// Add to Eligible
+			int32 idx = fEligibleCount++;
+			fEligibleHeap[idx] = root;
+			sGetLink(root)->fIndex = idx;
+			_BubbleUp(fEligibleHeap, fEligibleCount, idx, true);
+		} else {
+			break;
+		}
+	}
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-status_t RUN_QUEUE_CLASS_NAME::CheckCapacity(int32 count) {
-	if (count <= fCapacity)
-		return B_OK;
-
-	int32 newCapacity = max_c(fCapacity * 2, count);
-	Element** newElements = (Element**)realloc(fElements, sizeof(Element*) * newCapacity);
-	if (newElements == NULL)
-		return B_NO_MEMORY;
-
-	fElements = newElements;
-	fCapacity = newCapacity;
-	return B_OK;
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority) {
+void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, bigtime_t svt) {
 	SCHEDULER_ENTER_FUNCTION();
-
-	ASSERT(fTotalCount < fCapacity);
 
 	RunQueueLink<Element>* link = sGetLink(element);
 	link->fPriority = priority;
 
-	int32 index = fTotalCount;
-	fElements[index] = element;
-	link->fIndex = index;
-
 	Traits::SetInRunQueue(element, true);
+	AddAcquireRelease(fTotalCount, 1);
 
-	_BubbleUp(index);
-
-	// Note: total count update is atomic for lockless IsEmpty() check.
-	// Since we hold the spinlock, the array update and fTotalCount increment
-	// are consistent for the writer.
-	StoreRelease(fTotalCount, index + 1);
+	if (element->IsRealTime() || element->IsIdle() || element->IsEligible(svt)) {
+		int32 idx = fEligibleCount++;
+		fEligibleHeap[idx] = element;
+		link->fIndex = idx;
+		_BubbleUp(fEligibleHeap, fEligibleCount, idx, true);
+	} else {
+		int32 idx = fIneligibleCount++;
+		fIneligibleHeap[idx] = element;
+		link->fIndex = -idx - 1;
+		_BubbleUp(fIneligibleHeap, fIneligibleCount, idx, false);
+	}
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority) {
-	PushBack(element, priority);
+void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bigtime_t svt) {
+	PushBack(element, priority, svt);
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -227,34 +237,41 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	RunQueueLink<Element>* link = sGetLink(element);
-	int32 index = link->fIndex;
+	int32 rawIndex = link->fIndex;
 
-	if (index < 0 || index >= fTotalCount || fElements[index] != element)
+	if (rawIndex == 0x7FFFFFFF) return;
+
+	bool eligible = (rawIndex >= 0);
+	int32 index = eligible ? rawIndex : (-rawIndex - 1);
+	Element** heap = eligible ? fEligibleHeap : fIneligibleHeap;
+	int32& count = eligible ? fEligibleCount : fIneligibleCount;
+
+	if (index < 0 || index >= count || heap[index] != element)
 		return;
 
-	int32 lastIndex = --fTotalCount;
-	Element* last = fElements[lastIndex];
+	int32 lastIndex = --count;
+	Element* last = heap[lastIndex];
 
 	if (index != lastIndex) {
-		fElements[index] = last;
-		sGetLink(last)->fIndex = index;
+		heap[index] = last;
+		sGetLink(last)->fIndex = eligible ? index : (-index - 1);
 
-		_BubbleUp(index);
-		_BubbleDown(index);
+		_BubbleUp(heap, count, index, eligible);
+		_BubbleDown(heap, count, index, eligible);
 	}
 
-	link->fIndex = -1;
+	link->fIndex = 0x7FFFFFFF;
 	Traits::SetInRunQueue(element, false);
-
-	StoreRelease(fTotalCount, fTotalCount);
+	SubAcquireRelease(fTotalCount, 1);
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_BubbleUp(int32 index) {
+void RUN_QUEUE_CLASS_NAME::_BubbleUp(Element** heap, int32 count, int32 index, bool eligible) {
 	while (index > 0) {
 		int32 parent = (index - 1) / 2;
-		if (sCompare(fElements[index], fElements[parent])) {
-			_Swap(index, parent);
+		bool better = eligible ? sCompare(heap[index], heap[parent]) : _CompareIneligible(heap[index], heap[parent]);
+		if (better) {
+			_Swap(heap, index, parent, eligible);
 			index = parent;
 		} else
 			break;
@@ -262,19 +279,23 @@ void RUN_QUEUE_CLASS_NAME::_BubbleUp(int32 index) {
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_BubbleDown(int32 index) {
+void RUN_QUEUE_CLASS_NAME::_BubbleDown(Element** heap, int32 count, int32 index, bool eligible) {
 	while (true) {
 		int32 left = 2 * index + 1;
 		int32 right = 2 * index + 2;
 		int32 smallest = index;
 
-		if (left < fTotalCount && sCompare(fElements[left], fElements[smallest]))
-			smallest = left;
-		if (right < fTotalCount && sCompare(fElements[right], fElements[smallest]))
-			smallest = right;
+		if (left < count) {
+			bool better = eligible ? sCompare(heap[left], heap[smallest]) : _CompareIneligible(heap[left], heap[smallest]);
+			if (better) smallest = left;
+		}
+		if (right < count) {
+			bool better = eligible ? sCompare(heap[right], heap[smallest]) : _CompareIneligible(heap[right], heap[smallest]);
+			if (better) smallest = right;
+		}
 
 		if (smallest != index) {
-			_Swap(index, smallest);
+			_Swap(heap, index, smallest, eligible);
 			index = smallest;
 		} else
 			break;
@@ -282,24 +303,47 @@ void RUN_QUEUE_CLASS_NAME::_BubbleDown(int32 index) {
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_Swap(int32 i, int32 j) {
-	Element* temp = fElements[i];
-	fElements[i] = fElements[j];
-	fElements[j] = temp;
+void RUN_QUEUE_CLASS_NAME::_Swap(Element** heap, int32 i, int32 j, bool eligible) {
+	Element* temp = heap[i];
+	heap[i] = heap[j];
+	heap[j] = temp;
 
-	sGetLink(fElements[i])->fIndex = i;
-	sGetLink(fElements[j])->fIndex = j;
+	sGetLink(heap[i])->fIndex = eligible ? i : (-i - 1);
+	sGetLink(heap[j])->fIndex = eligible ? j : (-j - 1);
+}
+
+RUN_QUEUE_TEMPLATE_LIST
+Element* RUN_QUEUE_CLASS_NAME::ConstIterator::Next() {
+	if (fIndex < fList->fEligibleCount)
+		return fList->fEligibleHeap[fIndex++];
+
+	int32 ineligIdx = fIndex - fList->fEligibleCount;
+	if (ineligIdx < fList->fIneligibleCount) {
+		fIndex++;
+		return fList->fIneligibleHeap[ineligIdx];
+	}
+	return NULL;
+}
+
+RUN_QUEUE_TEMPLATE_LIST
+Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const {
+	for (int32 i = 0; i < fEligibleCount; i++) {
+		if (fEligibleHeap[i]->GetEffectivePriority() == (int32)priority)
+			return fEligibleHeap[i];
+	}
+	for (int32 i = 0; i < fIneligibleCount; i++) {
+		if (fIneligibleHeap[i]->GetEffectivePriority() == (int32)priority)
+			return fIneligibleHeap[i];
+	}
+	return NULL;
 }
 
 RUN_QUEUE_TEMPLATE_LIST
 template <typename Predicate>
 Element* RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const {
-	// Linear scan for predicate matches. Heaps are not good for general searching,
-	// but the search limit was small anyway.
-	int32 searchLimit = min_c(fTotalCount, (int32)64);
-	for (int32 i = 0; i < searchLimit; i++) {
-		if (predicate(fElements[i]))
-			return fElements[i];
+	for (int32 i = 0; i < fEligibleCount; i++) {
+		if (predicate(fEligibleHeap[i]))
+			return fEligibleHeap[i];
 	}
 	return NULL;
 }
@@ -309,11 +353,10 @@ template <typename Compare2, typename Predicate>
 Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 										const Predicate& predicate) const {
 	Element* best = NULL;
-	int32 searchLimit = min_c(fTotalCount, (int32)64);
-	for (int32 i = 0; i < searchLimit; i++) {
-		if (predicate(fElements[i])) {
-			if (best == NULL || compare(fElements[i], best))
-				best = fElements[i];
+	for (int32 i = 0; i < fEligibleCount; i++) {
+		if (predicate(fEligibleHeap[i])) {
+			if (best == NULL || compare(fEligibleHeap[i], best))
+				best = fEligibleHeap[i];
 		}
 	}
 	return best;

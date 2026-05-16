@@ -248,6 +248,9 @@ CPUEntry::CPUEntry()
 	  fRescheduleCount(0),
 	  fCoreLocalIndex(0),
 	  fInteractionUpdateCounter(0),
+	  fSystemVirtualTime(0),
+	  fPreemptionThreshold(0),
+	  fTotalWeight(0),
 	  fReschedulePending(0),
 	  fLastLocalPackageIndex(0),
 	  lastReschedule(0) {
@@ -361,26 +364,30 @@ void CPUEntry::Stop() {
 
 void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
-	fRunQueue.PushFront(thread, priority);
+	fRunQueue.PushFront(thread, priority, SystemVirtualTime());
 	AddRelease(fThreadCount, 1);
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
 		if (priority >= B_DISPLAY_PRIORITY)
 			Core()->IncrementDisplayThreadCount();
+		if (!thread->IsRealTime())
+			AddWeight(thread->GetWeight());
 	}
 }
 
 
 void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
-	fRunQueue.PushBack(thread, priority);
+	fRunQueue.PushBack(thread, priority, SystemVirtualTime());
 	AddRelease(fThreadCount, 1);
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
 		if (priority >= B_DISPLAY_PRIORITY)
 			Core()->IncrementDisplayThreadCount();
+		if (!thread->IsRealTime())
+			AddWeight(thread->GetWeight());
 	}
 }
 
@@ -390,10 +397,7 @@ void CPUEntry::Remove(ThreadData* thread) {
 	ASSERT(thread->IsEnqueued());
 
 	// (defensive): capture the priority the thread was enqueued with to
-	// ensure symmetric counter updates. If the thread's priority was
-	// changed while enqueued, GetEffectivePriority() would return the
-	// new value, causing fDisplayThreadCount to desynchronize if the
-	// change crossed the B_DISPLAY_PRIORITY threshold.
+	// ensure symmetric counter updates.
 	int32 priority = thread->GetRunQueueLink()->fPriority;
 
 	thread->SetDequeued();
@@ -404,16 +408,23 @@ void CPUEntry::Remove(ThreadData* thread) {
 		Core()->DecrementTotalThreadCount();
 		if (priority >= B_DISPLAY_PRIORITY)
 			Core()->DecrementDisplayThreadCount();
+		if (!thread->IsRealTime())
+			AddWeight(-thread->GetWeight());
 	}
 }
 
 ThreadData* CoreEntry::PeekThread() const {
 	SCHEDULER_ENTER_FUNCTION();
+	// Note: We don't have a specific SVT for the entire core here,
+	// but StealThread and ChooseNextThread handle eligibility properly.
 	return fRunQueue.PeekBest();
 }
 
 ThreadData* CPUEntry::PeekThread() const {
 	SCHEDULER_ENTER_FUNCTION();
+	// Note: We don't call CheckEligibility here because PeekThread is often
+	// used as a lockless hint from other CPUs. Eligibility is advanced
+	// by the owner CPU in reschedule() or ChooseNextThread().
 	return fRunQueue.PeekBest();
 }
 
@@ -466,7 +477,7 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 		// Note: Update Dynamic Preemption Threshold.
 		// Scale epsilon based on thread count to protect cache performance.
 		int32 threads = ThreadCount();
-		StoreRelease64(fPreemptionThreshold, (int64)(threads * 100)); // 100us per thread
+		StoreRelease64(fPreemptionThreshold, (int64)(threads * 500)); // 500us per thread
 	} else if (nextThreadData->IsIdle()) {
 		// On an idle system, epsilon is near zero (instant response).
 		StoreRelease64(fPreemptionThreshold, 0);
@@ -978,13 +989,12 @@ void CoreEntry::Init(int32 id, PackageEntry* package) {
 void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Note: Eligibility check. A thread only enters the heap when it is
-	// eligible (VirtualRuntime <= SystemVirtualTime).
-	// However, for simplicity in this initial implementation, we'll
-	// use the local CPU's SVT or a global approximation.
-	// In per-core heap, we use CPUEntry::SystemVirtualTime().
+	// Note: Formal EEVDF Eligibility.
+	// Threads only enter the active heap when mathematically eligible.
+	// In a shared core queue, we use a global approximation or the waker's CPU SVT.
 
-	fRunQueue.PushFront(thread, priority);
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	fRunQueue.PushFront(thread, priority, cpu->SystemVirtualTime());
 	AddRelease(fThreadCount, 1);
 	IncrementTotalThreadCount();
 	if (priority >= B_DISPLAY_PRIORITY)
@@ -995,7 +1005,8 @@ void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
 void CoreEntry::PushBack(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	fRunQueue.PushBack(thread, priority);
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	fRunQueue.PushBack(thread, priority, cpu->SystemVirtualTime());
 	AddRelease(fThreadCount, 1);
 	IncrementTotalThreadCount();
 	if (priority >= B_DISPLAY_PRIORITY)
@@ -1029,9 +1040,19 @@ ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 	// Unlike traditional schedulers, we prefer threads with the
 	// highest positive Lag (most under-served).
 
+	CPUEntry* thief = CPUEntry::GetCPU(thiefCPU);
+	const_cast<ThreadRunQueue&>(fRunQueue).CheckEligibility(thief->SystemVirtualTime());
+
+	// Thief prefers cores with lower total weight pressure.
+	// (Target pressure comparison is handled in _TryStealWork)
+
 	ThreadData* thread = fRunQueue.PeekBest(ThreadDataLagCompare(), StealThreadPredicate(thiefCPU));
 
 	if (thread != NULL) {
+		// Only steal if thread has positive lag (under-served)
+		if (thread->GetLag() <= 0)
+			return NULL;
+
 		stolenPriority = thread->GetEffectivePriority();
 		Remove(thread);
 	}
