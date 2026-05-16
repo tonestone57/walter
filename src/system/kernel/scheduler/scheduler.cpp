@@ -281,7 +281,6 @@ void scheduler_update_interaction_state(bigtime_t now) {
 			// path) but the timer is not armed, so gDeadlineBucketSize stays
 			// at the wrong resolution until the next DPC queue drain.
 			// sTimerArmed is set below; if Add() fails we must NOT set it.
-			StoreRelease(sTimerArmed, 0);
 			return;
 		}
 	}
