@@ -85,3 +85,37 @@ The transition involves a fundamental trade-off between **Hot Path Complexity** 
 
 ### 5.3 Summary Verdict
 With these improvements, the Haiku scheduler would be **functionally equivalent to EEVDF** for the vast majority of workloads. The only remaining "gap" is the formal proof of absolute fairness that comes with a pure EEVDF implementation, but for a real-world desktop OS, the performance/fairness balance of an **Improved Virtual Deadline** model is the superior engineering choice.
+
+---
+
+## 6. Optimizing Bucket-Level Fairness
+
+While expanding to 100 priority buckets reduces collisions, the fairness *within* a single bucket can still be improved. Currently, Haiku uses unsorted linked lists per bucket, with a 32-thread scan limit (`kSearchDepth`) in `PeekBest`.
+
+### 6.1 The "Aliasing" Problem
+When multiple threads have similar deadlines and fall into the same bucket, their execution order is determined by their position in the linked list (usually the order they were woken up). If a bucket contains more than 32 threads, the current scheduler may ignore an earlier deadline thread simply because it is too far back in the list.
+
+### 6.2 Proposed Intra-Bucket Improvements
+
+1.  **Sorted Bucket Insertion:**
+    - **Mechanism:** Instead of `PushBack`, implement a sorted insertion based on `fVirtualRuntime`.
+    - **Complexity:** Shifts cost from dispatching O(32) scan) to enqueuing O(N_{bucket})).
+    - **Benefit:** Makes `PeekBest` a true O(1) operation (always pick the head), ensuring that the absolute best thread in the bucket is always chosen without arbitrary scan limits.
+2.  **Red-Black Tree Buckets:**
+    - **Mechanism:** Replace the per-priority linked lists with Red-Black trees (as seen in Linux CFS).
+    - **Complexity:** O(\log N) for both enqueuing and selection.
+    - **Benefit:** Provides perfect fairness even for buckets with thousands of threads. However, for a desktop OS where buckets rarely exceed 10-20 threads, the pointer-chasing overhead of a tree may exceed the cost of a simple linked-list insertion.
+3.  **Adaptive Lookahead:**
+    - **Mechanism:** Scale the `kSearchDepth` dynamically based on the total thread count in the bucket or the system's current load.
+    - **Benefit:** Allows the scheduler to spend more time finding the "perfect" thread when the system is not heavily congested, while maintaining strict O(1) bounds during extreme overload.
+
+### 6.3 Summary Comparison of Fairness Models
+
+| Strategy | Fairness Precision | Enqueue Cost | Dispatch Cost | Scalability |
+| :--- | :--- | :--- | :--- | :--- |
+| **Current (Unsorted)** | Low (Scans only top 32) | **O(1)** | O(32) | Poor in deep buckets |
+| **Sorted Insertion** | **High (Perfect in-bucket)** | O(N) | **O(1)** | Good for small/med buckets |
+| **RB-Tree Buckets** | **High (Perfect in-bucket)** | O(log N) | O(log N) | Best for massive buckets |
+| **Deadline Heaps** | **Absolute (Global)** | O(log N) | **O(1)** | Best overall fairness |
+
+**Verdict:** For Haiku's interactive focus, **Sorted Bucket Insertion** is the logical next step. It provides perfect bucket-level fairness with minimal architectural change, ensuring that threads with the earliest deadlines always run first within their assigned priority band.
