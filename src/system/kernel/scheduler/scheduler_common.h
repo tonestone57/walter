@@ -485,7 +485,7 @@ inline void ClearCPUIDle(uint64 volatile& mask, int cpu) {
 	AndAtomic64(mask, ~((int64)1 << cpu));
 }
 
-inline bool IsCPUIDle(const uint64& mask, int cpu) {
+inline bool IsCPUIDle(const uint64 volatile& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return false;
 	return (LoadAcquire64(mask) & ((int64)1 << cpu)) != 0;

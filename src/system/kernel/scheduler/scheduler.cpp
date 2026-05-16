@@ -943,6 +943,12 @@ static void reschedule(int32 nextState) {
 		nextThreadData = cpu->ChooseNextThread(
 			enqueueOldThread ? oldThreadData : NULL, putOldThreadAtBack, now);
 
+		if (nextThreadData == NULL) {
+			nextThreadData = cpu->PeekIdleThread();
+			if (nextThreadData == NULL)
+				nextThreadData = oldThreadData;
+		}
+
 		cpu->UpdateActiveTime(oldThreadData, now);
 
 		if (oldThreadShouldMigrate) {
