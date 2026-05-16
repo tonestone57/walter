@@ -209,13 +209,13 @@ void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt) {
 
 			// Remove from Ineligible
 			int32 lastIdx = fIneligibleCount - 1;
-			StoreRelease(fIneligibleCount, lastIdx);
 			Element* last = fIneligibleHeap[lastIdx];
 			if (0 != lastIdx) {
 				fIneligibleHeap[0] = last;
 				sGetLink(last)->fIndex = -1; // Temp index for bubble
-				_BubbleDown(fIneligibleHeap, fIneligibleCount, 0, false);
+				_BubbleDown(fIneligibleHeap, lastIdx, 0, false);
 			}
+			StoreRelease(fIneligibleCount, lastIdx);
 			sGetLink(root)->fIndex = 0x7FFFFFFF;
 
 			// Add to Eligible
