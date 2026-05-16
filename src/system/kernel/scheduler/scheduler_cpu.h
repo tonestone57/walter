@@ -121,7 +121,7 @@ public:
 
 	inline int32 GetLoad() const;
 	bigtime_t GetMinVirtualRuntime() const;
-	void ComputeLoad(ThreadData* nextThreadData, bigtime_t now = 0);
+	void ComputeLoad(bigtime_t now = 0);
 
 	ThreadData* ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 								 bigtime_t now = 0);

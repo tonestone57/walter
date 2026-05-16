@@ -191,7 +191,7 @@ void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt) {
 
 			// Remove from Ineligible
 			int32 lastIdx = fIneligibleCount - 1;
-			fIneligibleCount = lastIdx;
+			StoreRelease(fIneligibleCount, lastIdx);
 			Element* last = fIneligibleHeap[lastIdx];
 			if (0 != lastIdx) {
 				fIneligibleHeap[0] = last;
@@ -223,7 +223,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 
 	if (element->IsRealTime() || element->IsIdle() || element->IsEligible(svt)) {
 		if (fEligibleCount >= kMaxThreadsPerCore) {
-			panic("scheduler: eligible heap overflow (count=%d)", (int32)fEligibleCount);
+			panic("scheduler: eligible heap overflow (count=%d)", fEligibleCount);
 		}
 		AddAcquireRelease(fTotalCount, 1);
 		int32 idx = fEligibleCount;
@@ -233,7 +233,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 		StoreRelease(fEligibleCount, idx + 1);
 	} else {
 		if (fIneligibleCount >= kMaxThreadsPerCore) {
-			panic("scheduler: ineligible heap overflow (count=%d)", (int32)fIneligibleCount);
+			panic("scheduler: ineligible heap overflow (count=%d)", fIneligibleCount);
 		}
 		AddAcquireRelease(fTotalCount, 1);
 		int32 idx = fIneligibleCount;
@@ -280,7 +280,7 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 	if (eligible)
 		StoreRelease(fEligibleCount, lastIndex);
 	else
-		fIneligibleCount = lastIndex;
+		StoreRelease(fIneligibleCount, lastIndex);
 
 	link->fIndex = 0x7FFFFFFF;
 	Traits::SetInRunQueue(element, false);

@@ -456,11 +456,8 @@ void CPUEntry::UpdatePriority(int32 priority) {
 }
 
 
-void CPUEntry::ComputeLoad(ThreadData* nextThreadData, bigtime_t now) {
+void CPUEntry::ComputeLoad(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
-
-	if (nextThreadData == NULL)
-		return;
 
 	ASSERT(gTrackCPULoad);
 	ASSERT(!gCPU[fCPUNumber].disabled);
@@ -468,23 +465,6 @@ void CPUEntry::ComputeLoad(ThreadData* nextThreadData, bigtime_t now) {
 
 	if (now == 0)
 		now = system_time();
-
-	// Note: Update System Virtual Time (SVT).
-	// SVT tracks the FairShare baseline for this core.
-	if (!nextThreadData->IsIdle() && !nextThreadData->IsRealTime()) {
-		bigtime_t vrt = nextThreadData->GetVirtualRuntime();
-		bigtime_t svt = SystemVirtualTime();
-		if (vrt > svt)
-			SetSystemVirtualTime(vrt);
-
-		// Note: Update Dynamic Preemption Threshold.
-		// Scale epsilon based on thread count to protect cache performance.
-		int32 threads = ThreadCount();
-		StoreRelease64(fPreemptionThreshold, (int64)(threads * 500)); // 500us per thread
-	} else if (nextThreadData->IsIdle()) {
-		// On an idle system, epsilon is near zero (instant response).
-		StoreRelease64(fPreemptionThreshold, 0);
-	}
 
 	int32 currentLoad = LoadAcquire(fLoad);
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
@@ -696,22 +676,44 @@ void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 
 	cpu_ent* cpuEntry = &gCPU[fCPUNumber];
 
+	// Note: Update System Virtual Time (SVT).
+	// SVT tracks the FairShare baseline for this core.
+	if (nextThreadData != NULL) {
+		if (!nextThreadData->IsIdle() && !nextThreadData->IsRealTime()) {
+			bigtime_t vrt = nextThreadData->GetVirtualRuntime();
+			bigtime_t svt = SystemVirtualTime();
+			if (vrt > svt)
+				SetSystemVirtualTime(vrt);
+
+			// Note: Update Dynamic Preemption Threshold.
+			// Scale epsilon based on thread count to protect cache performance.
+			int32 threads = ThreadCount();
+			StoreRelease64(fPreemptionThreshold, (int64)(threads * 500)); // 500us per thread
+		} else if (nextThreadData->IsIdle()) {
+			// On an idle system, epsilon is near zero (instant response).
+			StoreRelease64(fPreemptionThreshold, 0);
+		}
+	}
+
 	// Note: update thread timestamps BEFORE calling
 	// _RequestPerformanceLevel. The performance level request reads
 	// nextThreadData->GetLoad() and Core()->GetLoad(), which are based on
 	// accounting that uses last_kernel_time/last_user_time. Updating them
 	// first ensures _RequestPerformanceLevel sees fresh accounting data.
-	Thread* nextThread = nextThreadData->GetThread();
-	if (!thread_is_idle_thread(nextThread)) {
-		cpuEntry->last_kernel_time = nextThread->kernel_time;
-		cpuEntry->last_user_time = nextThread->user_time;
-		nextThreadData->SetLastInterruptTime(cpuEntry->interrupt_time);
+	if (nextThreadData != NULL) {
+		Thread* nextThread = nextThreadData->GetThread();
+		if (!thread_is_idle_thread(nextThread)) {
+			cpuEntry->last_kernel_time = nextThread->kernel_time;
+			cpuEntry->last_user_time = nextThread->user_time;
+			nextThreadData->SetLastInterruptTime(cpuEntry->interrupt_time);
+		}
 	}
 
 	if (gTrackCPULoad) {
 		if (!cpuEntry->disabled)
-			ComputeLoad(nextThreadData, now);
-		_RequestPerformanceLevel(nextThreadData, now);
+			ComputeLoad(now);
+		if (nextThreadData != NULL)
+			_RequestPerformanceLevel(nextThreadData, now);
 	}
 }
 
