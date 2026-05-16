@@ -33,8 +33,6 @@ static struct loadavg sAverageRunnable
 // 15m: exp(-1 / 900) * 2048 = 2045.72 ~= 2046
 const static uint64 sCExp[3] __attribute__((aligned(8))) = {2014, 2041, 2046};
 
-static spinlock sLoadAvgLock = B_SPINLOCK_INITIALIZER;
-
 const bigtime_t kMinMeasurementWindow = 1000;
 const int kLoadClampMax = 100000;
 
@@ -55,24 +53,33 @@ static void _LoadavgUpdate(void* data, int iteration) {
 	// If sub-second load visibility is required in the future, the daemon
 	// period must be reduced and sCExp recalibrated accordingly.
 	// Optimization: Use global atomic counter instead of O(N) core scan.
-	int32 threadCount = LoadAcquire(gTotalRunnableThreads);
+	int32 threadCount = atomic_get((int32 volatile*)&gTotalRunnableThreads);
 	if (threadCount < 0)
 		threadCount = 0;
 
-	SpinLocker locker(sLoadAvgLock);
 	for (int i = 0; i < 3; i++) {
-		// Note: the 128-bit intermediate is correct, but the final
-		// uint64 truncation can overflow for pathological thread counts or
-		// if ldavg accumulated a very large value across prior iterations.
-		// Clamp the result to B_INT32_MAX (a sane upper bound: no system has
-		// 2^31 runnable threads).  The FreeBSD algorithm assumes the same
-		// practical bound.
-		// Modern GCC optimization: use uint64; intermediate fits in 64 bits.
-		uint64 acc = (uint64)sCExp[i] * sAverageRunnable.ldavg[i] +
-					 (uint64)threadCount * (kFScale - sCExp[i]) * kFScale;
-		uint64 result = (uint64)(acc >> kFShift);
-		const uint64 kMaxLdAvg = (uint64)B_INT32_MAX;
-		sAverageRunnable.ldavg[i] = (result < kMaxLdAvg) ? result : kMaxLdAvg;
+		while (true) {
+			uint32 oldLoad = (uint32)atomic_get(
+				(int32 volatile*)&sAverageRunnable.ldavg[i]);
+
+			// Note: the 128-bit intermediate is correct, but the final
+			// uint64 truncation can overflow for pathological thread counts or
+			// if ldavg accumulated a very large value across prior iterations.
+			// Clamp the result to B_INT32_MAX (a sane upper bound: no system has
+			// 2^31 runnable threads).  The FreeBSD algorithm assumes the same
+			// practical bound.
+			// Modern GCC optimization: use uint64; intermediate fits in 64 bits.
+			uint64 acc = (uint64)sCExp[i] * oldLoad +
+						 (uint64)threadCount * (kFScale - sCExp[i]) * kFScale;
+			uint64 result = (uint64)(acc >> kFShift);
+			const uint64 kMaxLdAvg = (uint64)B_INT32_MAX;
+			uint32 newLoad = (uint32)((result < kMaxLdAvg) ? result : kMaxLdAvg);
+
+			if (atomic_test_and_set((int32 volatile*)&sAverageRunnable.ldavg[i],
+						   (int32)newLoad, (int32)oldLoad) == (int32)oldLoad) {
+				break;
+			}
+		}
 	}
 }
 
@@ -95,10 +102,11 @@ status_t _user_get_loadavg(struct loadavg* userInfo, size_t size) {
 		return B_BAD_VALUE;
 
 	struct loadavg loadAvg;
-	{
-		InterruptsSpinLocker locker(sLoadAvgLock);
-		loadAvg = sAverageRunnable;
+	for (int i = 0; i < 3; i++) {
+		loadAvg.ldavg[i] = (uint32)atomic_get(
+			(int32 volatile*)&sAverageRunnable.ldavg[i]);
 	}
+	loadAvg.fscale = atomic_get((int32 volatile*)&sAverageRunnable.fscale);
 
 	if (user_memcpy(userInfo, &loadAvg, sizeof(struct loadavg)) < B_OK)
 		return B_BAD_ADDRESS;
