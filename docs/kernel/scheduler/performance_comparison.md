@@ -1,3 +1,5 @@
+> **Note:** The performance figures and scaling gains provided in this report are **Analytical Estimates** derived from an architectural audit of the scheduler implementation and known hardware constraints. They represent theoretical potential rather than empirical benchmarks.
+
 # Haiku Scheduler Performance Comparison Report
 
 This report compares the performance and architectural characteristics of the local Haiku scheduler implementation with the current Haiku master branch.

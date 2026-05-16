@@ -1,3 +1,5 @@
+> **Note:** The performance figures and scaling gains provided in this report are **Analytical Estimates** derived from an architectural audit of the scheduler implementation and known hardware constraints. They represent theoretical potential rather than empirical benchmarks.
+
 # Haiku Scheduler Scaling Comparison: 8 to 128 Cores
 
 This report analyzes how the local scheduler (2025 Audit) compares to the Haiku Master branch across various system scales.

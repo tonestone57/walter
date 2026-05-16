@@ -1,3 +1,5 @@
+> **Note:** The performance figures and scaling gains provided in this report are **Analytical Estimates** derived from an architectural audit of the scheduler implementation and known hardware constraints. They represent theoretical potential rather than empirical benchmarks.
+
 # Comparison: Current Virtual Deadline vs. EEVDF
 
 Haiku's current scheduler (2025 Audit version) uses virtual deadlines, but its implementation differs fundamentally from the **EEVDF (Earliest Eligible Virtual Deadline First)** algorithm. This report outlines the technical improvements EEVDF would provide and explains the architectural decisions behind priority buckets.
