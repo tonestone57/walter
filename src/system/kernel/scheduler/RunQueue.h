@@ -103,6 +103,10 @@ public:
 
 	void Remove(Element* element);
 
+private:
+	void _PushPriority(Element* element, unsigned int priority, bool front);
+	void _RemovePriority(Element* element, unsigned int priority);
+
 	inline int32 Count() const { return LoadAcquire(fTotalCount); }
 
 	class ConstIterator {
@@ -233,24 +237,8 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 	RunQueueLink<Element>* link = sGetLink(element);
 	link->fPriority = priority;
 
-	if (priority <= MaxPriority) {
-		if (fPriorityCounts[priority]++ == 0) {
-			fBitmap[priority / 32] |= (1U << (priority % 32));
-			fPriorityHeads[priority] = element;
-			link->fNext = element;
-			link->fPrev = element;
-		} else {
-			Element* head = fPriorityHeads[priority];
-			RunQueueLink<Element>* headLink = sGetLink(head);
-			Element* tail = headLink->fPrev;
-			RunQueueLink<Element>* tailLink = sGetLink(tail);
-
-			link->fNext = head;
-			link->fPrev = tail;
-			tailLink->fNext = element;
-			headLink->fPrev = element;
-		}
-	}
+	if (priority <= MaxPriority)
+		_PushPriority(element, priority, false);
 
 	Traits::SetInRunQueue(element, true);
 
@@ -279,7 +267,37 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bigtime_t svt) {
-	PushBack(element, priority, svt);
+	SCHEDULER_ENTER_FUNCTION();
+
+	RunQueueLink<Element>* link = sGetLink(element);
+	link->fPriority = priority;
+
+	if (priority <= MaxPriority)
+		_PushPriority(element, priority, true);
+
+	Traits::SetInRunQueue(element, true);
+
+	if (element->IsRealTime() || element->IsIdle() || element->IsEligible(svt)) {
+		if (fEligibleCount >= kMaxThreadsPerCore) {
+			panic("scheduler: eligible heap overflow (count=%d)", fEligibleCount);
+		}
+		AddAcquireRelease(fTotalCount, 1);
+		int32 idx = fEligibleCount;
+		fEligibleHeap[idx] = element;
+		link->fIndex = idx;
+		_BubbleUp(fEligibleHeap, idx + 1, idx, true);
+		StoreRelease(fEligibleCount, idx + 1);
+	} else {
+		if (fIneligibleCount >= kMaxThreadsPerCore) {
+			panic("scheduler: ineligible heap overflow (count=%d)", fIneligibleCount);
+		}
+		AddAcquireRelease(fTotalCount, 1);
+		int32 idx = fIneligibleCount;
+		fIneligibleHeap[idx] = element;
+		link->fIndex = -idx - 1;
+		_BubbleUp(fIneligibleHeap, idx + 1, idx, false);
+		StoreRelease(fIneligibleCount, idx + 1);
+	}
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -291,23 +309,6 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 
 	if (rawIndex == 0x7FFFFFFF) return;
 
-	unsigned int priority = link->fPriority;
-	if (priority <= MaxPriority) {
-		if (--fPriorityCounts[priority] == 0) {
-			fBitmap[priority / 32] &= ~(1U << (priority % 32));
-			fPriorityHeads[priority] = NULL;
-		} else {
-			Element* next = link->fNext;
-			Element* prev = link->fPrev;
-			sGetLink(next)->fPrev = prev;
-			sGetLink(prev)->fNext = next;
-			if (fPriorityHeads[priority] == element)
-				fPriorityHeads[priority] = next;
-		}
-		link->fNext = NULL;
-		link->fPrev = NULL;
-	}
-
 	bool eligible = (rawIndex >= 0);
 	int32 index = eligible ? rawIndex : (-rawIndex - 1);
 	Element** heap = eligible ? fEligibleHeap : fIneligibleHeap;
@@ -315,6 +316,10 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 
 	if (index < 0 || index >= count || heap[index] != element)
 		return;
+
+	unsigned int priority = link->fPriority;
+	if (priority <= MaxPriority)
+		_RemovePriority(element, priority);
 
 	int32 lastIndex = count - 1;
 	Element* last = heap[lastIndex];
@@ -335,6 +340,48 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
 	link->fIndex = 0x7FFFFFFF;
 	Traits::SetInRunQueue(element, false);
 	SubAcquireRelease(fTotalCount, 1);
+}
+
+RUN_QUEUE_TEMPLATE_LIST
+void RUN_QUEUE_CLASS_NAME::_PushPriority(Element* element, unsigned int priority, bool front) {
+	RunQueueLink<Element>* link = sGetLink(element);
+	if (fPriorityCounts[priority]++ == 0) {
+		fBitmap[priority / 32] |= (1U << (priority % 32));
+		fPriorityHeads[priority] = element;
+		link->fNext = element;
+		link->fPrev = element;
+	} else {
+		Element* head = fPriorityHeads[priority];
+		RunQueueLink<Element>* headLink = sGetLink(head);
+		Element* tail = headLink->fPrev;
+		RunQueueLink<Element>* tailLink = sGetLink(tail);
+
+		link->fNext = head;
+		link->fPrev = tail;
+		tailLink->fNext = element;
+		headLink->fPrev = element;
+
+		if (front)
+			fPriorityHeads[priority] = element;
+	}
+}
+
+RUN_QUEUE_TEMPLATE_LIST
+void RUN_QUEUE_CLASS_NAME::_RemovePriority(Element* element, unsigned int priority) {
+	RunQueueLink<Element>* link = sGetLink(element);
+	if (--fPriorityCounts[priority] == 0) {
+		fBitmap[priority / 32] &= ~(1U << (priority % 32));
+		fPriorityHeads[priority] = NULL;
+	} else {
+		Element* next = link->fNext;
+		Element* prev = link->fPrev;
+		sGetLink(next)->fPrev = prev;
+		sGetLink(prev)->fNext = next;
+		if (fPriorityHeads[priority] == element)
+			fPriorityHeads[priority] = next;
+	}
+	link->fNext = NULL;
+	link->fPrev = NULL;
 }
 
 RUN_QUEUE_TEMPLATE_LIST
