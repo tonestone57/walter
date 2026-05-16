@@ -57,6 +57,10 @@ void ThreadData::_InitBase() {
 	StoreRelease64(fLastMeasureAvailableTime, 0);
 	StoreRelease64(fMeasureAvailableTime, 0);
 
+	StoreRelease64(fWeight, get_weight(fEffectivePriority));
+	StoreRelease64(fRequestSize, 5000); // 5ms default
+	StoreRelease64(fLag, 0);
+
 	StoreRelease64(fVirtualRuntime, 0);
 	StoreRelease64(fVirtualDeadline, 0);
 
@@ -615,50 +619,17 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 	if (now == 0)
 		now = system_time();
 
-	// Note: _UpdateDeadline is called from HasQuantumEnded which is
-	// called under SchedulerModeLocker (read lock). gDeadlineBucketSize won't
-	// change while any CPU holds the read lock. A plain read suffices and
-	// avoids the memory barrier cost of atomic-get64 on ARM/RISC-V.
-	// We still use atomic-get64 for correctness on 32-bit targets where
-	// plain reads of 64-bit values are not atomic.
-	//
-	// Note: document that _UpdateDeadline is called inside
-	// CoreRunQueueLocker (via HasQuantumEnded → _UpdateDeadline). Calling
-	// system_time() while holding a spinlock adds non-deterministic latency
-	// if the TSC is slow or virtualized. This is accepted as unavoidable
-	// given the current design; this has been implemented by pre-computing
-	// 'now' in reschedule() and propagating it through the call chain.
+	// Note: Formal EEVDF Deadline formula:
+	// Deadline = VirtualTime + (RequestSize / Weight)
+	// Decouples latency (RequestSize) from throughput (Weight).
 
-	// Virtual Deadline Calculation:
-	// Deadline = Now + (BaseSlice * BaseWeight / TaskWeight)
-	int32 priority = GetPriority();
-	if (priority > THREAD_MAX_SET_PRIORITY)
-		priority = THREAD_MAX_SET_PRIORITY;
+	int64 weight = GetWeight();
+	if (weight <= 0) weight = 1;
 
-	bigtime_t slice = (bigtime_t)LoadAcquire64(sVirtualDeadlineSlices[priority]);
+	bigtime_t requestSize = LoadAcquire64(fRequestSize);
+	if (requestSize <= 0) requestSize = 5000;
 
-	// Scale virtual deadline slice by interactivity (bursty threads get shorter
-	// slices) Fast integer approximation of / 1000 (1049 / 2^20 ~= 0.0010004)
-	// Ensure 64-bit arithmetic to prevent overflow.
-	// Use clamped interactivity to prevent negative slice.
-	int32 interactivity = fInteractivityScore;
-	if (interactivity < 0)
-		interactivity = 0;
-	if (interactivity > 1000)
-		interactivity = 1000;
-	slice = ((int64)slice * (1500 - interactivity) * 1049) >> 20;
-
-	// prevent the interactivity multiplier from shrinking
-	// the slice to near-zero.  When fInteractivityScore == 1000 the
-	// multiplier is ~0.5, which is correct (bursty thread gets a shorter
-	// deadline), but if slice was already small the result can reach 0.
-	// A zero slice sets fVirtualDeadline == now, giving the thread
-	// maximum urgency permanently and starving lower-priority threads.
-	// Note: bucketSize was already computed via the mode struct
-	// field read at the top of this function. Re-read via atomic-get64
-	// only if the value is not already cached. Since we are under
-	// SchedulerModeLocker (read), gDeadlineBucketSize is stable.
-	// Use the direct field read to avoid a redundant memory barrier.
+	bigtime_t slice = (requestSize * 1000) / weight;
 
 	// Floor at one bucket width so the deadline is always in the future.
 	{
@@ -668,7 +639,7 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 			slice = kMinSlice;
 	}
 
-	StoreRelease64(fVirtualDeadline, (int64)(now + slice));
+	StoreRelease64(fVirtualDeadline, (int64)(GetVirtualRuntime() + slice));
 
 	_ComputeEffectivePriority(now);
 }

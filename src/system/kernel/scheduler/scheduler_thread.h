@@ -147,6 +147,18 @@ public:
 		return (bigtime_t)LoadAcquire64(fVirtualRuntime);
 	}
 
+	SCHEDULER_INLINE int64 GetWeight() const {
+		return LoadAcquire64(fWeight);
+	}
+
+	SCHEDULER_INLINE int64 GetLag() const {
+		return LoadAcquire64(fLag);
+	}
+
+	SCHEDULER_INLINE bool IsEligible(bigtime_t systemVirtualTime) const {
+		return GetVirtualRuntime() <= systemVirtualTime;
+	}
+
 	SCHEDULER_INLINE void SetQuantum(bigtime_t quantum) {
 		StoreRelease64(fBaseQuantum, (int64)quantum);
 	}
@@ -217,6 +229,10 @@ private:
 
 	int32 fNeededLoad;
 	uint32 fLoadMeasurementEpoch;
+
+	int64 fWeight __attribute__((aligned(8)));
+	bigtime_t fRequestSize __attribute__((aligned(8)));
+	int64 fLag __attribute__((aligned(8)));
 
 	bigtime_t fVirtualRuntime __attribute__((aligned(8)));
 	bigtime_t fVirtualDeadline __attribute__((aligned(8)));
@@ -829,11 +845,27 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (!IsRealTime()) {
-		int32 priority = max_c((int32)1, GetEffectivePriority());
-		bigtime_t delta = (active * B_URGENT_DISPLAY_PRIORITY) / priority;
+	if (!IsRealTime() && !IsIdle()) {
+		// Note: Formal fair-share runtime update.
+		// delta = (active * kFairShareReferenceWeight) / Weight
+		int64 weight = GetWeight();
+		if (weight <= 0) weight = 1;
+		bigtime_t delta = (active * 1000) / weight;
 
 		UpdateVirtualRuntime(delta, now);
+
+		// Note: Update Lag.
+		// Lag = (SystemVirtualTime - VirtualRuntime) * Weight
+		CoreEntry* core = Core();
+		if (core != NULL) {
+			// Find a CPU in this core to get SystemVirtualTime.
+			CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+			if (cpu->Core() == core) {
+				bigtime_t svt = cpu->SystemVirtualTime();
+				int64 lag = (svt - GetVirtualRuntime()) * weight;
+				StoreRelease64(fLag, lag);
+			}
+		}
 	}
 
 	if (!gTrackCoreLoad)

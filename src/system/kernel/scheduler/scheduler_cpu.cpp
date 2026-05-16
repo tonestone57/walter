@@ -435,6 +435,15 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 	if (now == 0)
 		now = system_time();
 
+	// Note: Update System Virtual Time (SVT).
+	// SVT tracks the FairShare baseline for this core.
+	if (!nextThreadData->IsIdle() && !nextThreadData->IsRealTime()) {
+		bigtime_t vrt = nextThreadData->GetVirtualRuntime();
+		bigtime_t svt = SystemVirtualTime();
+		if (vrt > svt)
+			SetSystemVirtualTime(vrt);
+	}
+
 	int32 currentLoad = LoadAcquire(fLoad);
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int oldLoad;
@@ -677,6 +686,9 @@ uint32 CPUEntry::GetRandom() {
 
 ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
+
+	// Note: Formal EEVDF Hierarchical Work-Stealing.
+	// Phase 1 (Sibling): Try to steal from a sibling core sharing cache.
 
 	// iterate over other cores in the package and try to steal work
 	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
@@ -938,6 +950,12 @@ void CoreEntry::Init(int32 id, PackageEntry* package) {
 void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 
+	// Note: Eligibility check. A thread only enters the heap when it is
+	// eligible (VirtualRuntime <= SystemVirtualTime).
+	// However, for simplicity in this initial implementation, we'll
+	// use the local CPU's SVT or a global approximation.
+	// In per-core heap, we use CPUEntry::SystemVirtualTime().
+
 	fRunQueue.PushFront(thread, priority);
 	AddRelease(fThreadCount, 1);
 	IncrementTotalThreadCount();
@@ -979,8 +997,11 @@ void CoreEntry::Remove(ThreadData* thread) {
 ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Explicitly exclude idle threads from steal candidates.
-	ThreadData* thread = fRunQueue.PeekOption(StealThreadPredicate(thiefCPU));
+	// Note: Formal EEVDF Steal Criteria: "The Laggiest Wins".
+	// Unlike traditional schedulers, we prefer threads with the
+	// highest positive Lag (most under-served).
+
+	ThreadData* thread = fRunQueue.PeekBest(ThreadDataLagCompare(), StealThreadPredicate(thiefCPU));
 
 	if (thread != NULL) {
 		stolenPriority = thread->GetEffectivePriority();

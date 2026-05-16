@@ -198,6 +198,51 @@ struct ThreadDataVRuntimeCompare {
 	}
 };
 
+struct ThreadDataDeadlineCompare {
+	template <typename ThreadData>
+	bool operator()(const ThreadData* a, const ThreadData* b) const {
+		bool aRT = a->IsRealTime();
+		bool bRT = b->IsRealTime();
+		if (aRT != bRT)
+			return aRT;
+
+		if (aRT)
+			return a->GetPriority() > b->GetPriority();
+
+		bigtime_t aDeadline = a->GetVirtualDeadline();
+		bigtime_t bDeadline = b->GetVirtualDeadline();
+
+		return (aDeadline - bDeadline) < 0;
+	}
+};
+
+struct ThreadDataLagCompare {
+	template <typename ThreadData>
+	bool operator()(const ThreadData* a, const ThreadData* b) const {
+		// Highest positive lag first (most under-served)
+		return (a->GetLag() - b->GetLag()) > 0;
+	}
+};
+
+static const int32 kWeightTable[] = {
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0-9
+	2, 2, 2, 2, 2, 2, 2, 2, 2, 2,  // 10-19
+	5, 5, 5, 5, 5, 5, 5, 5, 5, 5,  // 20-29
+	10, 10, 20, 30, 40, 50, 60, 70, 80, 100, // 30-39
+	120, 140, 160, 180, 200, 250, 300, 350, 400, 500, // 40-49
+	600, 700, 800, 900, 1000, 1200, 1400, 1600, 1800, 2000, // 50-59
+	2500, 3000, 3500, 4000, 5000, 6000, 7000, 8000, 9000, 10000, // 60-69
+	12000, 14000, 16000, 18000, 20000, 25000, 30000, 35000, 40000, 50000, // 70-79
+	60000, 70000, 80000, 90000, 100000, 120000, 140000, 160000, 180000, 200000, // 80-89
+	250000, 300000, 350000, 400000, 500000, 600000, 700000, 800000, 900000, 1000000 // 90-99
+};
+
+static inline int32 get_weight(int32 priority) {
+	if (priority < 0) return 1;
+	if (priority >= 100) return 1000000;
+	return kWeightTable[priority];
+}
+
 struct ThreadDataOptimal {
 	template <typename ThreadData>
 	bool operator()(const ThreadData* /*thread*/) const {

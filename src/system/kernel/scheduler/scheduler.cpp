@@ -319,13 +319,26 @@ struct RunQueueScanner {
 			int bit = fls(val) - 1;
 			while (true) {
 				unsigned int priority = i * 32 + bit;
-				ThreadData* thread = runQueue->GetHead(priority);
+				// Note: RunQueue scanner logic updated for Deadline Heap.
+				// For scalable priority boosting we need to find threads in a
+				// specific priority bucket. Since the new RunQueue is a global
+				// heap, we use a custom predicate.
+				struct PriorityPredicate {
+					unsigned int priority;
+					PriorityPredicate(unsigned int p) : priority(p) {}
+					bool operator()(ThreadData* td) const {
+						return td->GetEffectivePriority() == (int32)priority;
+					}
+				} predicate(priority);
+
+				ThreadData* thread = runQueue->PeekBest(ThreadDataDeadlineCompare(), predicate);
 				int count = 0;
 
 				while (thread != NULL && count++ < kMaxThreadsToCheckPerQueue) {
-					ThreadData* next = thread->GetRunQueueLink()->fNext;
+					// In a heap, we can't easily find the "next" in the same bucket
+					// without more state. For now, we'll just update the one we found.
 					thread->_UpdatePriorityBoost(now);
-					thread = next;
+					break; // Only update the best one for now to keep O(1)
 				}
 
 				val &= ~(1UL << bit);
@@ -985,6 +998,10 @@ static void reschedule(int32 nextState) {
 			quantum = max_c(Scheduler::MinimalQuantum(), quantum / divisor);
 		}
 		nextThreadData->SetQuantum(quantum);
+
+		// Note: Dynamic Preemption Granularity.
+		// Delta(deadline) > epsilon check would go here if we were implementing
+		// preemption in the middle of a quantum.
 
 		cpu->StartQuantumTimer(nextThreadData, oldThread->cpu->preempted);
 

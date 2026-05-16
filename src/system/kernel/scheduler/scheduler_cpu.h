@@ -60,12 +60,12 @@ static_assert(kMaxCoresPerPackage <= 64,
 static_assert(kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8),
 			  "native_cpu_mask_t too narrow");
 
-// The run queues. Holds the threads ready to run ordered by priority.
+// The run queues. Holds the threads ready to run ordered by virtual deadline.
 // One queue per schedulable target per core. Additionally, each
 // logical processor has its sPinnedRunQueues used for scheduling
 // pinned threads.
 class ThreadRunQueue : public RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY,
-									   ThreadDataVRuntimeCompare> {
+									   ThreadDataDeadlineCompare> {
 public:
 	void Dump() const;
 };
@@ -135,6 +135,14 @@ public:
 
 	inline int32 ThreadCount() const { return LoadAcquire(fThreadCount); }
 
+	inline bigtime_t SystemVirtualTime() const {
+		return (bigtime_t)LoadAcquire64(fSystemVirtualTime);
+	}
+
+	inline void SetSystemVirtualTime(bigtime_t time) {
+		StoreRelease64(fSystemVirtualTime, (int64)time);
+	}
+
 	bool SetReschedulePending() {
 		return GetAndSet(fReschedulePending, 1) == 0;
 	}
@@ -169,6 +177,8 @@ private:
 
 	uint32 fRescheduleCount;
 	uint32 fInteractionUpdateCounter;
+
+	bigtime_t fSystemVirtualTime __attribute__((aligned(8)));
 
 	int32 fReschedulePending __attribute__((aligned(8)));
 	// Moved from CoreEntry to eliminate false sharing.
@@ -242,7 +252,7 @@ public:
 	inline void UnlockRunQueue();
 	// Note: lockless check for display-priority threads in the
 	// run queue.  Used by ComputeQuantum to avoid TryLockRunQueue on the
-	// scheduling hot path.  Atomic bitmap reads match PeekMaximum's pattern.
+	// scheduling hot path.
 	inline bool HasHighPriorityThread() const;
 
 	ThreadData* StealThread(int32& stolenPriority, int32 thiefCPU);
@@ -844,30 +854,12 @@ inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 inline void PackageEntry::ReadLockCore() { acquire_read_spinlock(&fCoreLock); }
 
 inline bool CoreEntry::HasHighPriorityThread() const {
-	// Note: lockless approximation replacing TryLockRunQueue in
-	// ComputeQuantum.  TryLock failure under contention (common on loaded
-	// systems) left displayReady=false even when a display thread was ready,
-	// handing the running thread up to kMaxQuantum instead of kDisplayQuantum.
-	//
-	// We use the same atomic-get pattern as PeekMaximum: bitmap writes are
-	// done under the run-queue lock but we read without it.  On x86 aligned
-	// 32-bit loads are indivisible; on other supported architectures the
-	// worst case is a stale read that causes one extra-long quantum before
-	// the next reschedule corrects it - acceptable for this hint.
-	const uint32* bitmap = fRunQueue.GetBitmap();
-	for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-		uint32 val =
-			(uint32)LoadAcquire(*reinterpret_cast<const int32 volatile*>(&bitmap[i]));
-		if (i == ThreadRunQueue::kBitmapSize - 1)
-			val &= (uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
-		if (val != 0) {
-			// Found the highest occupied priority level; check threshold.
-			int highestBit = fls(val) - 1;
-			int highestPriority = i * 32 + highestBit;
-			return highestPriority >= B_DISPLAY_PRIORITY;
-		}
-	}
-	return false;
+	// Note: lockless check for high-priority threads at the heap root.
+	ThreadData* root = fRunQueue.PeekRoot();
+	if (root == NULL)
+		return false;
+
+	return root->GetEffectivePriority() >= B_DISPLAY_PRIORITY;
 }
 
 inline void PackageEntry::ReadUnlockCore() {
