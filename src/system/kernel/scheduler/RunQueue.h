@@ -171,7 +171,7 @@ RunQueueLink<Element>* RunQueueMemberGetLink<Element, LinkMember>::operator()(
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
 	: fInitStatus(B_OK), fElements(NULL), fCapacity(0), fTotalCount(0) {
-	CheckCapacity(16); // Initial small capacity
+	fInitStatus = CheckCapacity(16); // Initial small capacity
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -203,7 +203,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority) {
 	RunQueueLink<Element>* link = sGetLink(element);
 	link->fPriority = priority;
 
-	int32 index = fTotalCount++;
+	int32 index = fTotalCount;
 	fElements[index] = element;
 	link->fIndex = index;
 
@@ -214,7 +214,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority) {
 	// Note: total count update is atomic for lockless IsEmpty() check.
 	// Since we hold the spinlock, the array update and fTotalCount increment
 	// are consistent for the writer.
-	StoreRelease(fTotalCount, fTotalCount);
+	StoreRelease(fTotalCount, index + 1);
 }
 
 RUN_QUEUE_TEMPLATE_LIST

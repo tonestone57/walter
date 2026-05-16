@@ -179,6 +179,7 @@ private:
 	uint32 fInteractionUpdateCounter;
 
 	bigtime_t fSystemVirtualTime __attribute__((aligned(8)));
+	bigtime_t fPreemptionThreshold __attribute__((aligned(8)));
 
 	int32 fReschedulePending __attribute__((aligned(8)));
 	// Moved from CoreEntry to eliminate false sharing.

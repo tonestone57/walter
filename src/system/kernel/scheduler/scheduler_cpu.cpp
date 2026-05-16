@@ -69,7 +69,17 @@ struct LocalNodeStealAction {
 
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
+
+			// Note: Hierarchical Lag-Based Steal (Local Node).
+			// Prefer threads with highest positive lag.
 			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+
+			if (*stolen != NULL && (*stolen)->GetLag() < kNUMANodeLagThreshold) {
+				// Thread not under-served enough to justify cross-core steal
+				// within the same node. Restore it.
+				victim->PushBack(*stolen, stolenPriority);
+				*stolen = NULL;
+			}
 
 			if (*stolen != NULL) {
 				// Re-verify affinity under the lock.
@@ -134,7 +144,17 @@ struct GlobalRandomStealAction {
 
 		if (victim->TryLockRunQueue()) {
 			int32 stolenPriority = -1;
+
+			// Note: Hierarchical Lag-Based Steal (Global).
+			// Use higher lag threshold for remote nodes to preserve cache warmth.
 			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+
+			if (*stolen != NULL && (*stolen)->GetLag() < kGlobalLagThreshold) {
+				// Cross-NUMA migration is expensive; only steal if thread is
+				// extremely under-served.
+				victim->PushBack(*stolen, stolenPriority);
+				*stolen = NULL;
+			}
 
 			if (*stolen != NULL) {
 				// Re-verify affinity under the lock.
@@ -442,6 +462,14 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 		bigtime_t svt = SystemVirtualTime();
 		if (vrt > svt)
 			SetSystemVirtualTime(vrt);
+
+		// Note: Update Dynamic Preemption Threshold.
+		// Scale epsilon based on thread count to protect cache performance.
+		int32 threads = ThreadCount();
+		StoreRelease64(fPreemptionThreshold, (int64)(threads * 100)); // 100us per thread
+	} else if (nextThreadData->IsIdle()) {
+		// On an idle system, epsilon is near zero (instant response).
+		StoreRelease64(fPreemptionThreshold, 0);
 	}
 
 	int32 currentLoad = LoadAcquire(fLoad);

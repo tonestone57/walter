@@ -173,6 +173,9 @@ namespace Scheduler {
 
 const bigtime_t kForegroundVRuntimeOffset = 5000;
 
+const int64 kNUMANodeLagThreshold = 1000000;
+const int64 kGlobalLagThreshold = 5000000;
+
 struct ThreadDataVRuntimeCompare {
 	template <typename ThreadData>
 	bool operator()(const ThreadData* a, const ThreadData* b) const {

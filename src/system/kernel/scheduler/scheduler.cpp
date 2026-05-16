@@ -616,6 +616,20 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 	if (threadPriority > heapPriority ||
 		(threadPriority == heapPriority && rescheduleNeeded) ||
 		wasRunQueueEmpty || requestPreemption) {
+
+		// Note: Dynamic Preemption Granularity.
+		// Only trigger IPI if Delta(deadline) > epsilon.
+		if (targetCPU->ID() != smp_get_current_cpu()) {
+			bigtime_t epsilon = (bigtime_t)LoadAcquire64(targetCPU->fPreemptionThreshold);
+			ThreadData* top = targetCPU->PeekThread();
+			if (top != NULL && !top->IsIdle()) {
+				if (threadData->GetVirtualDeadline() - top->GetVirtualDeadline() > epsilon) {
+					// Too early to preempt; let it run.
+					return true;
+				}
+			}
+		}
+
 		if (targetCPU->ID() == smp_get_current_cpu()) {
 			gCPU[targetCPU->ID()].invoke_scheduler = true;
 		} else {
