@@ -203,7 +203,7 @@ static status_t interaction_timer_hook(struct timer* timer) {
 void scheduler_update_interaction_state(bigtime_t now) {
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
-	if (cpu->fInteractionUpdateCounter++ % 32 != 0)
+	if (cpu->fInteractionUpdateCounter++ % 32 != 0) {
 		// fInteractionUpdateCounter is a
 		// plain uint32 incremented without atomics.  This is safe because:
 		// (a) it is a per-CPU field - only the current CPU accesses it here
@@ -212,6 +212,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 		//     merely shifts the phase of the 32-call window, which is
 		//     harmless.  No code change required.
 		return;
+	}
 
 	// Note: Deadline bucket caching. Cache gDeadlineBucketSize once - it is
 	// read twice below and the two reads could observe different values if a
@@ -221,6 +222,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 
 	if (now == 0)
 		now = system_time();
+
 	bigtime_t lastTime = (bigtime_t)LoadAcquire64(sLastInteractionTime);
 	// Note: Scheduler::MinimalQuantum() reads sCurrentMode->minimal_quantum
 	// in two separate memory accesses (pointer load + field read). On 32-bit
@@ -234,8 +236,8 @@ void scheduler_update_interaction_state(bigtime_t now) {
 							  : 1200;  // fallback: 1.2ms minimal quantum
 
 	while (now - lastTime >= threshold) {
-		if ((bigtime_t)TestAndSet64(sLastInteractionTime,
-				(int64)now, (int64)lastTime) == lastTime) {
+		if ((bigtime_t)TestAndSet64(sLastInteractionTime, (int64)now,
+				(int64)lastTime) == lastTime) {
 			lastTime = now;
 			break;
 		}
@@ -447,17 +449,19 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	// only the CPU whose (boost_epoch % cpuCount) matches its modular index
 	// within the core performs the scan.
 	int32 coreCPUCount = max_c(1, core->CPUCount());
+
 	// Note: Counter wrap-around safety. when fRescheduleCount wraps UINT32_MAX
-	// → 0, the post- increment is 0, so (0 % 10 == 0) fires and preCount
+	// → 0, the post-increment is 0, so (0 % 10 == 0) fires and preCount
 	// becomes UINT32_MAX, making boostEpoch ≈ 429M.  This causes all CPUs to
 	// satisfy the modular ownership check simultaneously, producing a
 	// correlated scan burst. Treat the wrap as a normal epoch boundary by
 	// clamping preCount.
 	uint32 preCount = cpu->fRescheduleCount - 1;
 	// Note: Use a non-zero epoch at wrap boundary to avoid bias.
-	if (cpu->fRescheduleCount == 0)
+	if (cpu->fRescheduleCount == 0) {
 		preCount =
 			THREAD_MAX_SET_PRIORITY;  // Arbitrary but stable non-zero value
+	}
 
 	uint32 boostEpoch = preCount / 10;
 
