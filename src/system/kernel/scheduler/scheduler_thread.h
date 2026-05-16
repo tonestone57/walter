@@ -585,7 +585,13 @@ inline void ThreadData::PutBack(bigtime_t now) {
 	_ComputeEffectivePriority(now);
 	int32 priority = GetEffectivePriority();
 
-	CheckCapacity();
+	// Guard: Ensure destination core has space.
+	// In the unlikely case of overflow (kMaxThreadsPerCore), we cannot
+	// easily recover in PutBack as the thread is currently executing.
+	if (CheckCapacity() != B_OK) {
+		panic("scheduler: capacity exceeded in PutBack for thread %" B_PRId32,
+			fThread->id);
+	}
 
 	if (fThread->pinned_to_cpu > 0) {
 		ASSERT(fThread->cpu != NULL);
@@ -637,7 +643,8 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 
 	bool wasReady = fReady;
 
-	CheckCapacity();
+	if (CheckCapacity() != B_OK)
+		return false;
 
 	const int32 priority = GetEffectivePriority();
 	bool pinned = fThread->pinned_to_cpu > 0;

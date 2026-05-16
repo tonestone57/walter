@@ -322,14 +322,6 @@ struct RunQueueScanner {
 				// Note: RunQueue scanner logic optimized for dual heaps.
 				// For priority boosting we update the most urgent thread
 				// in the requested priority bucket.
-				struct PriorityPredicate {
-					unsigned int priority;
-					PriorityPredicate(unsigned int p) : priority(p) {}
-					bool operator()(ThreadData* td) const {
-						return td->GetEffectivePriority() == (int32)priority;
-					}
-				} predicate(priority);
-
 				ThreadData* thread = runQueue->GetHead(priority);
 				if (thread != NULL) {
 					thread->_UpdatePriorityBoost(now);

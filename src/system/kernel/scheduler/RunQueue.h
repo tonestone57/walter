@@ -183,6 +183,12 @@ void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt) {
 	while (fIneligibleCount > 0) {
 		Element* root = fIneligibleHeap[0];
 		if (root->IsEligible(svt)) {
+			// Guard: Ensure destination heap has space
+			if (fEligibleCount >= kMaxThreadsPerCore) {
+				dprintf("scheduler: WARNING: eligible heap full; skipping eligibility migration\n");
+				break;
+			}
+
 			// Remove from Ineligible
 			int32 lastIdx = --fIneligibleCount;
 			Element* last = fIneligibleHeap[lastIdx];
@@ -212,14 +218,21 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 	link->fPriority = priority;
 
 	Traits::SetInRunQueue(element, true);
-	AddAcquireRelease(fTotalCount, 1);
 
 	if (element->IsRealTime() || element->IsIdle() || element->IsEligible(svt)) {
+		if (fEligibleCount >= kMaxThreadsPerCore) {
+			panic("scheduler: eligible heap overflow (count=%d)", fEligibleCount);
+		}
+		AddAcquireRelease(fTotalCount, 1);
 		int32 idx = fEligibleCount++;
 		fEligibleHeap[idx] = element;
 		link->fIndex = idx;
 		_BubbleUp(fEligibleHeap, fEligibleCount, idx, true);
 	} else {
+		if (fIneligibleCount >= kMaxThreadsPerCore) {
+			panic("scheduler: ineligible heap overflow (count=%d)", fIneligibleCount);
+		}
+		AddAcquireRelease(fTotalCount, 1);
 		int32 idx = fIneligibleCount++;
 		fIneligibleHeap[idx] = element;
 		link->fIndex = -idx - 1;
