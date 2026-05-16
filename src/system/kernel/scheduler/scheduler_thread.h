@@ -126,6 +126,7 @@ public:
 	// PutBack() and Enqueue() accept an optional 'now' timestamp for
 	// timestamp propagation.
 	SCHEDULER_INLINE void PutBack(bigtime_t now = 0);
+	SCHEDULER_INLINE status_t CheckCapacity();
 	SCHEDULER_INLINE bool Enqueue(bool& wasRunQueueEmpty,
 								  bool& requestPreemption,
 								  bool& updateInteraction, bigtime_t now = 0);
@@ -584,6 +585,8 @@ inline void ThreadData::PutBack(bigtime_t now) {
 	_ComputeEffectivePriority(now);
 	int32 priority = GetEffectivePriority();
 
+	CheckCapacity();
+
 	if (fThread->pinned_to_cpu > 0) {
 		ASSERT(fThread->cpu != NULL);
 		CPUEntry* cpu = CPUEntry::GetCPU(fThread->cpu->cpu_num);
@@ -612,6 +615,17 @@ inline void ThreadData::PutBack(bigtime_t now) {
 	}
 }
 
+inline status_t ThreadData::CheckCapacity() {
+	if (fThread->pinned_to_cpu > 0) {
+		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
+		return const_cast<ThreadRunQueue*>(cpu->RunQueue())->CheckCapacity(cpu->ThreadCount() + 1);
+	} else {
+		CoreEntry* core = Core();
+		if (core == NULL) return B_OK;
+		return const_cast<ThreadRunQueue*>(core->RunQueue())->CheckCapacity(core->CoreRunQueueThreadCount() + 1);
+	}
+}
+
 inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 								bool& updateInteraction, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -622,6 +636,8 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 	updateInteraction = false;
 
 	bool wasReady = fReady;
+
+	CheckCapacity();
 
 	const int32 priority = GetEffectivePriority();
 	bool pinned = fThread->pinned_to_cpu > 0;
