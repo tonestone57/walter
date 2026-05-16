@@ -59,8 +59,7 @@ static void _LoadavgUpdate(void* data, int iteration) {
 
 	for (int i = 0; i < 3; i++) {
 		while (true) {
-			uint32 oldLoad = (uint32)atomic_get(
-				(int32 volatile*)&sAverageRunnable.ldavg[i]);
+			uint32 oldLoad = (uint32)atomic_get((int32 volatile*)&sAverageRunnable.ldavg[i]);
 
 			// Note: the 128-bit intermediate is correct, but the final
 			// uint64 truncation can overflow for pathological thread counts or
@@ -103,8 +102,7 @@ status_t _user_get_loadavg(struct loadavg* userInfo, size_t size) {
 
 	struct loadavg loadAvg;
 	for (int i = 0; i < 3; i++) {
-		loadAvg.ldavg[i] = (uint32)atomic_get(
-			(int32 volatile*)&sAverageRunnable.ldavg[i]);
+		loadAvg.ldavg[i] = (uint32)atomic_get((int32 volatile*)&sAverageRunnable.ldavg[i]);
 	}
 	loadAvg.fscale = atomic_get((int32 volatile*)&sAverageRunnable.fscale);
 

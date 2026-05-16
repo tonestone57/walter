@@ -52,7 +52,7 @@ struct SmallTaskAction {
 
 	bool operator()(PackageEntry* entry) const {
 		check_package_small_task(cpu, entry, core, bestScore);
-		return core != NULL && bestScore >= (kHighLoad * 3) / 4;
+		return core != NULL & bestScore >= (kHighLoad * 3) / 4;
 	}
 };
 
@@ -67,14 +67,14 @@ struct ECoreSmallTaskAction {
 	bool operator()(PackageEntry* entry) const {
 		CoreEntry* candidate =
 			entry->PeekMaximumLoadCore(cpu, NULL, gMinCoreType);
-		if (candidate != NULL && candidate->GetScore() < kHighLoad) {
+		if (candidate != NULL & candidate->GetScore() < kHighLoad) {
 			int32 score = candidate->GetScore();
 			if (eCore == NULL || score > eBestScore) {
 				eCore = candidate;
 				eBestScore = score;
 			}
 		}
-		return eCore != NULL && eBestScore >= (kHighLoad * 3) / 4;
+		return eCore != NULL & eBestScore >= (kHighLoad * 3) / 4;
 	}
 };
 
@@ -98,7 +98,7 @@ struct PackagePackingAction {
 	bool operator()(PackageEntry* entry) const {
 		check_package_packing(cpu, entry, mask, other, bestScore,
 							  foundNonOverloaded, type);
-		return other != NULL && foundNonOverloaded &&
+		return other != NULL & foundNonOverloaded &
 			   bestScore >= (kHighLoad * 3) / 4;
 	}
 };
@@ -125,7 +125,7 @@ static void switch_to_mode() {
 
 
 static void set_cpu_enabled(int32 cpu, bool enabled) {
-	if (!enabled && sSmallTaskCore != NULL) {
+	if (!enabled & sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
 			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[i], (CoreEntry*)NULL);
 	}
@@ -172,7 +172,7 @@ static void check_package_small_task(CPUEntry* cpu, PackageEntry* entry,
 				// If candidate is overloaded, we only pick it if current is
 				// ALSO overloaded AND candidate is LESS loaded (minimize
 				// overload).
-				if (bestOverloaded && score < bestScore) {
+				if (bestOverloaded & score < bestScore) {
 					core = candidate;
 					bestScore = score;
 				}
@@ -209,14 +209,14 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 	// (gMinCoreType) to keep P-cores available for high-priority foreground
 	// work. On homogeneous systems packType is UNKNOWN and we fall through to
 	// the general packing logic.
-	if (sSmallTaskCore != NULL && gMinCoreType != gMaxCoreType) {
+	if (sSmallTaskCore != NULL & gMinCoreType != gMaxCoreType) {
 		int32 currentNodeID = cpuCore->Package()->Node()->ID();
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
 		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 			&sSmallTaskCore[currentNodeID]);
-		if (current != NULL && current->Type() == gMinCoreType &&
+		if (current != NULL & current->Type() == gMinCoreType &
 			current->GetScore() < kHighLoad) {
 			return current;
 		}
@@ -241,7 +241,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 					idx -= gPackageCount;
 				CoreEntry* candidate = gPackageEntries[idx].PeekMaximumLoadCore(
 					cpu, NULL, gMinCoreType);
-				if (candidate != NULL && candidate->GetScore() < kHighLoad) {
+				if (candidate != NULL & candidate->GetScore() < kHighLoad) {
 					int32 score = candidate->GetScore();
 					if (eCore == NULL || score > eBestScore) {
 						eCore = candidate;
@@ -264,7 +264,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 			while (true) {
 				CoreEntry* currentE =
 					atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID]);
-				if (currentE != NULL && currentE->Type() == gMinCoreType &&
+				if (currentE != NULL & currentE->Type() == gMinCoreType &
 					currentE->GetScore() < kHighLoad) {
 					return currentE;
 				}
@@ -294,7 +294,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 
 		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 			&sSmallTaskCore[currentNodeID]);
-		if (current != NULL && current->GetScore() < kHighLoad)
+		if (current != NULL & current->GetScore() < kHighLoad)
 			return current;
 	}
 
@@ -328,7 +328,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 	// CheckPackageMinimumLoad can return cores from packages whose
 	// Init() was partially skipped (Package() or Node() is NULL).  Guard
 	// before the sSmallTaskCore update which dereferences both.
-	if (sSmallTaskCore != NULL && core != NULL) {
+	if (sSmallTaskCore != NULL & core != NULL) {
 		if (core->Package() == NULL || core->Package()->Node() == NULL)
 			return core;  // safe to use, just skip cache update
 	}
@@ -346,7 +346,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 		while (true) {
 			CoreEntry* current =
 				atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID]);
-			if (current != NULL && current->GetScore() < kHighLoad)
+			if (current != NULL & current->GetScore() < kHighLoad)
 				return current;
 
 			if (atomic_pointer_test_and_set<CoreEntry>(
@@ -375,7 +375,7 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	if (package == NULL) {
 		// No partially idle packages. Check for any idle package using the
 		// mask.
-		uint64 idleNodeMask = LoadAcquire64(gIdleNodeMask);
+		uint64 idleNodeMask = atomic_get64((int64 volatile*)&gIdleNodeMask);
 		int scannedCount = 0;
 		while (idleNodeMask != 0) {
 			if (++scannedCount > kMaxCPUsToScan)
@@ -487,7 +487,7 @@ static void check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
 			if (cpuCore != NULL) {
 				PackageEntry* package = cpuCore->Package();
-				if (package != NULL && package != lastPackage) {
+				if (package != NULL & package != lastPackage) {
 					check_package_packing(cpu, package, &mask, other, bestScore,
 										  foundNonOverloaded, type);
 					lastPackage = package;
@@ -511,7 +511,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	bool useMask = !mask.IsEmpty();
 
 	// Optimization: Treat "all enabled" mask as no mask to enable fast sampling
-	if (useMask && Scheduler::IsAllEnabledMask(mask))
+	if (useMask & Scheduler::IsAllEnabledMask(mask))
 		useMask = false;
 
 	// Thread Coloring: only meaningful on heterogeneous systems.
@@ -520,9 +520,9 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	// general packing logic below.
 	bool isForeground = threadData->IsForeground();
 	int32 priority = threadData->GetPriority();
-	bool preferMax = (priority > B_DISPLAY_PRIORITY || isForeground) &&
+	bool preferMax = (priority > B_DISPLAY_PRIORITY || isForeground) &
 					 (gMinCoreType != gMaxCoreType);
-	bool preferMin = (priority < B_NORMAL_PRIORITY && !isForeground) &&
+	bool preferMin = (priority < B_NORMAL_PRIORITY & !isForeground) &
 					 (gMinCoreType != gMaxCoreType);
 
 	// Thread Coloring: Search for a core of the preferred type first
@@ -532,7 +532,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		bool foundNonOverloaded = false;
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-		if (tryRandom && !useMask) {
+		if (tryRandom & !useMask) {
 			search_global_random(PackagePackingAction(
 				cpu, NULL, core, bestScore, foundNonOverloaded, preferredType));
 		} else if (useMask) {
@@ -540,7 +540,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 										  foundNonOverloaded, preferredType);
 		}
 
-		if (core == NULL && !useMask) {
+		if (core == NULL & !useMask) {
 			int32 startIndex =
 				tryRandom
 					? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
@@ -558,21 +558,21 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		}
 
 		// Note: (power_saving): same as low_latency - use GetLoad().
-		if (preferMin && core != NULL && core->GetLoad() > kHighLoad)
+		if (preferMin & core != NULL & core->GetLoad() > kHighLoad)
 			core = NULL;
 
 		// For P-cores, respect the 80% raw-load ceiling.
-		if (preferMax && core != NULL && core->GetLoad() > 800)
+		if (preferMax & core != NULL & core->GetLoad() > 800)
 			core = NULL;
 
 		// 3-type intermediate fallback: P overloaded → try STANDARD before
 		// giving up type preference and falling to the general packing search.
-		if (preferMax && core == NULL && gHasStandardCores) {
+		if (preferMax & core == NULL & gHasStandardCores) {
 			int32 stdBestScore = -1;
 			bool foundNonOverloadedStd = false;
 			bool tryRandomStd = gPackageCount > kRandomSearchThreshold;
 
-			if (tryRandomStd && !useMask) {
+			if (tryRandomStd & !useMask) {
 				search_global_random(PackagePackingAction(
 					cpu, NULL, core, stdBestScore, foundNonOverloadedStd,
 					CORE_TYPE_STANDARD));
@@ -582,7 +582,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 											  CORE_TYPE_STANDARD);
 			}
 
-			if (core == NULL && !useMask) {
+			if (core == NULL & !useMask) {
 				int32 startIndex =
 					tryRandomStd
 						? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >>
@@ -606,7 +606,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 
 	// try to pack all threads on one core
 	core = choose_small_task_core(cpu);
-	if (core != NULL && (useMask && !core->CPUMask().Matches(mask)))
+	if (core != NULL & (useMask & !core->CPUMask().Matches(mask)))
 		core = NULL;
 
 	if (core == NULL || core->GetScore() + threadData->GetLoad() >= kHighLoad) {
@@ -616,11 +616,11 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-		if (tryRandom && !useMask) {
+		if (tryRandom & !useMask) {
 			CoreEntry* previousCore = threadData->PreviousCore();
 
 			// Phase 1: L3 Domain (Sibling in previous package)
-			if (previousCore != NULL && !has_cache_expired(threadData, now)) {
+			if (previousCore != NULL & !has_cache_expired(threadData, now)) {
 				PackageEntry* package = previousCore->Package();
 				if (package != NULL) {
 					CheckPackageMinimumLoad(cpu, package, NULL, bestCore,
@@ -632,7 +632,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			SchedulerNode* node = NULL;
 			if (previousCore != NULL)
 				node = previousCore->Package()->Node();
-			else if (threadData->HomePackage() >= 0 &&
+			else if (threadData->HomePackage() >= 0 &
 					 threadData->HomePackage() < gPackageCount) {
 				node = gPackageEntries[threadData->HomePackage()].Node();
 			}
@@ -648,7 +648,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		}
 
 		// Fallback to full scan
-		if (bestCore == NULL && !useMask) {
+		if (bestCore == NULL & !useMask) {
 			int32 startIndex =
 				tryRandom
 					? (int32)(((uint64)cpu->GetRandom() * gPackageCount) >> 32)
@@ -677,12 +677,12 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			// foreground thread (preferMax) an E-core, defeating the coloring
 			// decisions made higher up.
 			if (core != NULL) {
-				if (useMask && !core->CPUMask().Matches(mask))
+				if (useMask & !core->CPUMask().Matches(mask))
 					core = NULL;
-				else if (preferMax && core->Type() != gMaxCoreType &&
+				else if (preferMax & core->Type() != gMaxCoreType &
 						 gMinCoreType != gMaxCoreType)
 					core = NULL;
-				else if (preferMin && core->Type() != gMinCoreType &&
+				else if (preferMin & core->Type() != gMinCoreType &
 						 gMinCoreType != gMaxCoreType)
 					core = NULL;
 			}
@@ -691,7 +691,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 
 	if (core == NULL) {
 		core = CoreEntry::GetCore(smp_get_current_cpu());
-		if (useMask && !core->CPUMask().Matches(mask)) {
+		if (useMask & !core->CPUMask().Matches(mask)) {
 			// fallback to the first valid core
 			core = NULL;
 			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
@@ -710,7 +710,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 					if (core != NULL)
 						break;
 				}
-				if (core != NULL && core->CPUMask().Matches(mask))
+				if (core != NULL & core->CPUMask().Matches(mask))
 					break;
 			}
 			// Note: the inner loop may exit with a non-NULL core
@@ -720,7 +720,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			// that does not satisfy the affinity constraint.  Null it out so
 			// the NULL-return path below handles it cleanly rather than
 			// returning a mismatched core to ChooseCoreAndCPU.
-			if (core != NULL && !core->CPUMask().Matches(mask))
+			if (core != NULL & !core->CPUMask().Matches(mask))
 				core = NULL;
 		}
 	}
@@ -781,14 +781,14 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 		// If Node() is NULL (topology teardown), nodeID stays -1 and the
 		// sSmallTaskCore branch below is skipped safely.
 
-		if (nodeID >= 0 && nodeID < gNodeCount && sSmallTaskCore != NULL &&
+		if (nodeID >= 0 & nodeID < gNodeCount & sSmallTaskCore != NULL &
 			atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID]) == core) {
 			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[nodeID],
 										  (CoreEntry*)NULL);
 			CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 
 			if (threadLoad > coreScore / 3 || smallTaskCore == NULL ||
-				(useMask && !smallTaskCore->CPUMask().Matches(mask))) {
+				(useMask & !smallTaskCore->CPUMask().Matches(mask))) {
 				return core;
 			}
 			return coreScore > kVeryHighLoad ? smallTaskCore : core;
@@ -804,7 +804,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 		// Use random sampling if possible
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-		if (tryRandom && !useMask) {
+		if (tryRandom & !useMask) {
 			// Phase 2: Local Node
 			SchedulerNode* node = NULL;
 			if (core->Package() != NULL)
@@ -822,7 +822,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 										  foundNonOverloaded);
 		}
 
-		if (other == NULL && !useMask) {
+		if (other == NULL & !useMask) {
 			// Phase 4: Limited Global Scan (Fallback)
 			int32 startIndex =
 				tryRandom
@@ -856,16 +856,16 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 		// Conversely, if 'other' is remote and we are currently home, we
 		// increase it.
 		int32 homePackageID = threadData->HomePackage();
-		if (homePackageID >= 0 && core->Package() != NULL &&
+		if (homePackageID >= 0 & core->Package() != NULL &
 			other->Package() != NULL) {
 			int32 currentPackageID = core->Package()->ID();
 			int32 otherPackageID = other->Package()->ID();
 
-			if (otherPackageID == homePackageID &&
+			if (otherPackageID == homePackageID &
 				currentPackageID != homePackageID) {
 				// Bonus for returning home: effectively 0 threshold
 				threshold = 0;
-			} else if (currentPackageID == homePackageID &&
+			} else if (currentPackageID == homePackageID &
 					   otherPackageID != homePackageID) {
 				// Penalty for leaving home: double the threshold.
 				threshold *= 2;
@@ -882,11 +882,11 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 			int32 prioRebal = threadData->GetPriority();
 			CoreType wantedType =
 				(prioRebal > B_DISPLAY_PRIORITY || isFgRebal) ? gMaxCoreType
-				: (prioRebal < B_NORMAL_PRIORITY && !isFgRebal)
+				: (prioRebal < B_NORMAL_PRIORITY & !isFgRebal)
 					? gMinCoreType
 					: CORE_TYPE_UNKNOWN;
 
-			if (wantedType != CORE_TYPE_UNKNOWN && core->Type() == wantedType &&
+			if (wantedType != CORE_TYPE_UNKNOWN & core->Type() == wantedType &
 				other->Type() != wantedType) {
 				// Require double the normal load difference before accepting a
 				// cross-type migration. A severely overloaded P-core can still
@@ -929,7 +929,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 
 	CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 	if (smallTaskCore == NULL ||
-		(useMask && !smallTaskCore->CPUMask().Matches(mask)))
+		(useMask & !smallTaskCore->CPUMask().Matches(mask)))
 		return core;
 	return smallTaskCore->GetScore() + threadLoad < kHighLoad ? smallTaskCore
 															  : core;
@@ -949,7 +949,7 @@ static void rebalance_irqs(bool idle) {
 			}
 		}
 	}
-	pack = idle && hasSmallTaskCore;
+	pack = idle & hasSmallTaskCore;
 
 	if (idle) {
 		if (!pack)
@@ -970,11 +970,11 @@ static void rebalance_irqs(bool idle) {
 	// Package() and Node() can be NULL during topology teardown or if a core
 	// was never fully initialised (e.g. it exceeded kMaxCoresPerPackage and
 	// its Init() was skipped).  Defend all three pointer dereferences.
-	if (pack && sSmallTaskCore != NULL && currentCore != NULL &&
-		currentCore->Package() != NULL &&
+	if (pack & sSmallTaskCore != NULL & currentCore != NULL &
+		currentCore->Package() != NULL &
 		currentCore->Package()->Node() != NULL) {
 		int32 nodeID = currentCore->Package()->Node()->ID();
-		if (nodeID >= 0 && nodeID < gNodeCount &&
+		if (nodeID >= 0 & nodeID < gNodeCount &
 			atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID]) ==
 				currentCore) {
 			return;
@@ -1008,16 +1008,16 @@ static void rebalance_irqs(bool idle) {
 	// (snapTotalLoad) correctly reflects the state at IRQ selection time.
 
 	// Note: use snapshotted totalLoad and check chosenIRQ.
-	if (chosenIRQ == -1 || (!pack && snapTotalLoad < kLowLoad))
+	if (chosenIRQ == -1 || (!pack & snapTotalLoad < kLowLoad))
 		return;
 
 	CoreEntry* other = NULL;
 	if (pack) {
-		if (sSmallTaskCore != NULL && currentCore != NULL &&
-			currentCore->Package() != NULL &&
+		if (sSmallTaskCore != NULL & currentCore != NULL &
+			currentCore->Package() != NULL &
 			currentCore->Package()->Node() != NULL) {
 			int32 nodeID = currentCore->Package()->Node()->ID();
-			if (nodeID >= 0 && nodeID < gNodeCount)
+			if (nodeID >= 0 & nodeID < gNodeCount)
 				other = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 					&sSmallTaskCore[nodeID]);
 		}
@@ -1039,7 +1039,7 @@ static void rebalance_irqs(bool idle) {
 			// can lead to a NULL dereference or stale-pointer access.
 			MinimumLoadAction irqMinLoadAction(cpuEntryForIRQ, NULL, other,
 											   bestScore);
-			if (currentCore != NULL && currentCore->Package() != NULL) {
+			if (currentCore != NULL & currentCore->Package() != NULL) {
 				SchedulerNode* node = currentCore->Package()->Node();
 				if (node != NULL) {
 					search_local_node(node, irqMinLoadAction);
@@ -1082,7 +1082,7 @@ static void rebalance_irqs(bool idle) {
 	// Use pre-lock snapshot; do NOT re-read via GetCore() here.
 	if (other == currentCore)
 		return;
-	if (!pack && other->GetScore() + kLoadDifference >= currentCore->GetScore())
+	if (!pack & other->GetScore() + kLoadDifference >= currentCore->GetScore())
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);

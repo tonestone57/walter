@@ -97,7 +97,7 @@ public:
 						  bigtime_t now = 0);
 
 	SCHEDULER_INLINE void SetLastInterruptTime(bigtime_t interruptTime) {
-		StoreRelease64(fLastInterruptTime, (int64)interruptTime);
+		atomic_set64((int64 volatile*)&fLastInterruptTime, (int64)interruptTime);
 	}
 	SCHEDULER_INLINE void SetStolenInterruptTime(bigtime_t interruptTime);
 
@@ -116,11 +116,11 @@ public:
 	SCHEDULER_INLINE void Dies(bigtime_t now = 0);
 
 	SCHEDULER_INLINE bigtime_t WentSleep() const {
-		return (bigtime_t)LoadAcquire64(fWentSleep);
+		return (bigtime_t)atomic_get64((int64 volatile*)&fWentSleep);
 	}
 
 	SCHEDULER_INLINE bigtime_t WentSleepActive() const {
-		return (bigtime_t)LoadAcquire64(fWentSleepActive);
+		return (bigtime_t)atomic_get64((int64 volatile*)&fWentSleepActive);
 	}
 
 	// PutBack() and Enqueue() accept an optional 'now' timestamp for
@@ -145,15 +145,15 @@ public:
 	static bigtime_t sMaxLatency __attribute__((aligned(8)));
 
 	SCHEDULER_INLINE bigtime_t GetVirtualRuntime() const {
-		return (bigtime_t)LoadAcquire64(fVirtualRuntime);
+		return (bigtime_t)atomic_get64((int64 volatile*)&fVirtualRuntime);
 	}
 
 	SCHEDULER_INLINE int64 GetWeight() const {
-		return LoadAcquire64(fWeight);
+		return atomic_get64((int64 volatile*)&fWeight);
 	}
 
 	SCHEDULER_INLINE int64 GetLag() const {
-		return LoadAcquire64(fLag);
+		return atomic_get64((int64 volatile*)&fLag);
 	}
 
 	SCHEDULER_INLINE bool IsEligible(bigtime_t systemVirtualTime) const {
@@ -161,7 +161,7 @@ public:
 	}
 
 	SCHEDULER_INLINE void SetQuantum(bigtime_t quantum) {
-		StoreRelease64(fBaseQuantum, (int64)quantum);
+		atomic_set64((int64 volatile*)&fBaseQuantum, (int64)quantum);
 	}
 
 	SCHEDULER_INLINE bool IsEnqueued() const { return fEnqueued; }
@@ -187,11 +187,11 @@ public:
 
 	static void ComputeQuantumLengths();
 
-private:
 	// Must be called with the appropriate run-queue lock held (either
 	// CPUEntry::fQueueLock or CoreEntry::fQueueLock).
 	SCHEDULER_INLINE void _UpdatePriorityBoost(bigtime_t now);
 
+private:
 	void _ComputeNeededLoad(bigtime_t now = 0);
 	void _UpdateDeadline(bigtime_t now = 0);
 
@@ -319,12 +319,9 @@ inline void ThreadData::_UpdatePriorityBoost(bigtime_t now) {
 			fEnqueued = true;
 			fEnqueuedInCPURunQueue = true;
 		} else {
-			// Note: capture fCore under the assumption that the caller
-			// ALREADY holds the CoreRunQueueLocker for this core.
-			// The previous code attempted to acquire it again, causing a
-			// deadlock.  Re-acquisition is also unnecessary because
-			// MigrateTo() cannot change fCore while we hold the run-queue lock
-			// of the core we are currently enqueued in.
+			// Note: use atomic_pointer_get for safe core access.
+			// Re-insertion is required to maintain heap invariants when
+			// priority-dependent deadlines change.
 			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 			if (core != NULL) {
 				// Set state BEFORE removing to ensure no one sees a
@@ -368,14 +365,14 @@ inline void ThreadData::SetStolenInterruptTime(bigtime_t interruptTime) {
 
 	bigtime_t delta =
 		interruptTime -
-		(bigtime_t)LoadAcquire64(fLastInterruptTime);
+		(bigtime_t)atomic_get64((int64 volatile*)&fLastInterruptTime);
 	// Note: if interrupt_time goes backward (e.g. CPU accounting
 	// reset or wrap), delta is negative and fLastInterruptTime must be
 	// reset to the current interruptTime to restore correct accounting.
 	// Otherwise fLastInterruptTime stays at a "future" value permanently
 	// suppressing all stolen-time accounting for this thread.
 	if (delta > 0) {
-		AddRelease64(fStolenTime, (int64)delta);
+		atomic_add64((int64 volatile*)&fStolenTime, (int64)delta);
 	} else if (delta < 0) {
 		// Clock went backward; reset baseline to avoid permanent suppression.
 		// Do not add the negative delta - the time is simply unaccountable.
@@ -392,11 +389,11 @@ inline bigtime_t ThreadData::GetQuantumLeft() {
 
 	bigtime_t stolenTime __attribute__((aligned(8)));
 	do {
-		stolenTime = (bigtime_t)LoadAcquire64(fStolenTime);
-	} while ((bigtime_t)TestAndSet64(fStolenTime, 0, (int64)stolenTime) != stolenTime);
+		stolenTime = (bigtime_t)atomic_get64((int64 volatile*)&fStolenTime);
+	} while ((bigtime_t)atomic_test_and_set64((int64 volatile*)&fStolenTime, 0, (int64)stolenTime) != stolenTime);
 
 	bigtime_t quantum =
-		ComputeQuantum() - (bigtime_t)LoadAcquire64(fTimeUsed);
+		ComputeQuantum() - (bigtime_t)atomic_get64((int64 volatile*)&fTimeUsed);
 	quantum += stolenTime;
 	quantum = max_c(quantum, Scheduler::MinimalQuantum());
 	if (quantum > Scheduler::MaximumLatency())
@@ -407,7 +404,7 @@ inline bigtime_t ThreadData::GetQuantumLeft() {
 
 inline void ThreadData::StartQuantum(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
-	StoreRelease64(fQuantumStart, (int64)now);
+	atomic_set64((int64 volatile*)&fQuantumStart, (int64)now);
 }
 
 inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
@@ -418,7 +415,7 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 		now = system_time();
 
 	bigtime_t timeUsed =
-		now - (bigtime_t)LoadAcquire64(fQuantumStart);
+		now - (bigtime_t)atomic_get64((int64 volatile*)&fQuantumStart);
 	ASSERT(timeUsed >= 0);
 	// Note: cap fTimeUsed accumulation. Under extremely rapid
 	// rescheduling, fTimeUsed can accumulate to near B_INT64_MAX before the
@@ -431,12 +428,12 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 	const bigtime_t kMaxTimeUsed = Scheduler::MaximumLatency() * 2;
 	if (timeUsedTotal > kMaxTimeUsed) {
 		timeUsedTotal = kMaxTimeUsed;
-		StoreRelease64(fTimeUsed, (int64)kMaxTimeUsed);
+		atomic_set64((int64 volatile*)&fTimeUsed, (int64)kMaxTimeUsed);
 	}
 
 	bigtime_t quantum = ComputeQuantum();
 	if (timeUsedTotal >= quantum) {
-		StoreRelease64(fTimeUsed, 0);
+		atomic_set64((int64 volatile*)&fTimeUsed, 0);
 		_UpdateDeadline(now);
 		return true;
 	}
@@ -450,7 +447,7 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 		timeLeft = 0;
 		fInteractivityScore = min_c(fInteractivityScore + 20, 1000);
 	} else if (wasPreempted || timeLeft <= skipTime) {
-		AddRelease64(fStolenTime, (int64)timeLeft);
+		atomic_add64((int64 volatile*)&fStolenTime, (int64)timeLeft);
 		timeLeft = 0;
 
 		if (!wasPreempted) {
@@ -460,7 +457,7 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 	}
 
 	if (timeLeft == 0) {
-		StoreRelease64(fTimeUsed, 0);
+		atomic_set64((int64 volatile*)&fTimeUsed, 0);
 		_UpdateDeadline(now);
 		return true;
 	}
@@ -499,13 +496,13 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 	if (!IsIdle()) {
 		int32 prev = AddAcquireRelease(*const_cast<int32 volatile*>(&gTotalRunnableThreads), -1);
 		if (prev <= 0) {
-			int32 cur = LoadAcquire(gTotalRunnableThreads);
-			for (int32 i = 0; i < 100 && cur < 0; i++) {
+			int32 cur = atomic_get((int32 volatile*)&gTotalRunnableThreads);
+			for (int32 i = 0; i < 100 & cur < 0; i++) {
 				int32 was = cur;
-				if (TestAndSet(*const_cast<int32 volatile*>(&gTotalRunnableThreads), 0, (int32)(was)) == was) {
+				if (atomic_test_and_set((int32 volatile*)&gTotalRunnableThreads, 0, (int32)(was)) == was) {
 					break;
 				}
-				cur = LoadAcquire(gTotalRunnableThreads);
+				cur = atomic_get((int32 volatile*)&gTotalRunnableThreads);
 				memory_read_barrier();
 			}
 		}
@@ -523,9 +520,9 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 		fInteractivityScore = min_c(fInteractivityScore + 10, 1000);
 	}
 
-	StoreRelease64(fLastInterruptTime, 0);
+	atomic_set64((int64 volatile*)&fLastInterruptTime, 0);
 
-	StoreRelease64(fWentSleep, (int64)now);
+	atomic_set64((int64 volatile*)&fWentSleep, (int64)now);
 	// Note: fCore can be set to NULL by a concurrent MigrateTo() call.
 	// The original code checked for NULL once then called GetActiveTime() and
 	// RemoveLoad() in separate statements - if fCore became NULL between the
@@ -538,8 +535,8 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 	{
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
-		StoreRelease64(fWentSleepActive, (int64)((snap != NULL) ? snap->GetActiveTime() : 0));
-		if (gTrackCoreLoad && snap != NULL)
+		atomic_set64((int64 volatile*)&fWentSleepActive, (int64)((snap != NULL) ? snap->GetActiveTime() : 0));
+		if (gTrackCoreLoad & snap != NULL)
 			fLoadMeasurementEpoch = snap->RemoveLoad(fNeededLoad, false, now);
 	}
 	fReady = false;
@@ -556,13 +553,13 @@ inline void ThreadData::Dies(bigtime_t now) {
 	if (!IsIdle()) {
 		int32 prev = AddAcquireRelease(*const_cast<int32 volatile*>(&gTotalRunnableThreads), -1);
 		if (prev <= 0) {
-			int32 cur = LoadAcquire(gTotalRunnableThreads);
-			for (int32 i = 0; i < 100 && cur < 0; i++) {
+			int32 cur = atomic_get((int32 volatile*)&gTotalRunnableThreads);
+			for (int32 i = 0; i < 100 & cur < 0; i++) {
 				int32 was = cur;
-				if (TestAndSet(*const_cast<int32 volatile*>(&gTotalRunnableThreads), 0, (int32)(was)) == was) {
+				if (atomic_test_and_set((int32 volatile*)&gTotalRunnableThreads, 0, (int32)(was)) == was) {
 					break;
 				}
-				cur = LoadAcquire(gTotalRunnableThreads);
+				cur = atomic_get((int32 volatile*)&gTotalRunnableThreads);
 				memory_read_barrier();
 			}
 		}
@@ -659,15 +656,15 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			locker.Unlock();
 			pinned = false;	 // float
 		} else {
-			if (!wasReady && !IsRealTime())
+			if (!wasReady & !IsRealTime())
 				_UpdateDeadline(now);
 
 			// defer the gTotalRunnableThreads increment until after the
 			// CPUCount guard in the non-pinned path (see below).  For the
 			// pinned path the CPU liveness check happens under
 			// CPURunQueueLocker.
-			if (!wasReady && !IsIdle())
-				AddRelease(gTotalRunnableThreads, 1);
+			if (!wasReady & !IsIdle())
+				atomic_add((int32 volatile*)&gTotalRunnableThreads, 1);
 
 			fReady = true;
 			fThread->state = B_THREAD_READY;
@@ -726,14 +723,14 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 				return false;
 			}
 			// Note: AddLoad happens here, after all early-return guards.
-			if (gTrackCoreLoad && !wasReady) {
+			if (gTrackCoreLoad & !wasReady) {
 				bigtime_t timeSlept =
-					now - (bigtime_t)LoadAcquire64(fWentSleep);
+					now - (bigtime_t)atomic_get64((int64 volatile*)&fWentSleep);
 				bool updateLoad = timeSlept > 0;
 				core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad,
 							  now);
 				if (updateLoad) {
-					AddRelease64(fMeasureAvailableTime, (int64)timeSlept);
+					atomic_add64((int64 volatile*)&fMeasureAvailableTime, (int64)timeSlept);
 					_ComputeNeededLoad(now);
 				}
 			}
@@ -741,27 +738,27 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			fStolen = false;
 		} else if (core->CPUCount() == 0) {
 			return false;
-		} else if (!wasReady && gTrackCoreLoad) {
+		} else if (!wasReady & gTrackCoreLoad) {
 			// Note: for non-stolen threads, AddLoad after CPUCount guard.
 			// Note: ensure AddLoad captures the full sleep time when a thread
 			// is woken up.
 			bigtime_t timeSlept =
-				now - (bigtime_t)LoadAcquire64(fWentSleep);
+				now - (bigtime_t)atomic_get64((int64 volatile*)&fWentSleep);
 			bool updateLoad = timeSlept > 0;
 			core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad, now);
 			if (updateLoad) {
-				AddRelease64(fMeasureAvailableTime, (int64)timeSlept);
+				atomic_add64((int64 volatile*)&fMeasureAvailableTime, (int64)timeSlept);
 				_ComputeNeededLoad(now);
 			}
 		}
 
-		if (!wasReady && !IsRealTime())
+		if (!wasReady & !IsRealTime())
 			_UpdateDeadline(now);
 
 		// defer the gTotalRunnableThreads increment until after the
 		// CPUCount guard in the non-pinned path.
-		if (!wasReady && !IsIdle())
-			AddRelease(gTotalRunnableThreads, 1);
+		if (!wasReady & !IsIdle())
+			atomic_add((int32 volatile*)&gTotalRunnableThreads, 1);
 
 		fReady = true;
 		fThread->state = B_THREAD_READY;
@@ -833,7 +830,7 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 	// Optimization: Pre-calculate lookahead horizon
 	if (maxLatency == 0)
 		maxLatency =
-			(bigtime_t)LoadAcquire64(sMaxLatency);
+			(bigtime_t)atomic_get64((int64 volatile*)&sMaxLatency);
 	const bigtime_t kLookahead = maxLatency * 1000LL;
 
 	if (now == 0) {
@@ -846,7 +843,7 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 		(now > B_INT64_MAX - kLookahead) ? B_INT64_MAX : now + kLookahead;
 
 	const bigtime_t threshold = ceiling - delta;
-	bigtime_t vRuntime = (bigtime_t)LoadAcquire64(fVirtualRuntime);
+	bigtime_t vRuntime = (bigtime_t)atomic_get64((int64 volatile*)&fVirtualRuntime);
 
 	while (true) {
 		bigtime_t next;
@@ -858,7 +855,7 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 			break;
 
 		// Optimization: Reuse the value returned by the CAS if it fails
-		bigtime_t old = (bigtime_t)TestAndSet64(fVirtualRuntime, (int64)((uint64)next), (int64)vRuntime);
+		bigtime_t old = (bigtime_t)atomic_test_and_set64((int64 volatile*)&fVirtualRuntime, (int64)next, (int64)vRuntime);
 		if (old == vRuntime)
 			break;
 		vRuntime = old;
@@ -868,7 +865,7 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (!IsRealTime() && !IsIdle()) {
+	if (!IsRealTime() & !IsIdle()) {
 		// Note: Formal fair-share runtime update.
 		// delta = (active * kFairShareReferenceWeight) / Weight
 		int64 weight = GetWeight();
@@ -886,7 +883,7 @@ inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t now) {
 			if (cpu->Core() == core) {
 				bigtime_t svt = cpu->SystemVirtualTime();
 				int64 lag = (svt - GetVirtualRuntime()) * weight;
-				StoreRelease64(fLag, lag);
+				atomic_set64((int64 volatile*)&fLag, lag);
 			}
 		}
 	}
@@ -894,8 +891,8 @@ inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t now) {
 	if (!gTrackCoreLoad)
 		return;
 
-	AddRelease64(fMeasureAvailableTime, (int64)active);
-	AddRelease64(fMeasureAvailableActiveTime, (int64)active);
+	atomic_add64((int64 volatile*)&fMeasureAvailableTime, (int64)active);
+	atomic_add64((int64 volatile*)&fMeasureAvailableActiveTime, (int64)active);
 }
 
 }  // namespace Scheduler

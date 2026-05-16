@@ -32,12 +32,12 @@ static bigtime_t sVirtualDeadlineSlices[THREAD_MAX_SET_PRIORITY + 1]
 bigtime_t ThreadData::sMaxLatency __attribute__((aligned(8)));
 
 void ThreadData::_InitBase() {
-	StoreRelease64(fStolenTime, 0);
-	StoreRelease64(fQuantumStart, 0);
-	StoreRelease64(fLastInterruptTime, 0);
+	atomic_set64((int64 volatile*)&fStolenTime, 0);
+	atomic_set64((int64 volatile*)&fQuantumStart, 0);
+	atomic_set64((int64 volatile*)&fLastInterruptTime, 0);
 
-	StoreRelease64(fWentSleep, 0);
-	StoreRelease64(fWentSleepActive, 0);
+	atomic_set64((int64 volatile*)&fWentSleep, 0);
+	atomic_set64((int64 volatile*)&fWentSleepActive, 0);
 
 	fEnqueued = false;
 	fEnqueuedInCPURunQueue = false;
@@ -47,22 +47,21 @@ void ThreadData::_InitBase() {
 	fHomePackage = -1;
 
 	fEffectivePriority = GetPriority();
-	StoreRelease64(fBaseQuantum,
-		(int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
+	atomic_set64((int64 volatile*)&fBaseQuantum, (int64)atomic_get64((int64 volatile*)&sQuantumLengths[min_c(GetEffectivePriority(),
 				THREAD_MAX_SET_PRIORITY)]));
 
-	StoreRelease64(fTimeUsed, 0);
+	atomic_set64((int64 volatile*)&fTimeUsed, 0);
 
-	StoreRelease64(fMeasureAvailableActiveTime, 0);
-	StoreRelease64(fLastMeasureAvailableTime, 0);
-	StoreRelease64(fMeasureAvailableTime, 0);
+	atomic_set64((int64 volatile*)&fMeasureAvailableActiveTime, 0);
+	atomic_set64((int64 volatile*)&fLastMeasureAvailableTime, 0);
+	atomic_set64((int64 volatile*)&fMeasureAvailableTime, 0);
 
-	StoreRelease64(fWeight, get_weight(fEffectivePriority));
-	StoreRelease64(fRequestSize, 5000); // 5ms default
-	StoreRelease64(fLag, 0);
+	atomic_set64((int64 volatile*)&fWeight, get_weight(fEffectivePriority));
+	atomic_set64((int64 volatile*)&fRequestSize, 5000); // 5ms default
+	atomic_set64((int64 volatile*)&fLag, 0);
 
-	StoreRelease64(fVirtualRuntime, 0);
-	StoreRelease64(fVirtualDeadline, 0);
+	atomic_set64((int64 volatile*)&fVirtualRuntime, 0);
+	atomic_set64((int64 volatile*)&fVirtualDeadline, 0);
 
 	fInteractivityScore = 500;
 
@@ -91,11 +90,11 @@ inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 	const bool useMask = !mask.IsEmpty();
 	ASSERT(!useMask || mask.Matches(core->CPUMask()));
 
-	if (fThread->previous_cpu != NULL && !fThread->previous_cpu->disabled &&
+	if (fThread->previous_cpu != NULL & !fThread->previous_cpu->disabled &
 		(!useMask || mask.GetBit(fThread->previous_cpu->cpu_num))) {
 		CPUEntry* previousCPU =
 			CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
-		if (previousCPU->Core() == core &&
+		if (previousCPU->Core() == core &
 			CPUPriorityHeap::GetKey(previousCPU) <= threadPriority) {
 			// Optimization: Prioritize the previous CPU if it is in the same
 			// core to maximize cache warmth (L1/L2 hits).
@@ -119,7 +118,7 @@ inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 		if (cpu == NULL)
 			break;
 
-		if (useMask && !mask.GetBit(cpu->ID()))
+		if (useMask & !mask.GetBit(cpu->ID()))
 			continue;
 
 		int32 key = CPUPriorityHeap::GetKey(cpu);
@@ -164,10 +163,10 @@ void ThreadData::Init(bigtime_t now) {
 		bigtime_t vrt __attribute__((aligned(8)));
 		int retries = 0;
 		do {
-			homeA = LoadAcquire(currentThreadData->fHomePackage);
-			vrt = (bigtime_t)LoadAcquire64(currentThreadData->fVirtualRuntime);
-			homeB = LoadAcquire(currentThreadData->fHomePackage);
-		} while (homeA != homeB && ++retries < 8);
+			homeA = atomic_get((int32 volatile*)&currentThreadData->fHomePackage);
+			vrt = (bigtime_t)atomic_get64((int64 volatile*)&currentThreadData->fVirtualRuntime);
+			homeB = atomic_get((int32 volatile*)&currentThreadData->fHomePackage);
+		} while (homeA != homeB & ++retries < 8);
 
 		if (homeA != homeB) {
 			// failed to get consistent snapshot, fallback to safe defaults
@@ -175,12 +174,12 @@ void ThreadData::Init(bigtime_t now) {
 			homeB = -1;
 		}
 
-		StoreRelease64(fVirtualRuntime, (int64)vrt);
-		StoreRelease(fHomePackage, homeB);
+		atomic_set64((int64 volatile*)&fVirtualRuntime, (int64)vrt);
+		atomic_set((int32 volatile*)&fHomePackage, homeB);
 	} else {
 		fNeededLoad = 0;
-		StoreRelease64(fVirtualRuntime, 0);
-		StoreRelease(fHomePackage, -1);
+		atomic_set64((int64 volatile*)&fVirtualRuntime, 0);
+		atomic_set((int32 volatile*)&fHomePackage, -1);
 	}
 
 	if (!IsRealTime()) {
@@ -202,27 +201,27 @@ void ThreadData::Init(CoreEntry* core) {
 
 
 void ThreadData::Dump() const {
-	kprintf("\thome_package:\t\t%" B_PRId32 "\n", LoadAcquire(fHomePackage));
+	kprintf("\thome_package:\t\t%" B_PRId32 "\n", atomic_get((int32 volatile*)&fHomePackage));
 
 	kprintf("\teffective_priority:\t%" B_PRId32 "\n", GetEffectivePriority());
 
 	kprintf("\ttime_used:\t\t%" B_PRId64 " us (quantum: %" B_PRId64 " us)\n",
-			(bigtime_t)LoadAcquire64(fTimeUsed),
+			(bigtime_t)atomic_get64((int64 volatile*)&fTimeUsed),
 			ComputeQuantum());
 	kprintf("\tstolen_time:\t\t%" B_PRId64 " us\n",
-			(bigtime_t)LoadAcquire64(fStolenTime));
+			(bigtime_t)atomic_get64((int64 volatile*)&fStolenTime));
 	kprintf("\tquantum_start:\t\t%" B_PRId64 " us\n",
-			(bigtime_t)LoadAcquire64(fQuantumStart));
+			(bigtime_t)atomic_get64((int64 volatile*)&fQuantumStart));
 	kprintf("\tneeded_load:\t\t%" B_PRId32 "%%\n", fNeededLoad / 10);
 	kprintf("\twent_sleep:\t\t%" B_PRId64 "\n",
-			(bigtime_t)LoadAcquire64(fWentSleep));
+			(bigtime_t)atomic_get64((int64 volatile*)&fWentSleep));
 	kprintf("\twent_sleep_active:\t%" B_PRId64 "\n",
-			(bigtime_t)LoadAcquire64(fWentSleepActive));
+			(bigtime_t)atomic_get64((int64 volatile*)&fWentSleepActive));
 	kprintf("\tinteractivity_score:\t%" B_PRId32 "\n", fInteractivityScore);
 
 	CoreEntry* core = Core();
 	kprintf("\tcore:\t\t\t%" B_PRId32 "\n", core != NULL ? core->ID() : -1);
-	if (core != NULL && HasCacheExpired())
+	if (core != NULL & HasCacheExpired())
 		kprintf("\tcache affinity has expired\n");
 	if (fQuickStartCredit)
 		kprintf("\tquick start credit is set\n");
@@ -247,16 +246,16 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 	for (int32 retry = 0; retry < maxRetries; retry++) {
 		bool rescheduleNeeded = false;
 
-		if (targetCore != NULL &&
-			(useMask && mask.And(targetCore->CPUMask()).IsEmpty())) {
+		if (targetCore != NULL &
+			(useMask & mask.And(targetCore->CPUMask()).IsEmpty())) {
 			targetCore = NULL;
 		}
-		if (targetCPU != NULL && (useMask && !mask.GetBit(targetCPU->ID())))
+		if (targetCPU != NULL & (useMask & !mask.GetBit(targetCPU->ID())))
 			targetCPU = NULL;
 
-		if (targetCore == NULL && targetCPU != NULL)
+		if (targetCore == NULL & targetCPU != NULL)
 			targetCore = targetCPU->Core();
-		else if (targetCore != NULL && targetCPU == NULL) {
+		else if (targetCore != NULL & targetCPU == NULL) {
 			// If we have a core hint, verify its load under its lock before
 			// accepting it. This prevents overloading the waker's core.
 			if (targetCore->GetLoad() >= kHighLoad)
@@ -269,7 +268,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 			}
 		}
 
-		if (targetCore == NULL && targetCPU == NULL) {
+		if (targetCore == NULL & targetCPU == NULL) {
 			targetCore = _ChooseCore(mask, now);
 			// Note: _ChooseCore() (which delegates to choose_core in
 			// low_latency.cpp / power_saving.cpp) can return NULL when all
@@ -329,11 +328,11 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 				// Note: verify CPU affinity mask before selecting.
 				// Without this check a thread pinned to CPUs {2,3} could
 				// be assigned to CPU 0 during hot-unplug, violating affinity.
-				if (!mask.IsEmpty() && !mask.GetBit(i))
+				if (!mask.IsEmpty() & !mask.GetBit(i))
 					continue;
 				targetCPU = CPUEntry::GetCPU(i);
 				targetCore = targetCPU->Core();
-				if (targetCore != NULL && targetCore->CPUCount() > 0)
+				if (targetCore != NULL & targetCore->CPUCount() > 0)
 					break;
 			}
 		}
@@ -348,7 +347,7 @@ bigtime_t ThreadData::ComputeQuantum() const {
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (IsRealTime())
-		return (bigtime_t)LoadAcquire64(fBaseQuantum);
+		return (bigtime_t)atomic_get64((int64 volatile*)&fBaseQuantum);
 
 	// Note: ComputeQuantum is only called while the caller holds
 	// SchedulerModeLocker (wait-free RCU).
@@ -494,10 +493,10 @@ void ThreadData::UnassignCore(bool running) {
 /* static */ void ThreadData::ComputeQuantumLengths() {
 	SCHEDULER_ENTER_FUNCTION();
 
-	StoreRelease64(sMaxLatency, (int64)Scheduler::MaximumLatency());
+	atomic_set64((int64 volatile*)&sMaxLatency, (int64)Scheduler::MaximumLatency());
 
 	const bigtime_t kBaseSlice =
-		(bigtime_t)LoadAcquire64(Scheduler::gDeadlineBucketSize);
+		(bigtime_t)atomic_get64((int64 volatile*)&Scheduler::gDeadlineBucketSize);
 	const bigtime_t kQuantum0 = Scheduler::BaseQuantum();
 	const bigtime_t kQuantum1 = kQuantum0 * Scheduler::QuantumMultiplier(0);
 	const bigtime_t kQuantum2 = kQuantum0 * Scheduler::QuantumMultiplier(1);
@@ -506,16 +505,16 @@ void ThreadData::UnassignCore(bool running) {
 		const int32 kBaseWeight = 10;
 		int32 taskWeight = max_c(1, priority);
 
-		StoreRelease64(sVirtualDeadlineSlices[priority], (int64)(kBaseSlice * kBaseWeight / taskWeight));
+		atomic_set64((int64 volatile*)&sVirtualDeadlineSlices[priority], (int64)(kBaseSlice * kBaseWeight / taskWeight));
 
 		if (priority >= B_URGENT_DISPLAY_PRIORITY) {
-			StoreRelease64(sQuantumLengths[priority], (int64)kQuantum0);
+			atomic_set64((int64 volatile*)&sQuantumLengths[priority], (int64)kQuantum0);
 		} else if (priority > B_NORMAL_PRIORITY) {
-			StoreRelease64(sQuantumLengths[priority], (int64)_ScaleQuantum(kQuantum1, kQuantum0,
+			atomic_set64((int64 volatile*)&sQuantumLengths[priority], (int64)_ScaleQuantum(kQuantum1, kQuantum0,
 									  B_URGENT_DISPLAY_PRIORITY,
 									  B_NORMAL_PRIORITY, priority));
 		} else {
-			StoreRelease64(sQuantumLengths[priority], (int64)_ScaleQuantum(kQuantum2, kQuantum1, B_NORMAL_PRIORITY,
+			atomic_set64((int64 volatile*)&sQuantumLengths[priority], (int64)_ScaleQuantum(kQuantum2, kQuantum1, B_NORMAL_PRIORITY,
 									  B_IDLE_PRIORITY, priority));
 		}
 	}
@@ -536,14 +535,14 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 		now = system_time();
 
 	bigtime_t timeUsed =
-		now - (bigtime_t)LoadAcquire64(fQuantumStart);
+		now - (bigtime_t)atomic_get64((int64 volatile*)&fQuantumStart);
 	ASSERT(timeUsed >= 0);
-	AddRelease64(fTimeUsed, (int64)timeUsed);
+	atomic_add64((int64 volatile*)&fTimeUsed, (int64)timeUsed);
 
 	bigtime_t quantum = ComputeQuantum();
 	bigtime_t timeLeft =
 		quantum -
-		(bigtime_t)LoadAcquire64(fTimeUsed);
+		(bigtime_t)atomic_get64((int64 volatile*)&fTimeUsed);
 	if (timeLeft > 0) {
 		// Donate remaining slice to the beneficiary.
 		// Callers MUST NOT hold any run-queue spinlock when invoking this
@@ -557,13 +556,13 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 		// are already disabled by the caller's contract.
 		ASSERT(!are_interrupts_enabled());
 		SpinLocker locker(beneficiary->scheduler_lock);
-		AddRelease64(beneficiaryData->fStolenTime, (int64)timeLeft);
+		atomic_add64((int64 volatile*)&beneficiaryData->fStolenTime, (int64)timeLeft);
 	}
 
 	// Exhaust donor slice: we expect the donor to yield or be descheduled
 	// immediately after this call to prevent double-dipping.
-	StoreRelease64(fQuantumStart, (int64)now);
-	StoreRelease64(fTimeUsed, (int64)quantum);
+	atomic_set64((int64 volatile*)&fQuantumStart, (int64)now);
+	atomic_set64((int64 volatile*)&fTimeUsed, (int64)quantum);
 }
 
 
@@ -578,18 +577,18 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 	int32 oldLoad;
 	do {
 		bigtime_t lastMeasureTime =
-			(bigtime_t)LoadAcquire64(fLastMeasureAvailableTime);
+			(bigtime_t)atomic_get64((int64 volatile*)&fLastMeasureAvailableTime);
 		measureActiveTime =
-			(bigtime_t)LoadAcquire64(fMeasureAvailableActiveTime);
+			(bigtime_t)atomic_get64((int64 volatile*)&fMeasureAvailableActiveTime);
 		bigtime_t tempLastMeasureTime = lastMeasureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
 		oldLoad = compute_load(tempLastMeasureTime, tempMeasureActiveTime,
 							   fNeededLoad, now);
 		if (oldLoad < 0)
 			break;
-		if (TestAndSet64(fMeasureAvailableActiveTime, (int64)((uint64)tempMeasureActiveTime), (int64)measureActiveTime) ==
+		if (atomic_test_and_set64((int64 volatile*)&fMeasureAvailableActiveTime, (int64)tempMeasureActiveTime, (int64)measureActiveTime) ==
 			(uint64)measureActiveTime) {
-			StoreRelease64(fLastMeasureAvailableTime, (int64)tempLastMeasureTime);
+			atomic_set64((int64 volatile*)&fLastMeasureAvailableTime, (int64)tempLastMeasureTime);
 			break;
 		}
 	} while (true);
@@ -626,7 +625,7 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 	int64 weight = GetWeight();
 	if (weight <= 0) weight = 1;
 
-	bigtime_t requestSize = LoadAcquire64(fRequestSize);
+	bigtime_t requestSize = atomic_get64((int64 volatile*)&fRequestSize);
 	if (requestSize <= 0) requestSize = 5000;
 
 	bigtime_t slice = (requestSize * 1000) / weight;
@@ -639,7 +638,7 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 			slice = kMinSlice;
 	}
 
-	StoreRelease64(fVirtualDeadline, (int64)(GetVirtualRuntime() + slice));
+	atomic_set64((int64 volatile*)&fVirtualDeadline, (int64)(GetVirtualRuntime() + slice));
 
 	_ComputeEffectivePriority(now);
 }
@@ -651,14 +650,14 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 	// Cache bucket size: avoids redundant atomic reads on this hot path.
 	// The value is effectively constant within a scheduling decision.
 	const bigtime_t bucketSize =
-		(bigtime_t)LoadAcquire64(Scheduler::gDeadlineBucketSize);
+		(bigtime_t)atomic_get64((int64 volatile*)&Scheduler::gDeadlineBucketSize);
 
 	// Note: guard against division-by-zero if bucketSize is 0.
 	// This can occur transiently during mode initialisation before
 	// ComputeQuantumLengths() sets gDeadlineBucketSize to a positive value.
 	if (bucketSize <= 0) {
 		fEffectivePriority = GetPriority();
-		StoreRelease64(fBaseQuantum, (int64)Scheduler::MinimalQuantum());
+		atomic_set64((int64 volatile*)&fBaseQuantum, (int64)Scheduler::MinimalQuantum());
 		return;
 	}
 
@@ -673,7 +672,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		// If Deadline is far, Urgency is 0.
 
 		bigtime_t diff =
-			(bigtime_t)LoadAcquire64(fVirtualDeadline) -
+			(bigtime_t)atomic_get64((int64 volatile*)&fVirtualDeadline) -
 			now;
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
@@ -691,7 +690,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 
 		// Urgency Bonus: Grant foreground threads a "head start" in priority.
 		if (fIsForeground) {
-			if (bucketSize > 0 && diff > B_INT64_MIN + bucketSize)
+			if (bucketSize > 0 & diff > B_INT64_MIN + bucketSize)
 				diff -= bucketSize;
 			else if (bucketSize > 0)
 				diff = B_INT64_MIN;
@@ -700,7 +699,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 			// threads
 			if (fInteractivityScore > 750) {
 				bigtime_t half = bucketSize / 2;
-				if (half > 0 && diff > B_INT64_MIN + half)
+				if (half > 0 & diff > B_INT64_MIN + half)
 					diff -= half;
 				else if (half > 0)
 					diff = B_INT64_MIN;
@@ -727,8 +726,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		fEffectivePriority = (int32)urgency;
 	}
 
-	StoreRelease64(fBaseQuantum,
-		(int64)LoadAcquire64(sQuantumLengths[GetEffectivePriority()]));
+	atomic_set64((int64 volatile*)&fBaseQuantum, (int64)atomic_get64((int64 volatile*)&sQuantumLengths[GetEffectivePriority()]));
 }
 
 /* static */ bigtime_t ThreadData::_ScaleQuantum(bigtime_t maxQuantum,
@@ -763,7 +761,7 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 	// cores are disabled.  Assigning NULL core effectively parks the
 	// thread until a core becomes available.
 	if (targetCore == NULL) {
-		if (fReady && gTrackCoreLoad) {
+		if (fReady & gTrackCoreLoad) {
 			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 			if (core != NULL)
 				core->RemoveLoad(fNeededLoad, true, now);
@@ -811,7 +809,7 @@ void ThreadData::ResetPriorityBoost(bigtime_t now) {
 	// threads that have just been woken after a long sleep (fVirtualDeadline
 	// far in the past). Update the deadline first so the priority reflects
 	// current scheduling state.
-	if (!IsIdle() && !IsRealTime())
+	if (!IsIdle() & !IsRealTime())
 		_UpdateDeadline(now);
 
 	_ComputeEffectivePriority(now);

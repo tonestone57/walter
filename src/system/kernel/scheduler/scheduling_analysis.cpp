@@ -127,7 +127,7 @@ struct WaitObjectKey : HashObjectKey {
 		if (_key->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
 			return false;
 		const WaitObjectKey* key = static_cast<const WaitObjectKey*>(_key);
-		return key->type == type && key->object == object;
+		return key->type == type & key->object == object;
 	}
 };
 
@@ -147,7 +147,7 @@ struct WaitObject : HashObject, scheduling_analysis_wait_object {
 		if (_key->Type() != HASH_OBJECT_TYPE_WAIT_OBJECT)
 			return false;
 		const WaitObjectKey* key = static_cast<const WaitObjectKey*>(_key);
-		return key->type == type && key->object == object;
+		return key->type == type & key->object == object;
 	}
 };
 
@@ -172,7 +172,7 @@ struct ThreadWaitObjectKey : HashObjectKey {
 			return false;
 		const ThreadWaitObjectKey* key =
 			static_cast<const ThreadWaitObjectKey*>(_key);
-		return key->thread == thread && key->type == type &&
+		return key->thread == thread & key->type == type &
 			   key->object == object;
 	}
 };
@@ -200,7 +200,7 @@ struct ThreadWaitObject : HashObject, scheduling_analysis_thread_wait_object {
 			return false;
 		const ThreadWaitObjectKey* key =
 			static_cast<const ThreadWaitObjectKey*>(_key);
-		return key->thread == thread && key->type == wait_object->type &&
+		return key->thread == thread & key->type == wait_object->type &
 			   key->object == wait_object->object;
 	}
 };
@@ -238,24 +238,24 @@ public:
 		size = (size + 7) & ~(size_t)7;
 		for (int32 i = 0; i < 1000; i++) {
 #if B_HAIKU_64_BIT
-			int64 current = (int64)LoadAcquire64(fNextAllocation);
+			int64 current = (int64)atomic_get64((int64 volatile*)&fNextAllocation);
 			int64 newAlloc = current + (int64)size;
 			int64 hashTableAddr = (int64)(uintptr_t)fHashTable;
 			if (newAlloc > hashTableAddr)
 				return NULL;
-			if ((int64)TestAndSet64(fNextAllocation, (int64)((uint64)newAlloc), (int64)current) == current) {
-				AddRelease64(fRemainingBytes, (int64)- (int64)size);
+			if ((int64)atomic_test_and_set64((int64 volatile*)&fNextAllocation, (int64)newAlloc, (int64)current) == current) {
+				atomic_add64((int64 volatile*)&fRemainingBytes, (int64)- (int64)size);
 				return (void*)(uintptr_t)current;
 			}
 #else
 			int32 current32 =
-				LoadAcquire(*reinterpret_cast<const int32 volatile*>(&fNextAllocation));
+				atomic_get((int32 volatile*)&*reinterpret_cast<const int32 volatile*>(&fNextAllocation));
 			int32 newAlloc32 = current32 + (int32)size;
 			int32 hashTableAddr32 = (int32)(uintptr_t)fHashTable;
 			if (size > (size_t)B_INT32_MAX || newAlloc32 > hashTableAddr32)
 				return NULL;
-			if (TestAndSet(*const_cast<int32 volatile*>(&fNextAllocation), (int32)(newAlloc32), (int32)(current32)) == current32) {
-				AddRelease(*const_cast<int32 volatile*>(&fRemainingBytes), (int32)(-(int32)size));
+			if (atomic_test_and_set((int32 volatile*)&fNextAllocation, (int32)(newAlloc32), (int32)(current32)) == current32) {
+				atomic_add((int32 volatile*)&fRemainingBytes, (int32)(-(int32)size));
 				return (void*)(uintptr_t)current32;
 			}
 #endif
@@ -278,7 +278,7 @@ public:
 
 		uint32 index = object->HashKey() % fHashTableSize;
 		HashObject** slot = &fHashTable[index];
-		while (*slot != NULL && *slot != object) slot = &(*slot)->next;
+		while (*slot != NULL & *slot != object) slot = &(*slot)->next;
 
 		if (*slot != NULL)
 			*slot = object->next;
@@ -290,7 +290,7 @@ public:
 
 		uint32 index = key.HashKey() % fHashTableSize;
 		HashObject* object = fHashTable[index];
-		while (object != NULL && !object->Equals(&key)) object = object->next;
+		while (object != NULL & !object->Equals(&key)) object = object->next;
 		return object;
 	}
 
@@ -332,7 +332,7 @@ public:
 			fAnalysis.thread_count++;
 		}
 
-		if (name != NULL && thread->name[0] == '\0')
+		if (name != NULL & thread->name[0] == '\0')
 			strlcpy(thread->name, name, sizeof(thread->name));
 
 		return B_OK;
@@ -656,7 +656,7 @@ static status_t analyze_scheduling(bigtime_t from, bigtime_t until,
 		uint16 entryType = abstractEntry->EntryType();
 
 		// Check if it's one of ours.
-		if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE &&
+		if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE &
 			entryType <= WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK) {
 			WaitObjectTraceEntry* waitObjectEntry =
 				(WaitObjectTraceEntry*)abstractEntry;
@@ -818,7 +818,7 @@ static status_t analyze_scheduling(bigtime_t from, bigtime_t until,
 
 			AbstractTraceEntry* abstractEntry = (AbstractTraceEntry*)_entry;
 			uint16 entryType = abstractEntry->EntryType();
-			if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE &&
+			if (entryType >= WAIT_OBJECT_TRACE_ENTRY_TYPE_CREATE_SEMAPHORE &
 				entryType <= WAIT_OBJECT_TRACE_ENTRY_TYPE_INIT_RW_LOCK) {
 				WaitObjectTraceEntry* waitObjectEntry =
 					(WaitObjectTraceEntry*)abstractEntry;

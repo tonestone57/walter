@@ -69,7 +69,7 @@ class RunQueue {
 	typedef Scheduler::RunQueueTraits<Element> Traits;
 
 public:
-	inline bool IsEmpty() const { return LoadAcquire(fTotalCount) == 0; }
+	inline bool IsEmpty() const { return atomic_get((int32 volatile*)&fTotalCount) == 0; }
 
 	RunQueue();
 
@@ -96,7 +96,7 @@ public:
 
 	void Remove(Element* element);
 
-	inline int32 Count() const { return LoadAcquire(fTotalCount); }
+	inline int32 Count() const { return atomic_get((int32 volatile*)&fTotalCount); }
 
 	class ConstIterator {
 	public:

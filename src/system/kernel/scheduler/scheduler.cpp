@@ -85,8 +85,7 @@ void scheduler_synchronize() {
 	// Update current CPU generation to match, so future synchronizations
 	// don't wait for us unnecessarily, and so that we don't deadlock if another
 	// CPU is also waiting for us in scheduler_synchronize().
-	StoreRelease64(CPUEntry::GetCPU(thisCPU)->fRCULastGeneration,
-				 targetGen);
+	atomic_set64((int64 volatile*)&CPUEntry::GetCPU(thisCPU)->fRCULastGeneration, targetGen);
 
 	// Broadcast an ICI to all other enabled CPUs to force them into a quiescent
 	// state (reschedule).
@@ -103,7 +102,7 @@ void scheduler_synchronize() {
 			continue;
 
 		CPUEntry* cpu = CPUEntry::GetCPU(i);
-		while (LoadAcquire64(cpu->fRCULastGeneration) < targetGen) {
+		while (atomic_get64((int64 volatile*)&cpu->fRCULastGeneration) < targetGen) {
 			if (gCPU[i].disabled)
 				break;
 			cpu_pause();
@@ -151,19 +150,18 @@ static void UpdateDeadlineScalingScalable() {
 static void update_quantum_lengths_dpc(void* /*arg*/) {
 	// Use the latest requested target from sPendingDPCTarget
 	// instead of the stale value passed via arg.
-	int64 targetResolution = (int64)LoadAcquire(sPendingDPCTarget);
+	int64 targetResolution = (int64)atomic_get((int32 volatile*)&sPendingDPCTarget);
 
 	{
 		InterruptsBigSchedulerLocker locker;
-		if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
-			StoreRelease64(gDeadlineBucketSize,
-				targetResolution);
+		if (atomic_get64((int64 volatile*)&gDeadlineBucketSize) != targetResolution) {
+			atomic_set64((int64 volatile*)&gDeadlineBucketSize, targetResolution);
 			UpdateDeadlineScalingScalable();
 		}
 	}
 	scheduler_synchronize();
 
-	StoreRelease(sDPCPending, 0);
+	atomic_set((int32 volatile*)&sDPCPending, 0);
 }
 
 
@@ -178,16 +176,16 @@ static status_t interaction_timer_hook(struct timer* timer) {
 	//
 	// By clearing sTimerArmed first we allow re-arming immediately if needed,
 	// and the DPC guard (sDPCPending) prevents duplicate DPC enqueueing.
-	StoreRelease(sTimerArmed, 0);
+	atomic_set((int32 volatile*)&sTimerArmed, 0);
 
-	StoreRelease(sPendingDPCTarget, 5000);
-	if (GetAndSet(sDPCPending, 1) == 0) {
-		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
+	atomic_set((int32 volatile*)&sPendingDPCTarget, 5000);
+	if (atomic_get_and_set((int32 volatile*)&sDPCPending, 1) == 0) {
+		int64 target = (int64)atomic_get((int32 volatile*)&sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
 			B_OK) {
-			StoreRelease(sDPCPending, 0);
-			StoreRelease(sPendingDPCTarget, 0);
+			atomic_set((int32 volatile*)&sDPCPending, 0);
+			atomic_set((int32 volatile*)&sPendingDPCTarget, 0);
 			// DPC queue full; sTimerArmed already cleared above so the
 			// next interaction event can re-arm the timer.
 		}
@@ -217,11 +215,11 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// read twice below and the two reads could observe different values if a
 	// concurrent DPC is updating it.  A single cached read is also cheaper on
 	// the hot path.
-	int64 currentBucketSize = LoadAcquire64(gDeadlineBucketSize);
+	int64 currentBucketSize = atomic_get64((int64 volatile*)&gDeadlineBucketSize);
 
 	if (now == 0)
 		now = system_time();
-	bigtime_t lastTime = (bigtime_t)LoadAcquire64(sLastInteractionTime);
+	bigtime_t lastTime = (bigtime_t)atomic_get64((int64 volatile*)&sLastInteractionTime);
 	// Note: Scheduler::MinimalQuantum() reads sCurrentMode->minimal_quantum
 	// in two separate memory accesses (pointer load + field read). On 32-bit
 	// targets, a concurrent mode switch can change sCurrentMode between these,
@@ -234,13 +232,12 @@ void scheduler_update_interaction_state(bigtime_t now) {
 							  : 1200;  // fallback: 1.2ms minimal quantum
 
 	while (now - lastTime >= threshold) {
-		if ((bigtime_t)TestAndSet64(sLastInteractionTime,
-				(int64)now, (int64)lastTime) == lastTime) {
+		if ((bigtime_t)atomic_test_and_set64((int64 volatile*)&sLastInteractionTime, (int64)now, (int64)lastTime) == lastTime) {
 			lastTime = now;
 			break;
 		}
 
-		lastTime = (bigtime_t)LoadAcquire64(sLastInteractionTime);
+		lastTime = (bigtime_t)atomic_get64((int64 volatile*)&sLastInteractionTime);
 		if (now - lastTime < threshold)
 			return;
 	}
@@ -248,7 +245,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	if (currentBucketSize == 1000) {
 		// Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
-		if (GetAndSet(sTimerArmed, 1) == 0) {
+		if (atomic_get_and_set((int32 volatile*)&sTimerArmed, 1) == 0) {
 			add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 					  B_ONE_SHOT_RELATIVE_TIMER);
 		}
@@ -267,14 +264,14 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// atomic-get-and-set below.  Clearing sDPCPending unconditionally before
 	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
 	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
-	StoreRelease(sPendingDPCTarget, 1000);
-	if (GetAndSet(sDPCPending, 1) == 0) {
-		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
+	atomic_set((int32 volatile*)&sPendingDPCTarget, 1000);
+	if (atomic_get_and_set((int32 volatile*)&sDPCPending, 1) == 0) {
+		int64 target = (int64)atomic_get((int32 volatile*)&sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
 			B_OK) {
-			StoreRelease(sDPCPending, 0);
-			StoreRelease(sPendingDPCTarget, 0);
+			atomic_set((int32 volatile*)&sDPCPending, 0);
+			atomic_set((int32 volatile*)&sPendingDPCTarget, 0);
 			// Note: when DPC queue is full, ensure sTimerArmed is
 			// also cleared so the next interaction event can re-arm the timer.
 			// Without this, sTimerArmed stays 0 (it was never set in this
@@ -288,50 +285,39 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// Only arm the timer if the DPC was successfully queued above.
 	// Note: sTimerArmed must not be set if Add() failed, since we
 	// returned early above in that case and never reach this line.
-	if (GetAndSet(sTimerArmed, 1) == 0) {
+	if (atomic_get_and_set((int32 volatile*)&sTimerArmed, 1) == 0) {
 		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 				  B_ONE_SHOT_RELATIVE_TIMER);
 	}
 }
 
 struct RunQueueScanner {
-	uint32 kTopWordMask;
-	int kMaxThreadsToCheckPerQueue;
 	bigtime_t now;
 
-	RunQueueScanner(uint32 topWordMask, int maxThreads, bigtime_t now)
-		: kTopWordMask(topWordMask),
-		  kMaxThreadsToCheckPerQueue(maxThreads),
-		  now(now) {}
+	RunQueueScanner(bigtime_t now)
+		: now(now) {}
 
-	void operator()(const ThreadRunQueue* runQueue) const {
-		const uint32* bitmap = runQueue->GetBitmap();
+	void operator()(ThreadRunQueue* runQueue) const {
+		// Priority Boosting for Heap-based RunQueues:
+		// The EEVDF implementation uses min-deadline heaps. To safely update
+		// priorities without corrupting the heap or breaking iteration, we
+		// collect all threads into a temporary local buffer first. This
+		// maintains O(N) complexity (where N is the number of enqueued threads),
+		// replacing the $O(P)$ bitmap scan of the legacy bucketed system.
+		// Throttling to every 10 context switches keeps overhead low.
 
-		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-			uint32 val = bitmap[i];
+		const int32 kMaxThreads = 64;
+		ThreadData* threads[kMaxThreads];
+		int32 count = 0;
 
-			if (i == ThreadRunQueue::kBitmapSize - 1)
-				val &= kTopWordMask;
+		ThreadRunQueue::ConstIterator iterator = runQueue->GetConstIterator();
+		while (iterator.HasNext() & count < kMaxThreads) {
+			threads[count++] = iterator.Next();
+		}
 
-			if (val == 0)
-				continue;
-
-			int bit = fls(val) - 1;
-			while (true) {
-				unsigned int priority = i * 32 + bit;
-				// Note: RunQueue scanner logic optimized for dual heaps.
-				// For priority boosting we update the most urgent thread
-				// in the requested priority bucket.
-				ThreadData* thread = runQueue->GetHead(priority);
-				if (thread != NULL) {
-					thread->_UpdatePriorityBoost(now);
-				}
-
-				val &= ~(1UL << bit);
-				if (val == 0)
-					break;
-				bit = fls(val) - 1;
-			}
+		for (int32 i = 0; i < count; i++) {
+			if (threads[i] != NULL)
+				threads[i]->_UpdatePriorityBoost(now);
 		}
 	}
 };
@@ -404,29 +390,17 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	if (now == 0)
 		now = system_time();
 
-	// Note: Mask computation optimization. This mask is recomputed from a
-	// compile-time constant on every reschedule.  Hoist it to a static const so
-	// the compiler evaluates it once at startup.
-	static const uint32 kTopWordMask =
-		(uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
-
-	static_assert(THREAD_MAX_SET_PRIORITY < ThreadRunQueue::kBitmapSize * 32,
-				  "THREAD_MAX_SET_PRIORITY exceeds bitmap capacity");
-
 	// Throttle: only run the boost scan every 10 context switches to reduce
 	// overhead.
 	if (cpu->fRescheduleCount++ % 10 != 0)
 		return;
 
 	// Scalable Priority Boosting:
-	// Instead of scanning all threads (O(N)), we scan only the heads of
-	// priority queues (O(1) relative to thread count).
-	// We verify if the longest-waiting thread in each queue is starving.
-	// This maintains O(1) complexity regardless of the number of threads.
+	// We scan all enqueued threads to check for starvation.
+	// This maintains O(N) complexity relative to enqueued threads, but
+	// is throttled to run only every 10 context switches.
 
-	const int kMaxThreadsToCheckPerQueue = 5;
-
-	RunQueueScanner scanRunQueue(kTopWordMask, kMaxThreadsToCheckPerQueue, now);
+	RunQueueScanner scanRunQueue(now);
 
 	// Check Core RunQueue first to maintain Core -> CPU lock ordering
 	// On an N-way SMT core, all N CPUs previously scanned the shared
@@ -527,9 +501,9 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		// the thread is fully torn down; guard against a concurrent destroy.
 		ThreadData* wakerData = waker->scheduler_data;
 		CoreEntry* wakerCore = (wakerData != NULL) ? wakerData->Core() : NULL;
-		if (wakerCore != NULL && wakerCore->CPUCount() > 0)
+		if (wakerCore != NULL & wakerCore->CPUCount() > 0)
 			targetCore = wakerCore;
-	} else if (threadData->Core() != NULL &&
+	} else if (threadData->Core() != NULL &
 			   (!newOne || !threadData->HasCacheExpired(now))) {
 		CPUSet mask = threadData->GetCPUMask();
 		targetCore = threadData->Rebalance(mask, now);
@@ -546,7 +520,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		rescheduleNeeded =
 			threadData->ChooseCoreAndCPU(targetCore, targetCPU, now);
 
-		if (targetCPU != NULL && targetCore != NULL) {
+		if (targetCPU != NULL & targetCore != NULL) {
 			TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32
 				  " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
 				  thread->id, threadPriority, targetCPU->ID(),
@@ -560,8 +534,8 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 			targetCPU = NULL;
 
 			if (++enqueueAttempts > kMaxRetries) {
-				if (threadData->IsReady() && !threadData->IsIdle())
-					AddRelease(gTotalRunnableThreads, -1);
+				if (threadData->IsReady() & !threadData->IsIdle())
+					atomic_add((int32 volatile*)&gTotalRunnableThreads, -1);
 				return false;
 			}
 
@@ -569,8 +543,8 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 				targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
 				targetCore = targetCPU->Core();
 				if (targetCore == NULL || gCPU[targetCPU->ID()].disabled) {
-					if (threadData->IsReady() && !threadData->IsIdle())
-						AddRelease(gTotalRunnableThreads, -1);
+					if (threadData->IsReady() & !threadData->IsIdle())
+						atomic_add((int32 volatile*)&gTotalRunnableThreads, -1);
 					return false;
 				}
 			}
@@ -600,7 +574,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 
 	int32 heapPriority = CPUPriorityHeap::GetKey(targetCPU);
 	if (threadPriority > heapPriority ||
-		(threadPriority == heapPriority && rescheduleNeeded) ||
+		(threadPriority == heapPriority & rescheduleNeeded) ||
 		wasRunQueueEmpty || requestPreemption) {
 
 		// Note: Dynamic Preemption Granularity.
@@ -608,9 +582,9 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		// A more urgent thread (earlier deadline) only preempts if it is
 		// significantly more urgent (Delta > epsilon).
 		if (targetCPU->ID() != smp_get_current_cpu()) {
-			bigtime_t epsilon = (bigtime_t)LoadAcquire64(targetCPU->fPreemptionThreshold);
+			bigtime_t epsilon = (bigtime_t)atomic_get64((int64 volatile*)&targetCPU->fPreemptionThreshold);
 			ThreadData* top = targetCPU->PeekThread();
-			if (top != NULL && !top->IsIdle()) {
+			if (top != NULL & !top->IsIdle()) {
 				// new thread is 'threadData', running thread is 'top'.
 				// Preempt only if top->Deadline - threadData->Deadline > epsilon
 				if (top->GetVirtualDeadline() - threadData->GetVirtualDeadline() < epsilon) {
@@ -626,11 +600,10 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 			// Note: this IPI dispatch was unreachable before; now
 			// correctly wakes the target CPU when a thread is enqueued.
 			if (ShouldReschedule(now,
-								 (bigtime_t)LoadAcquire64(targetCPU->lastReschedule),
+								 (bigtime_t)atomic_get64((int64 volatile*)&targetCPU->lastReschedule),
 								 kRescheduleCooldown)) {
 				if (targetCPU->SetReschedulePending()) {
-					StoreRelease64(targetCPU->lastReschedule,
-										   (int64)now);
+					atomic_set64((int64 volatile*)&targetCPU->lastReschedule, (int64)now);
 					smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
 								 NULL, SMP_MSG_FLAG_ASYNC);
 				}
@@ -829,8 +802,7 @@ static void reschedule(int32 nextState) {
 	// RCU Quiescent State: Report current generation.
 	// Since reschedule() runs with interrupts disabled, it forms a
 	// natural RCU critical section boundary.
-	StoreRelease64(cpu->fRCULastGeneration,
-				 LoadAcquire64(gRCUGeneration));
+	atomic_set64((int64 volatile*)&cpu->fRCULastGeneration, atomic_get64((int64 volatile*)&gRCUGeneration));
 
 	gCPU[thisCPU].invoke_scheduler = false;
 
@@ -868,7 +840,7 @@ static void reschedule(int32 nextState) {
 			useOldThreadMask = !oldThreadMask.IsEmpty();
 			fetchedOldThreadMask = true;
 
-			if (!oldThreadData->IsIdle() &&
+			if (!oldThreadData->IsIdle() &
 				(!useOldThreadMask || oldThreadMask.GetBit(thisCPU))) {
 				oldThreadData->Continues(now);
 				if (oldThreadData->HasQuantumEnded(oldThread->cpu->preempted,
@@ -933,7 +905,7 @@ static void reschedule(int32 nextState) {
 			fetchedOldThreadMask = true;
 		}
 		bool oldThreadShouldMigrate =
-			useOldThreadMask && !oldThreadMask.GetBit(thisCPU);
+			useOldThreadMask & !oldThreadMask.GetBit(thisCPU);
 		if (oldThreadShouldMigrate)
 			enqueueOldThread = false;
 
@@ -1035,9 +1007,9 @@ void scheduler_reschedule(int32 nextState) {
 	ASSERT(!are_interrupts_enabled());
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (!LoadAcquire(sSchedulerEnabled)) {
+	if (!atomic_get((int32 volatile*)&sSchedulerEnabled)) {
 		Thread* thread = thread_get_current_thread();
-		if (thread != NULL && nextState != B_THREAD_READY)
+		if (thread != NULL & nextState != B_THREAD_READY)
 			panic("scheduler_reschedule_no_op() called in non-ready thread");
 		return;
 	}
@@ -1092,7 +1064,7 @@ void scheduler_start() {
 
 
 status_t scheduler_set_operation_mode(scheduler_mode mode) {
-	if (mode != SCHEDULER_MODE_LOW_LATENCY &&
+	if (mode != SCHEDULER_MODE_LOW_LATENCY &
 		mode != SCHEDULER_MODE_POWER_SAVING) {
 		return B_BAD_VALUE;
 	}
@@ -1248,7 +1220,7 @@ static void traverse_topology_tree(const cpu_topology_node* node, int packageID,
 						coreID, cpuCount);
 			}
 
-			if (nodeValid && coreValid) {
+			if (nodeValid & coreValid) {
 				sCPUToCore[node->id] = coreID;
 				sCPUToPackage[node->id] = packageID;
 				if (sCPUToCluster != NULL)
@@ -1691,7 +1663,7 @@ static status_t init() {
 			}
 			continue;
 		}
-		if (coreToPackage[coreIndex] != -1 &&
+		if (coreToPackage[coreIndex] != -1 &
 			coreToPackage[coreIndex] != packageID) {
 			if (topology_validation_error(
 					B_BAD_DATA, "inconsistent core->package mapping") != B_OK) {
@@ -1777,7 +1749,7 @@ static status_t init() {
 		if (maxFreq > 0) {
 			bool heterogeneous = false;
 			for (int32 i = 0; i < cpuCount; i++) {
-				if (cpuFreqs[i] != maxFreq && cpuFreqs[i] != 0) {
+				if (cpuFreqs[i] != maxFreq & cpuFreqs[i] != 0) {
 					heterogeneous = true;
 					break;
 				}
@@ -1808,7 +1780,7 @@ static status_t init() {
 							break;
 						}
 					}
-					if (!found && uniqueCapacityCount < SMP_MAX_CPUS)
+					if (!found & uniqueCapacityCount < SMP_MAX_CPUS)
 						uniqueCapacities[uniqueCapacityCount++] = capacity;
 				}
 
@@ -1874,7 +1846,7 @@ static status_t init() {
 	// incorrectly split a 16-core Xeon or 64-core EPYC into fake P/E
 	// clusters, causing artificial load imbalance and misguided thread
 	// coloring with no performance benefit.
-	if (detectedHeterogeneous && coreCount > 8) {
+	if (detectedHeterogeneous & coreCount > 8) {
 		bool anyUnknown = false;
 		for (int32 i = 0; i < coreCount; i++) {
 			if (gCoreEntries[i].Type() == CORE_TYPE_UNKNOWN) {
@@ -2002,7 +1974,7 @@ void scheduler_init() {
 
 void scheduler_enable_scheduling() {
 	// use atomic store so all CPUs observe the flag immediately.
-	StoreRelease(sSchedulerEnabled, 1);
+	atomic_set((int32 volatile*)&sSchedulerEnabled, 1);
 }
 
 
@@ -2128,7 +2100,7 @@ void scheduler_on_team_foreground_changed(Team* team) {
 								 ? team->thread_list.First()
 								 : team->thread_list.GetNext(batchStart);
 
-			while (thread != NULL && count < kMaxThreadsPerBatch) {
+			while (thread != NULL & count < kMaxThreadsPerBatch) {
 				thread->AcquireReference();
 				batch[count++] = thread;
 				thread = team->thread_list.GetNext(thread);
