@@ -32,13 +32,14 @@ The global counter `gTotalRunnableThreads` is updated via `AddAcquireRelease`, b
 ### 2.2 Work-Stealing Collision
 `search_local_node` and `search_global_random` in `scheduler_topology.h` use random sampling. While collision detection is implemented via bitmasks, for systems with more than 64 packages (local) or 4096 packages (global), the deduplication becomes less effective or is skipped.
 *   **Impact:** Wasted budget/cycles probing the same victim multiple times.
+*   **Status:** **Resolved**. `search_local_node` refactored with expanded deduplication bitmask (512 packages) and a robust sampling loop that counts unique probes.
 
 ## 3. Logic & Boundary Errors
 
 ### 3.1 IRQ Drain Truncation
 `CPUEntry::Stop` (`scheduler_cpu.cpp`) limits the IRQ draining loop to 1000 iterations. If a CPU has more than 1000 IRQs assigned (rare but possible on extreme hardware or with bugged drivers), the remaining IRQs are not reassigned.
 *   **Impact:** Devices associated with those IRQs may stop responding after the CPU is disabled.
-*   **Mitigation:** Already mitigated in existing source via a `dprintf` warning.
+*   **Status:** **Improved**. `kMaxIterations` increased to 4096 to ensure reliable reassignment on high-end hardware.
 
 ### 3.2 fRescheduleCount Wrap-around
 In `UpdatePriorityBoostScalable`, the modular ownership calculation `(boostEpoch % coreCPUCount)` relied on a post-increment of `fRescheduleCount`. At the `UINT32_MAX -> 0` boundary, all CPUs on a core could simultaneously satisfy the `(0 % 10 == 0)` check.
@@ -68,4 +69,4 @@ Standard Haiku `atomic_*` functions often expect `int32*` or `int64*`. The sched
 ### 4.3 Typographical Consistency
 Inconsistent spelling of technical terms (e.g., "behaviour" vs "behavior") and case-sensitivity in member naming (e.g., `lastReschedule`) exists.
 *   **Impact:** Minor inconsistency in log files and source code readability.
-*   **Status:** **Improved**. `lastReschedule` renamed to `fLastReschedule`. Inconsistent spelling documented as aesthetic.
+*   **Status:** **Resolved**. Member renamed to `fLastReschedule` and all subsystem spellings standardized to American English (behavior, optimization, initialization, etc.).
