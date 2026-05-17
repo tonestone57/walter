@@ -182,12 +182,12 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		// Try to find an idle core of the preferred type
 		uint64 typeIdleNodeMask = idleNodeMask;
 		while (typeIdleNodeMask != 0) {
-		int32 nodeIndex = scheduler_ffs64(typeIdleNodeMask) - 1;
-		typeIdleNodeMask &= ~(1ULL << nodeIndex);
-		if (nodeIndex < 0 || nodeIndex >= gNodeCount)
-			continue;
+			int32 nodeIndex = scheduler_ffs64(typeIdleNodeMask) - 1;
+			typeIdleNodeMask &= ~(1ULL << nodeIndex);
+			if (nodeIndex < 0 || nodeIndex >= gNodeCount)
+				continue;
 
-		SchedulerNode* node = &gSchedulerNodes[nodeIndex];
+			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
 			uint64 idlePackageMask = node->IdlePackageMask();
 
 			while (idlePackageMask != 0) {
