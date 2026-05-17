@@ -248,8 +248,7 @@ CPUEntry::CPUEntry()
 	  fRescheduleCount(0),
 	  fCoreLocalIndex(0),
 	  fInteractionUpdateCounter(0),
-	  fSystemVirtualTime(0),
-	  fPreemptionThreshold(0),
+
 	  fTotalWeight(0),
 	  fReschedulePending(0),
 	  fLastLocalPackageIndex(0),
@@ -415,8 +414,7 @@ void CPUEntry::Remove(ThreadData* thread) {
 
 ThreadData* CoreEntry::PeekThread() const {
 	SCHEDULER_ENTER_FUNCTION();
-	// Note: We don't have a specific SVT for the entire core here,
-	// but StealThread and ChooseNextThread handle eligibility properly.
+	const_cast<ThreadRunQueue&>(fRunQueue).CheckEligibility(SystemVirtualTime());
 	return fRunQueue.PeekBest();
 }
 
@@ -521,6 +519,7 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 	if (pinnedThread != NULL)
 		pinnedPriority = pinnedThread->GetEffectivePriority();
 
+	core->CheckEligibility(core->SystemVirtualTime());
 	ThreadData* sharedThread = core->PeekThread();
 	if (sharedThread == NULL && pinnedThread == NULL) {
 		// try to steal work from other cores in the same package
@@ -681,19 +680,22 @@ void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 	// Note: Update System Virtual Time (SVT).
 	// SVT tracks the FairShare baseline for this core.
 	if (nextThreadData != NULL) {
-		if (!nextThreadData->IsIdle() && !nextThreadData->IsRealTime()) {
-			bigtime_t vrt = nextThreadData->GetVirtualRuntime();
-			bigtime_t svt = SystemVirtualTime();
-			if (vrt > svt)
-				SetSystemVirtualTime(vrt);
+		CoreEntry* core = Core();
+		if (core != NULL) {
+			if (!nextThreadData->IsIdle() && !nextThreadData->IsRealTime()) {
+				bigtime_t vrt = nextThreadData->GetVirtualRuntime();
+				bigtime_t svt = core->SystemVirtualTime();
+				if (vrt > svt)
+					core->SetSystemVirtualTime(vrt);
 
-			// Note: Update Dynamic Preemption Threshold.
-			// Scale epsilon based on thread count to protect cache performance.
-			int32 threads = ThreadCount();
-			StoreRelease64(fPreemptionThreshold, (int64)(threads * 500)); // 500us per thread
-		} else if (nextThreadData->IsIdle()) {
-			// On an idle system, epsilon is near zero (instant response).
-			StoreRelease64(fPreemptionThreshold, 0);
+				// Note: Update Dynamic Preemption Threshold.
+				// Scale epsilon based on thread count to protect cache performance.
+				int32 threads = core->ThreadCount();
+				core->SetPreemptionThreshold((int64)(threads * 500)); // 500us per thread
+			} else if (nextThreadData->IsIdle()) {
+				// On an idle system, epsilon is near zero (instant response).
+				core->SetPreemptionThreshold(0);
+			}
 		}
 	}
 
@@ -984,6 +986,9 @@ void CoreEntry::Init(int32 id, PackageEntry* package) {
 	fCoreID = id;
 	fPackage = package;
 
+	StoreRelease64(fSystemVirtualTime, 0);
+	StoreRelease64(fPreemptionThreshold, 0);
+
 	fScoreFactor = (kDefaultCapacity << 16) / fCapacity;
 
 	fCPUHeap.~CPUPriorityHeap();
@@ -1053,11 +1058,13 @@ ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 	// Thief prefers cores with lower total weight pressure.
 	// (Target pressure comparison is handled in _TryStealWork)
 
-	ThreadData* thread = fRunQueue.PeekBest(ThreadDataLagCompare(), StealThreadPredicate(thiefCPU));
+	bigtime_t svt = thief->SystemVirtualTime();
+	ThreadData* thread = fRunQueue.PeekBest(ThreadDataLagCompare(svt), StealThreadPredicate(thiefCPU));
 
 	if (thread != NULL) {
 		// Only steal if thread has positive lag (under-served)
-		if (thread->GetLag() <= 0)
+		int64 lag = (svt - thread->GetVirtualRuntime()) * thread->GetWeight();
+		if (lag <= 0)
 			return NULL;
 
 		stolenPriority = thread->GetEffectivePriority();

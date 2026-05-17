@@ -117,6 +117,10 @@ public:
 		return fRunQueue.GetConstIterator();
 	}
 
+	inline void CheckEligibility(bigtime_t svt) {
+		fRunQueue.CheckEligibility(svt);
+	}
+
 	void UpdatePriority(int32 priority);
 
 	inline int32 GetLoad() const;
@@ -135,13 +139,6 @@ public:
 
 	inline int32 ThreadCount() const { return LoadAcquire(fThreadCount); }
 
-	inline bigtime_t SystemVirtualTime() const {
-		return (bigtime_t)LoadAcquire64(fSystemVirtualTime);
-	}
-
-	inline void SetSystemVirtualTime(bigtime_t time) {
-		StoreRelease64(fSystemVirtualTime, (int64)time);
-	}
 
 	inline int64 TotalWeight() const {
 		return LoadAcquire64(fTotalWeight);
@@ -190,8 +187,6 @@ private:
 	uint32 fRescheduleCount;
 	uint32 fInteractionUpdateCounter;
 
-	bigtime_t fSystemVirtualTime __attribute__((aligned(8)));
-	bigtime_t fPreemptionThreshold __attribute__((aligned(8)));
 	int64 fTotalWeight __attribute__((aligned(8)));
 
 	int32 fReschedulePending __attribute__((aligned(8)));
@@ -282,6 +277,26 @@ public:
 		return fRunQueue.GetConstIterator();
 	}
 
+	inline void CheckEligibility(bigtime_t svt) {
+		fRunQueue.CheckEligibility(svt);
+	}
+
+	inline bigtime_t SystemVirtualTime() const {
+		return (bigtime_t)LoadAcquire64(fSystemVirtualTime);
+	}
+
+	inline void SetSystemVirtualTime(bigtime_t time) {
+		StoreRelease64(fSystemVirtualTime, (int64)time);
+	}
+
+	inline bigtime_t PreemptionThreshold() const {
+		return (bigtime_t)LoadAcquire64(fPreemptionThreshold);
+	}
+
+	inline void SetPreemptionThreshold(bigtime_t threshold) {
+		StoreRelease64(fPreemptionThreshold, (int64)threshold);
+	}
+
 	inline bigtime_t GetActiveTime() const;
 	inline void IncreaseActiveTime(bigtime_t activeTime);
 
@@ -318,6 +333,9 @@ private:
 	static void _UnassignThread(Thread* thread, void* core);
 
 	bigtime_t fActiveTime __attribute__((aligned(8)));
+
+	bigtime_t fSystemVirtualTime __attribute__((aligned(8)));
+	bigtime_t fPreemptionThreshold __attribute__((aligned(8)));
 
 	// bits 32-63: Current Load, bits 0-31: Epoch
 	int64 fCombinedLoad __attribute__((aligned(8)));
@@ -480,6 +498,26 @@ inline bool CPUEntry::TryLockRunQueue() {
 inline void CPUEntry::UnlockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
 	release_spinlock(&fQueueLock);
+}
+
+inline bigtime_t CPUEntry::SystemVirtualTime() const {
+	CoreEntry* core = Core();
+	if (core == NULL)
+		return 0;
+	return core->SystemVirtualTime();
+}
+
+inline void CPUEntry::SetSystemVirtualTime(bigtime_t time) {
+	CoreEntry* core = Core();
+	if (core != NULL)
+		core->SetSystemVirtualTime(time);
+}
+
+inline bigtime_t CPUEntry::PreemptionThreshold() const {
+	CoreEntry* core = Core();
+	if (core == NULL)
+		return 0;
+	return core->PreemptionThreshold();
 }
 
 /* static */ inline CPUEntry* CPUEntry::GetCPU(int32 cpu) {

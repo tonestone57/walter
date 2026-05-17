@@ -664,7 +664,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		// A more urgent thread (earlier deadline) only preempts if it is
 		// significantly more urgent (Delta > epsilon).
 		if (targetCPU->ID() != smp_get_current_cpu()) {
-			bigtime_t epsilon = (bigtime_t)LoadAcquire64(targetCPU->fPreemptionThreshold);
+			bigtime_t epsilon = targetCPU->PreemptionThreshold();
 			ThreadData* top = targetCPU->PeekThread();
 			if (top != NULL && !top->IsIdle()) {
 				// new thread is 'threadData', running thread is 'top'.

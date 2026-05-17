@@ -91,8 +91,13 @@ public:
 	void CheckEligibility(bigtime_t svt);
 
 	// Eligible threads are ordered by virtual deadline (Compare).
+	// If no eligible threads exist, fall back to the least ineligible thread.
 	inline Element* PeekRoot() const {
-		return LoadAcquire(fEligibleCount) > 0 ? fEligibleHeap[0] : NULL;
+		if (LoadAcquire(fEligibleCount) > 0)
+			return fEligibleHeap[0];
+		if (LoadAcquire(fIneligibleCount) > 0)
+			return fIneligibleHeap[0];
+		return NULL;
 	}
 
 	inline Element* PeekMaximum() const { return PeekRoot(); }
@@ -472,6 +477,16 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 				best = fEligibleHeap[i];
 		}
 	}
+
+	if (best == NULL) {
+		for (int32 i = 0; i < fIneligibleCount; i++) {
+			if (predicate(fIneligibleHeap[i])) {
+				if (best == NULL || compare(fIneligibleHeap[i], best))
+					best = fIneligibleHeap[i];
+			}
+		}
+	}
+
 	return best;
 }
 

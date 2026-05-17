@@ -661,8 +661,14 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			locker.Unlock();
 			pinned = false;	 // float
 		} else {
-			if (!wasReady && !IsRealTime())
+			if (!wasReady && !IsRealTime()) {
+				bigtime_t svt = cpu->SystemVirtualTime();
+				bigtime_t vrt = GetVirtualRuntime();
+				if (vrt < svt - kMaxLagFloor)
+					StoreRelease64(fVirtualRuntime, (int64)(svt - kMaxLagFloor));
+
 				_UpdateDeadline(now);
+			}
 
 			// defer the gTotalRunnableThreads increment until after the
 			// CPUCount guard in the non-pinned path (see below).  For the
@@ -757,8 +763,14 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			}
 		}
 
-		if (!wasReady && !IsRealTime())
+		if (!wasReady && !IsRealTime()) {
+			bigtime_t svt = core->SystemVirtualTime();
+			bigtime_t vrt = GetVirtualRuntime();
+			if (vrt < svt - kMaxLagFloor)
+				StoreRelease64(fVirtualRuntime, (int64)(svt - kMaxLagFloor));
+
 			_UpdateDeadline(now);
+		}
 
 		// defer the gTotalRunnableThreads increment until after the
 		// CPUCount guard in the non-pinned path.
@@ -883,13 +895,9 @@ inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t now) {
 		// Lag = (SystemVirtualTime - VirtualRuntime) * Weight
 		CoreEntry* core = Core();
 		if (core != NULL) {
-			// Find a CPU in this core to get SystemVirtualTime.
-			CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-			if (cpu->Core() == core) {
-				bigtime_t svt = cpu->SystemVirtualTime();
-				int64 lag = (svt - GetVirtualRuntime()) * weight;
-				StoreRelease64(fLag, lag);
-			}
+			bigtime_t svt = core->SystemVirtualTime();
+			int64 lag = (svt - GetVirtualRuntime()) * weight;
+			StoreRelease64(fLag, lag);
 		}
 	}
 

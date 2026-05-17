@@ -175,6 +175,8 @@ namespace Scheduler {
 
 const bigtime_t kForegroundVRuntimeOffset = 5000;
 
+const bigtime_t kMaxLagFloor = 200000;
+
 const int64 kNUMANodeLagThreshold = 1000000;
 const int64 kGlobalLagThreshold = 5000000;
 
@@ -222,11 +224,24 @@ struct ThreadDataDeadlineCompare {
 };
 
 struct ThreadDataLagCompare {
+	ThreadDataLagCompare(bigtime_t svt = -1) : fSVT(svt) {}
+
 	template <typename ThreadData>
 	bool operator()(const ThreadData* a, const ThreadData* b) const {
+		int64 lagA, lagB;
+		if (fSVT == (bigtime_t)-1) {
+			lagA = a->GetLag();
+			lagB = b->GetLag();
+		} else {
+			lagA = (fSVT - a->GetVirtualRuntime()) * a->GetWeight();
+			lagB = (fSVT - b->GetVirtualRuntime()) * b->GetWeight();
+		}
 		// Highest positive lag first (most under-served)
-		return (a->GetLag() - b->GetLag()) > 0;
+		return (lagA - lagB) > 0;
 	}
+
+private:
+	bigtime_t fSVT;
 };
 
 static const int32 kWeightTable[] = {
