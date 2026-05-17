@@ -2004,6 +2004,8 @@ static int dump_idle_cores(int /* argc */, char** /* argv */) {
 		while (nodeMask != 0) {
 			int32 nodeIndex = scheduler_ffs64(nodeMask) - 1;
 			nodeMask &= ~(1ULL << nodeIndex);
+			if (nodeIndex < 0 || nodeIndex >= gNodeCount)
+				continue;
 
 			uint64 packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
 			while (packageMask != 0) {

@@ -383,6 +383,8 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 
 			int32 nodeIndex = scheduler_ffs64(idleNodeMask) - 1;
 			idleNodeMask &= ~(1ULL << nodeIndex);
+			if (nodeIndex < 0 || nodeIndex >= gNodeCount)
+				continue;
 
 			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
 			uint64 idlePackageMask = node->IdlePackageMask();

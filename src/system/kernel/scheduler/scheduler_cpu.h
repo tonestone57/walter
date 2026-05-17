@@ -665,7 +665,7 @@ inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 
 	if (oldMask == 0 && fNodeID < 64) {
 		OrAtomic64(gIdleNodeMask,
-			(int64)1 << fNodeID);
+			(int64)((uint64)1 << fNodeID));
 	}
 }
 
@@ -728,7 +728,7 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 					if (cpu_mask_get_atomic(&fIdlePackageMask) !=
 						(native_cpu_mask_t)0) {
 						OrAtomic64(gIdleNodeMask,
-							(int64)nodeBit);
+							(int64)(uint64)nodeBit);
 					}
 					break;
 				}

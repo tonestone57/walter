@@ -30,7 +30,7 @@ void RemoveThread::AddDump(TraceOutput& out) {
 			  fPriority);
 }
 
-const char* RemoveThread::Name() const { return NULL; }
+const char* RemoveThread::Name() const { return ""; }
 
 // #pragma mark - ScheduleThread
 

@@ -270,7 +270,10 @@ static inline void CheckMaskedPackagesMinimumLoad(
 			if (cpuID >= cpuCount)
 				continue;
 
-			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
+			CPUEntry* cpuEntry = CPUEntry::GetCPU(cpuID);
+			if (cpuEntry == NULL)
+				continue;
+			CoreEntry* cpuCore = cpuEntry->Core();
 			if (cpuCore != NULL) {
 				PackageEntry* package = cpuCore->Package();
 				if (package != NULL) {

@@ -476,19 +476,19 @@ inline void AssertThreadQueued(Thread* thread) {
 inline void SetCPUIDle(uint64 volatile& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	OrAtomic64(mask, (int64)1 << cpu);
+	OrAtomic64(mask, (int64)((uint64)1 << cpu));
 }
 
 inline void ClearCPUIDle(uint64 volatile& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return;
-	AndAtomic64(mask, ~((int64)1 << cpu));
+	AndAtomic64(mask, (int64)~((uint64)1 << cpu));
 }
 
 inline bool IsCPUIDle(const uint64 volatile& mask, int cpu) {
 	if ((unsigned)cpu >= 64)
 		return false;
-	return (LoadAcquire64(mask) & ((int64)1 << cpu)) != 0;
+	return (LoadAcquire64(mask) & ((uint64)1 << cpu)) != 0;
 }
 
 struct SchedulerSnapshot {
