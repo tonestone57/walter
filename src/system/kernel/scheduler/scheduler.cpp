@@ -590,8 +590,19 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 			targetCPU = NULL;
 
 			if (++enqueueAttempts > kMaxRetries) {
-				if (threadData->IsReady() && !threadData->IsIdle())
-					AddRelease(gTotalRunnableThreads, -1);
+				if (threadData->IsReady() && !threadData->IsIdle()) {
+					int32 prev = AddAcquireRelease(gTotalRunnableThreads, -1);
+					if (prev <= 0) {
+						int32 cur = LoadAcquire(gTotalRunnableThreads);
+						for (int32 i = 0; i < 100 && cur < 0; i++) {
+							int32 was = cur;
+							if (TestAndSet(gTotalRunnableThreads, 0, was) == was)
+								break;
+							cur = LoadAcquire(gTotalRunnableThreads);
+							memory_read_barrier();
+						}
+					}
+				}
 				return false;
 			}
 
@@ -715,6 +726,9 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	ThreadData* threadData = thread->scheduler_data;
+	if (threadData == NULL)
+		return thread->priority;
+
 	int32 oldPriority = thread->priority;
 
 	TRACE("changing thread %" B_PRId32 " priority to %" B_PRId32
@@ -1109,10 +1123,16 @@ void scheduler_on_thread_init(Thread* thread) {
 
 
 void scheduler_on_thread_destroy(Thread* thread) {
-	if (thread->scheduler_data != NULL) {
-		thread->scheduler_data->~ThreadData();
-		object_cache_free(sThreadDataCache, thread->scheduler_data);
+	ThreadData* threadData;
+	{
+		InterruptsSpinLocker locker(thread->scheduler_lock);
+		threadData = thread->scheduler_data;
 		thread->scheduler_data = NULL;
+	}
+
+	if (threadData != NULL) {
+		threadData->~ThreadData();
+		object_cache_free(sThreadDataCache, threadData);
 	}
 }
 

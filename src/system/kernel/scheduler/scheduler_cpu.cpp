@@ -474,14 +474,16 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 		measureActiveTime = LoadAcquire64(fMeasureActiveTime);
 		bigtime_t tempMeasureTime = measureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
+		int32 tempLoad = currentLoad;
 		oldLoad = compute_load(tempMeasureTime, tempMeasureActiveTime,
-							   currentLoad, now);
+							   tempLoad, now);
 		if (oldLoad < 0)
 			break;
 		if ((bigtime_t)TestAndSet64(fMeasureActiveTime,
 				tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
 			StoreRelease64(fMeasureTime,
 						 tempMeasureTime);
+			currentLoad = tempLoad;
 			break;
 		}
 	} while (true);

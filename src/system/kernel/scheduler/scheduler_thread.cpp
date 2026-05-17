@@ -528,10 +528,6 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 	if (beneficiary == NULL)
 		return;
 
-	ThreadData* beneficiaryData = beneficiary->scheduler_data;
-	if (beneficiaryData == NULL)
-		return;
-
 	if (now == 0)
 		now = system_time();
 
@@ -557,7 +553,9 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 		// are already disabled by the caller's contract.
 		ASSERT(!are_interrupts_enabled());
 		SpinLocker locker(beneficiary->scheduler_lock);
-		AddRelease64(beneficiaryData->fStolenTime, (int64)timeLeft);
+		ThreadData* beneficiaryData = beneficiary->scheduler_data;
+		if (beneficiaryData != NULL)
+			AddRelease64(beneficiaryData->fStolenTime, (int64)timeLeft);
 	}
 
 	// Exhaust donor slice: we expect the donor to yield or be descheduled
@@ -576,6 +574,7 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int32 oldLoad;
+	int32 currentLoad = fNeededLoad;
 	do {
 		bigtime_t lastMeasureTime =
 			(bigtime_t)LoadAcquire64(fLastMeasureAvailableTime);
@@ -583,13 +582,15 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 			(bigtime_t)LoadAcquire64(fMeasureAvailableActiveTime);
 		bigtime_t tempLastMeasureTime = lastMeasureTime;
 		bigtime_t tempMeasureActiveTime = measureActiveTime;
+		int32 tempLoad = currentLoad;
 		oldLoad = compute_load(tempLastMeasureTime, tempMeasureActiveTime,
-							   fNeededLoad, now);
+							   tempLoad, now);
 		if (oldLoad < 0)
 			break;
 		if (TestAndSet64(fMeasureAvailableActiveTime, (int64)((uint64)tempMeasureActiveTime), (int64)measureActiveTime) ==
-			(uint64)measureActiveTime) {
+			(int64)measureActiveTime) {
 			StoreRelease64(fLastMeasureAvailableTime, (int64)tempLastMeasureTime);
+			fNeededLoad = tempLoad;
 			break;
 		}
 	} while (true);
