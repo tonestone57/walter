@@ -5,7 +5,7 @@
 ### 1.1 Interaction State DPC Loss
 In `scheduler_update_interaction_state` (`scheduler.cpp`), if a DPC is already in flight (`sDPCPending == 1`), subsequent requests to change the resolution (e.g., downscaling from 1000 to 5000) may be lost.
 *   **Impact:** Transiently incorrect scheduling resolution (quantum lengths).
-*   **Status:** **Resolved**. `update_quantum_lengths_dpc` now uses a loop to re-check for pending requests after synchronization.
+*   **Status:** **Resolved**. `update_quantum_lengths_dpc` now uses an atomic loop to re-check for pending requests after synchronization. Redundant global synchronization was removed to improve efficiency.
 
 ### 1.2 fReady Race in Continues()
 In `ThreadData::Continues` (`scheduler_thread.h`), the check for `fReady` is performed without holding the core run-queue lock. A concurrent CPU calling `GoesAway` on the same thread (e.g., during a rapid reschedule) can clear `fReady` between the time the thread is selected and `Continues` is called.
@@ -32,7 +32,7 @@ The global counter `gTotalRunnableThreads` is updated via `AddAcquireRelease`, b
 ### 2.2 Work-Stealing Collision
 `search_local_node` and `search_global_random` in `scheduler_topology.h` use random sampling. While collision detection is implemented via bitmasks, for systems with more than 64 packages (local) or 4096 packages (global), the deduplication becomes less effective or is skipped.
 *   **Impact:** Wasted budget/cycles probing the same victim multiple times.
-*   **Status:** **Resolved**. `search_local_node` refactored with expanded deduplication bitmask (512 packages) and a robust sampling loop that counts unique probes.
+*   **Status:** **Resolved**. `search_local_node` refactored with an expanded 512-bit stack-allocated bitmask and a robust `while` loop that counts unique successful probes, ensuring sampling depth is always reached.
 
 ## 3. Logic & Boundary Errors
 
@@ -69,4 +69,8 @@ Standard Haiku `atomic_*` functions often expect `int32*` or `int64*`. The sched
 ### 4.3 Typographical Consistency
 Inconsistent spelling of technical terms (e.g., "behaviour" vs "behavior") and case-sensitivity in member naming (e.g., `lastReschedule`) exists.
 *   **Impact:** Minor inconsistency in log files and source code readability.
-*   **Status:** **Resolved**. Member renamed to `fLastReschedule` and all subsystem spellings standardized to American English (behavior, optimization, initialization, etc.).
+*   **Status:** **Resolved**. Member renamed to `fLastReschedule` and all subsystem spellings standardized to American English (behavior, optimization, initialization, color, honor, etc.).
+
+### 4.4 Shift Domain Safety
+Bitwise calculations for core ownership modular logic in `UpdatePriorityBoostScalable` could trigger undefined behavior if shift domains exceeded the bit width of `native_cpu_mask_t`.
+*   **Status:** **Resolved**. Explicit clamps and branch guards added to ensure valid shift domains on all supported architectures.

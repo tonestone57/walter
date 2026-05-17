@@ -68,7 +68,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		now = system_time();
 
 	// useMask must be computed before Stage 0 so the
-	// hot-idle fast path can honour CPU affinity constraints.
+	// hot-idle fast path can honor CPU affinity constraints.
 	bool useMask = !mask.IsEmpty();
 	if (useMask && Scheduler::IsAllEnabledMask(mask))
 		useMask = false;
@@ -458,7 +458,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 					: 0;
 			int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-			// honour the return value of CheckPackageMinimumLoad.
+			// honor the return value of CheckPackageMinimumLoad.
 			for (int32 i = 0; i < attempts; i++) {
 				int32 index = startIndex + i;
 				if (index >= gPackageCount)
@@ -578,7 +578,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 				: 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-		// honour the return value of CheckPackageMinimumLoad.
+		// honor the return value of CheckPackageMinimumLoad.
 		for (int32 i = 0; i < attempts; i++) {
 			int32 index = startIndex + i;
 			if (index >= gPackageCount)
@@ -795,7 +795,7 @@ static void rebalance_irqs(bool idle) {
 							   : 0;
 		int32 attempts = min_c(gPackageCount, kMaxFallbackAttempts);
 
-		// honour the return value of CheckPackageMinimumLoad.
+		// honor the return value of CheckPackageMinimumLoad.
 		// It returns true when a near-idle core is found (<15% load),
 		// signalling that further search is unnecessary. The original loops
 		// always ran all kMaxFallbackAttempts iterations even after finding

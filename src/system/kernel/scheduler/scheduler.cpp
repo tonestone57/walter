@@ -150,31 +150,35 @@ static void UpdateDeadlineScalingScalable() {
 
 static void update_quantum_lengths_dpc(void* /*arg*/) {
 	while (true) {
-		// Use the latest requested target from sPendingDPCTarget
-		// instead of the stale value passed via arg.
+		// Note: we can skip the big scheduler lock (and the expensive RCU
+		// synchronization in its destructor) if the deadline bucket size
+		// is already at the requested target.
 		int64 targetResolution = (int64)LoadAcquire(sPendingDPCTarget);
-
-		{
+		if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
 			InterruptsBigSchedulerLocker locker;
+			// Re-check target resolution after lock acquisition as it may
+			// have changed.
+			targetResolution = (int64)LoadAcquire(sPendingDPCTarget);
 			if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
-				StoreRelease64(gDeadlineBucketSize,
-					targetResolution);
+				StoreRelease64(gDeadlineBucketSize, targetResolution);
 				UpdateDeadlineScalingScalable();
 			}
 		}
 
-		// RCU Synchronization: Wait for all CPUs to reach a quiescent state
-		// (reschedule) and observe the new bucket size before we consider
-		// this update done.
-		scheduler_synchronize();
-
-		// Check if another update was requested while we were synchronizing.
-		// If so, loop back and process it immediately.
+		// Atomically clear sDPCPending and re-check sPendingDPCTarget.
+		// If a new request arrived while we were processing the last one
+		// or synchronizing, we loop back to process it.  This ensures no
+		// requests are lost in the window between the loop start and the
+		// sDPCPending clear.
+		StoreRelease(sDPCPending, 0);
 		if ((int64)LoadAcquire(sPendingDPCTarget) == targetResolution)
 			break;
-	}
 
-	StoreRelease(sDPCPending, 0);
+		if (GetAndSet(sDPCPending, 1) != 0) {
+			// Another CPU already queued a new DPC; we are done.
+			break;
+		}
+	}
 }
 
 
