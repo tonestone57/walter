@@ -1398,7 +1398,7 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 	// Safe upper bound allocation for mapping packages to nodes
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
 
-	// sPackageToNode is the only mapping array not zero-initialised.
+	// sPackageToNode is the only mapping array not zero-initialized.
 	// Packages that are never written (guard short-circuits) carry heap
 	// garbage, which init() then uses as a node index, mapping the package to a
 	// non-existent SchedulerNode.

@@ -765,7 +765,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 	// Init() was skipped (exceeded kMaxCoresPerPackage), and Node() can
 	// return NULL during topology teardown. Guard all dereference sites.
 	if (core->Package() == NULL) {
-		// Core exists but has no package (partially initialised or being
+		// Core exists but has no package (partially initialized or being
 		// disabled). Return the current core - no rebalancing possible.
 		return core;
 	}
@@ -920,7 +920,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 		return core;
 
 	// Package() and Node() can return NULL during topology
-	// teardown or if this core was never fully initialised.  Guard all
+	// teardown or if this core was never fully initialized.  Guard all
 	// three pointer dereferences before accessing nodeID.
 	if (core->Package() == NULL || core->Package()->Node() == NULL)
 		return core;
@@ -970,7 +970,7 @@ static void rebalance_irqs(bool idle) {
 		return;
 
 	// Package() and Node() can be NULL during topology teardown or if a core
-	// was never fully initialised (e.g. it exceeded kMaxCoresPerPackage and
+	// was never fully initialized (e.g. it exceeded kMaxCoresPerPackage and
 	// its Init() was skipped).  Defend all three pointer dereferences.
 	if (pack && sSmallTaskCore != NULL && currentCore != NULL &&
 		currentCore->Package() != NULL &&

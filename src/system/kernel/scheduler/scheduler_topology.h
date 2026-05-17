@@ -70,14 +70,17 @@ static void search_local_node(SchedulerNode* node, Action action) {
 	// become statistically rare once N is large enough.
 	//
 	// (documentation): The visitedBits array in search_global_random is
-	// a fixed 128-byte stack allocation (kStackBitmaskSize == 1024 packages).
-	// For systems with >1024 packages deduplication is skipped but the loop
+	// a fixed 512-byte stack allocation (kStackBitmaskSize == 4096 packages).
+	// For systems with >4096 packages deduplication is skipped but the loop
 	// still terminates within kMaxAttempts, bounding stack use unconditionally.
 	int32 logPackages = 0;
 	if (packagesInNode > 1)
 		logPackages = fls((uint32)packagesInNode) - 1;
 
-	const int kMaxLocalAttempts = min_c(packagesInNode, 4 + logPackages);
+	const int32 samplesToTake = min_c(packagesInNode, 4 + logPackages);
+	int32 samplesTaken = 0;
+	int32 attempts = 0;
+	const int32 kMaxAttempts = samplesToTake * 8;
 
 	// Note: the large-node random path has no visited bitmask,
 	// allowing the same package to be probed multiple times within a single
@@ -88,7 +91,7 @@ static void search_local_node(SchedulerNode* node, Action action) {
 
 	if (canDedup && packagesInNode <= 64) {
 		uint64 visitedLocal = 0;
-		for (int i = 0; i < kMaxLocalAttempts; i++) {
+		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 			int32 index =
 				nodeBaseIndex +
 				(int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
@@ -103,6 +106,7 @@ static void search_local_node(SchedulerNode* node, Action action) {
 				visitedLocal |= bit;
 			}
 
+			samplesTaken++;
 			if (action(&gPackageEntries[index]))
 				break;
 		}
@@ -115,7 +119,7 @@ static void search_local_node(SchedulerNode* node, Action action) {
 		memset(visitedLocalStack, 0, (size_t)wordsNeeded * sizeof(uint64));
 	}
 
-	for (int i = 0; i < kMaxLocalAttempts; i++) {
+	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
 		int32 index =
 			nodeBaseIndex +
 			(int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
@@ -133,6 +137,7 @@ static void search_local_node(SchedulerNode* node, Action action) {
 			}
 		}
 
+		samplesTaken++;
 		if (action(&gPackageEntries[index]))
 			break;
 	}
@@ -186,7 +191,7 @@ static void search_global_random(Action action) {
 		return;
 	}
 
-	// the original kStackBitmaskSize of 1024 meant that packages
+	// the previous kStackBitmaskSize of 1024 meant that packages
 	// in the range [1024, 4096) fell into a coarse stripe-based fallback
 	// that visited at most 1 package per 64-package band, severely
 	// under-sampling large systems.  gPackageCount is capped at 4096, so a

@@ -831,7 +831,7 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 
 	// Note: declare 'stolen' BEFORE the 'goto phase3' to avoid
 	// jumping over a variable initialization, which is ill-formed in C++
-	// (UB even for trivial types when an initialiser is present).
+	// (UB even for trivial types when an initializer is present).
 	ThreadData* stolen = NULL;
 
 	{

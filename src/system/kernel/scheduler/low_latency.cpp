@@ -513,7 +513,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		if (!useMask || previousCore->CPUMask().Matches(mask)) {
 			if (core != previousCore) {
 				// enforce type preference in the soft-affinity check
-				// so an E-core previousCore is never returned for a P-coloured
+				// so an E-core previousCore is never returned for a P-colored
 				// thread just because loads are similar.
 				bool typeOk = true;
 				if (preferMax && previousCore->Type() != gMaxCoreType)

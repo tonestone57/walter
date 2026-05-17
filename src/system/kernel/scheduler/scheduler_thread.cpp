@@ -274,7 +274,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 			// Note: _ChooseCore() (which delegates to choose_core in
 			// low_latency.cpp / power_saving.cpp) can return NULL when all
 			// cores are filtered out by the affinity mask or when the topology
-			// arrays are partially initialised during boot. Guard before the
+			// arrays are partially initialized during boot. Guard before the
 			// CPUMask dereference to avoid a NULL-pointer panic.
 			if (targetCore == NULL) {
 				// Last-resort: fall back to the current CPU's core, which is
