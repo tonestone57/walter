@@ -288,7 +288,6 @@ public:
 	inline void SetSystemVirtualTime(bigtime_t time) {
 		StoreRelease64(fSystemVirtualTime, (int64)time);
 	}
-
 	inline bigtime_t PreemptionThreshold() const {
 		return (bigtime_t)LoadAcquire64(fPreemptionThreshold);
 	}
