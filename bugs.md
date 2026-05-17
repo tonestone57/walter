@@ -49,6 +49,10 @@ In `UpdatePriorityBoostScalable`, the modular ownership calculation `(boostEpoch
 In `RunQueue.h`, `CheckEligibility` attempts to migrate threads from the ineligible heap to the eligible heap. If the eligible heap is full (`fEligibleCount >= kMaxThreadsPerCore`), it breaks the loop.
 *   **Impact:** Threads remain ineligible longer than mathematically required, potentially causing starvation if the eligible heap is perpetually saturated with higher-deadline threads.
 
+### 3.4 Transient fCore NULL in ComputeQuantum
+In `ThreadData::ComputeQuantum` (`scheduler_thread.cpp`), `fCore` is snapshotted via `atomic_pointer_get`. However, if the snapshot returns `NULL` (due to a race with `UnassignCore`), the function returns a minimal quantum. While safe, it means quantum scaling is temporarily disabled for that thread until the next reschedule.
+*   **Impact:** Suboptimal quantum selection during rapid thread migration or hot-plug.
+
 ## 4. Portability & Coding Standards
 
 ### 4.1 64-bit Alignment Requirements
@@ -58,3 +62,7 @@ Atomic operations on 64-bit variables (`fVirtualRuntime`, `gIdleMask`, etc.) req
 ### 4.2 Pointer Type Safety in Atomics
 Standard Haiku `atomic_*` functions often expect `int32*` or `int64*`. The scheduler's use of template wrappers with `reinterpret_cast<int32 volatile*>` is necessary for GCC 13 but bypasses some of the compiler's natural type checking.
 *   **Observation:** The alignment attributes and `static_assert` guards in `scheduler_common.h` mitigate the risk of incorrect sizes.
+
+### 4.3 Typographical Consistency
+Inconsistent spelling of technical terms (e.g., "behaviour" vs "behavior") exists across comments and `dprintf` strings.
+*   **Impact:** Minor inconsistency in log files and source code readability.
