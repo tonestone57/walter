@@ -519,7 +519,6 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 	if (pinnedThread != NULL)
 		pinnedPriority = pinnedThread->GetEffectivePriority();
 
-	core->CheckEligibility(core->SystemVirtualTime());
 	ThreadData* sharedThread = core->PeekThread();
 	if (sharedThread == NULL && pinnedThread == NULL) {
 		// try to steal work from other cores in the same package
@@ -1052,13 +1051,12 @@ ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 	// Unlike traditional schedulers, we prefer threads with the
 	// highest positive Lag (most under-served).
 
-	CPUEntry* thief = CPUEntry::GetCPU(thiefCPU);
-	const_cast<ThreadRunQueue&>(fRunQueue).CheckEligibility(thief->SystemVirtualTime());
+	const_cast<ThreadRunQueue&>(fRunQueue).CheckEligibility(SystemVirtualTime());
 
 	// Thief prefers cores with lower total weight pressure.
 	// (Target pressure comparison is handled in _TryStealWork)
 
-	bigtime_t svt = thief->SystemVirtualTime();
+	bigtime_t svt = SystemVirtualTime();
 	ThreadData* thread = fRunQueue.PeekBest(ThreadDataLagCompare(svt), StealThreadPredicate(thiefCPU));
 
 	if (thread != NULL) {
