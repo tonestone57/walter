@@ -34,13 +34,14 @@ static void search_local_node(SchedulerNode* node, Action action) {
 	// Use cpu->fLastLocalPackageIndex (per-CPU) rather than the old
 	// core->fLastLocalPackageIndex.  The CoreEntry field was written on every
 	// call by every CPU sharing the core, producing false sharing on the core's
-	// fLastLocalPackageIndex is updated on
-	// EVERY iteration, not only on success.  This is intentional: if all
-	// packages in the node reject (all busy), the index still advances so
-	// the next call starts from a fresh position, maintaining the
-	// round-robin guarantee under sustained load.  No code change required.
-	// hot read-mostly cache line.  The per-CPU field is private to one CPU so
-	// no cross-CPU invalidation occurs.
+	// core's hot read-mostly cache line.  The per-CPU field is private to
+	// one CPU so no cross-CPU invalidation occurs.
+	//
+	// fLastLocalPackageIndex is updated on EVERY iteration, not only on
+	// success.  This is intentional: if all packages in the node reject
+	// (all busy), the index still advances so the next call starts from a
+	// fresh position, maintaining the round-robin guarantee under sustained
+	// load.
 	if (packagesInNode <= 8) {
 		int32 lastIndex = cpu->fLastLocalPackageIndex;
 		int32 start = (lastIndex + 1) % packagesInNode;

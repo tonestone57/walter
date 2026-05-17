@@ -253,7 +253,7 @@ CPUEntry::CPUEntry()
 	  fTotalWeight(0),
 	  fReschedulePending(0),
 	  fLastLocalPackageIndex(0),
-	  lastReschedule(0) {
+	  fLastReschedule(0) {
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
 }
 

@@ -353,18 +353,13 @@ bigtime_t ThreadData::ComputeQuantum() const {
 	// Note: ComputeQuantum is only called while the caller holds
 	// SchedulerModeLocker (wait-free RCU).
 	// Mode switches require InterruptsBigSchedulerLocker which takes the
-	// increment gRCUGeneration and wait for quiescent state, fully serialising against this read path.
-	// Plain struct-field reads are therefore safe and avoid potential
-	// undefined behaviour from casting unaligned bigtime_t pointers to
-	// int64* on 32-bit targets where atomic-get64 requires 8-byte alignment
-	// not guaranteed by scheduler_mode_operations without explicit alignas.
+	// increment gRCUGeneration and wait for quiescent state, fully
+	// serialising against this read path.  Plain struct-field reads are
+	// therefore safe and avoid potential undefined behaviour from casting
+	// unaligned bigtime_t pointers to int64* on 32-bit targets where
+	// atomic-get64 requires 8-byte alignment not guaranteed by
+	// scheduler_mode_operations without explicit alignas.
 	scheduler_mode_operations* mode = Scheduler::GetCurrentMode();
-	const bigtime_t baseQ = mode->base_quantum;
-	const bigtime_t minQ = mode->minimal_quantum;
-	const bigtime_t maxLat = mode->maximum_latency;
-	const bigtime_t mult0 = mode->quantum_multipliers[0];
-
-	const bigtime_t kMinGranularity = 1200;
 
 	// Cache fCore once. Without this, a concurrent MigrateTo() can change
 	// fCore between the three calls below, mixing data from two different
@@ -374,10 +369,30 @@ bigtime_t ThreadData::ComputeQuantum() const {
 
 	// Defensive null guard: fCore can be transiently NULL during a race
 	// between UnassignCore() and the subsequent MigrateTo() (e.g. rapid CPU
-	// hot-plug).  Return the minimal quantum so the thread gets rescheduled
-	// quickly and picks up a valid core assignment on the next pass.
-	if (core == NULL)
-		return max_c(minQ, kMinGranularity);
+	// hot-plug). Try to use the previous core as a hint for quantum scaling;
+	// if that also fails, return the minimal quantum so the thread gets
+	// rescheduled quickly and picks up a valid core assignment on the next pass.
+	if (core == NULL) {
+		CoreEntry* const prevCore = PreviousCore();
+		if (prevCore != NULL && prevCore->CPUCount() > 0) {
+			// use prevCore for scaling below
+			return _ComputeQuantumForCore(prevCore, mode);
+		}
+		return max_c(mode->minimal_quantum, (bigtime_t)1200);
+	}
+
+	return _ComputeQuantumForCore(core, mode);
+}
+
+
+bigtime_t ThreadData::_ComputeQuantumForCore(CoreEntry* core,
+											  scheduler_mode_operations* mode) const {
+	const bigtime_t baseQ = mode->base_quantum;
+	const bigtime_t minQ = mode->minimal_quantum;
+	const bigtime_t maxLat = mode->maximum_latency;
+	const bigtime_t mult0 = mode->quantum_multipliers[0];
+
+	const bigtime_t kMinGranularity = 1200;
 
 	// Note: guard against fScoreFactor == 0 which occurs if
 	// SetCapacity(0) is ever called (capacity == 0 → division by zero in

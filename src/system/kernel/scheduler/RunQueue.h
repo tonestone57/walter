@@ -64,7 +64,7 @@ struct RunQueueTraits {
 			  typename GetLink>
 #define RUN_QUEUE_CLASS_NAME RunQueue<Element, MaxPriority, Compare, GetLink>
 
-const int32 kMaxThreadsPerCore = 1024;
+const int32 kMaxThreadsPerCore = 2048;
 
 template <typename Element, unsigned int MaxPriority, typename Compare,
 		  typename GetLink = RunQueueStandardGetLink<Element> >

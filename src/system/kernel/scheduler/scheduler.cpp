@@ -149,19 +149,30 @@ static void UpdateDeadlineScalingScalable() {
 
 
 static void update_quantum_lengths_dpc(void* /*arg*/) {
-	// Use the latest requested target from sPendingDPCTarget
-	// instead of the stale value passed via arg.
-	int64 targetResolution = (int64)LoadAcquire(sPendingDPCTarget);
+	while (true) {
+		// Use the latest requested target from sPendingDPCTarget
+		// instead of the stale value passed via arg.
+		int64 targetResolution = (int64)LoadAcquire(sPendingDPCTarget);
 
-	{
-		InterruptsBigSchedulerLocker locker;
-		if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
-			StoreRelease64(gDeadlineBucketSize,
-				targetResolution);
-			UpdateDeadlineScalingScalable();
+		{
+			InterruptsBigSchedulerLocker locker;
+			if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
+				StoreRelease64(gDeadlineBucketSize,
+					targetResolution);
+				UpdateDeadlineScalingScalable();
+			}
 		}
+
+		// RCU Synchronization: Wait for all CPUs to reach a quiescent state
+		// (reschedule) and observe the new bucket size before we consider
+		// this update done.
+		scheduler_synchronize();
+
+		// Check if another update was requested while we were synchronizing.
+		// If so, loop back and process it immediately.
+		if ((int64)LoadAcquire(sPendingDPCTarget) == targetResolution)
+			break;
 	}
-	scheduler_synchronize();
 
 	StoreRelease(sDPCPending, 0);
 }
@@ -667,10 +678,10 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 			// Note: this IPI dispatch was unreachable before; now
 			// correctly wakes the target CPU when a thread is enqueued.
 			if (ShouldReschedule(now,
-								 (bigtime_t)LoadAcquire64(targetCPU->lastReschedule),
+								 (bigtime_t)LoadAcquire64(targetCPU->fLastReschedule),
 								 kRescheduleCooldown)) {
 				if (targetCPU->SetReschedulePending()) {
-					StoreRelease64(targetCPU->lastReschedule,
+					StoreRelease64(targetCPU->fLastReschedule,
 										   (int64)now);
 					smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
 								 NULL, SMP_MSG_FLAG_ASYNC);

@@ -177,7 +177,7 @@ private:
 
 	int32 fThreadCount __attribute__((aligned(8)));
 	int32 fLoad __attribute__((aligned(8)));
-	bigtime_t lastReschedule __attribute__((aligned(8)));
+	bigtime_t fLastReschedule __attribute__((aligned(8)));
 
 	int32 fPerformanceScale;
 

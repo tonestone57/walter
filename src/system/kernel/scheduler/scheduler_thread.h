@@ -45,17 +45,16 @@ public:
 	SCHEDULER_INLINE Thread* GetThread() const { return fThread; }
 	// gCPUEnabled is updated one word at a time by SetBitAtomic/
 	// ClearBitAtomic; there is no compound-And atomicity guarantee.
+	//
 	// Note: iterate with a snapshot approach to ensure word-boundary
 	// consistency.  While word-aligned reads are indivisible on x86, we
-	// the retry condition
-	// Note: word-boundary consistency via retry loop
-	// is CORRECT.  It retries when the two reads DIFFER (unstable) and
-	// retry < 3, and breaks when they are EQUAL (stable) OR retries are
-	// exhausted.  This is the intended behaviour and is NOT inverted.
-	// No code change required.
-	//
 	// can still read two words representing different snapshots.  We
 	// probe the words and re-read if we suspect a race.
+	//
+	// The word-boundary consistency via retry loop is CORRECT.  It retries
+	// when the two reads DIFFER (unstable) and retry < 3, and breaks when
+	// they are EQUAL (stable) OR retries are exhausted.  This is the
+	// intended behaviour and is NOT inverted.
 	SCHEDULER_INLINE CPUSet GetCPUMask() const {
 		CPUSet enabled;
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
@@ -188,6 +187,9 @@ public:
 	static void ComputeQuantumLengths();
 
 private:
+	bigtime_t _ComputeQuantumForCore(CoreEntry* core,
+									 scheduler_mode_operations* mode) const;
+
 	// Must be called with the appropriate run-queue lock held (either
 	// CPUEntry::fQueueLock or CoreEntry::fQueueLock).
 	SCHEDULER_INLINE void _UpdatePriorityBoost(bigtime_t now);
