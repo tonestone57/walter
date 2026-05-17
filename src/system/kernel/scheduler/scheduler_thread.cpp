@@ -355,7 +355,7 @@ bigtime_t ThreadData::ComputeQuantum() const {
 	// Mode switches require InterruptsBigSchedulerLocker which takes the
 	// increment gRCUGeneration and wait for quiescent state, fully
 	// serialising against this read path.  Plain struct-field reads are
-	// therefore safe and avoid potential undefined behaviour from casting
+	// therefore safe and avoid potential undefined behavior from casting
 	// unaligned bigtime_t pointers to int64* on 32-bit targets where
 	// atomic-get64 requires 8-byte alignment not guaranteed by
 	// scheduler_mode_operations without explicit alignas.
@@ -425,7 +425,7 @@ bigtime_t ThreadData::_ComputeQuantumForCore(CoreEntry* core,
 	//
 	// HasHighPriorityThread() reads the run-queue bitmap with atomic-get
 	// (same pattern as PeekMaximum) without acquiring the lock.  A stale
-	// read means at most one quantum is computed without the optimisation;
+	// read means at most one quantum is computed without the optimization;
 	// the next reschedule corrects it.  This strictly improves worst-case
 	// display-thread latency over the TryLock approach.
 	displayReady = core->HasHighPriorityThread();
@@ -670,7 +670,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		(bigtime_t)LoadAcquire64(Scheduler::gDeadlineBucketSize);
 
 	// Note: guard against division-by-zero if bucketSize is 0.
-	// This can occur transiently during mode initialisation before
+	// This can occur transiently during mode initialization before
 	// ComputeQuantumLengths() sets gDeadlineBucketSize to a positive value.
 	if (bucketSize <= 0) {
 		fEffectivePriority = GetPriority();
@@ -736,7 +736,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		// negative the expression can produce urgency > B_INT32_MAX before the
 		// clamp.  The clamp to kMaxDynamicPriority above is sufficient for
 		// correctness (bigtime_t is 64-bit signed), but add an explicit cast
-		// guard to silence undefined-behaviour sanitisers.
+		// guard to silence undefined-behavior sanitisers.
 		if (urgency > (bigtime_t)B_INT32_MAX)
 			urgency = (bigtime_t)B_INT32_MAX;
 

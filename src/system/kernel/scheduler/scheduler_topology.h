@@ -81,10 +81,39 @@ static void search_local_node(SchedulerNode* node, Action action) {
 
 	// Note: the large-node random path has no visited bitmask,
 	// allowing the same package to be probed multiple times within a single
-	// call. Add a simple 64-bit bitmask for nodes with <= 64 packages (the
-	// common case) to avoid duplicate probes and wasted budget.
-	uint64 visitedLocal = 0;
-	const bool canDedup = (packagesInNode <= 64);
+	// call. Use a stack-allocated bitmask for nodes with up to 512 packages
+	// to avoid duplicate probes and wasted budget.
+	const int32 kLocalStackBitmaskSize = 512;
+	const bool canDedup = (packagesInNode <= kLocalStackBitmaskSize);
+
+	if (canDedup && packagesInNode <= 64) {
+		uint64 visitedLocal = 0;
+		for (int i = 0; i < kMaxLocalAttempts; i++) {
+			int32 index =
+				nodeBaseIndex +
+				(int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
+			if (index >= gPackageCount)
+				continue;
+
+			int32 localIdx = index - nodeBaseIndex;
+			if (localIdx >= 0 && localIdx < 64) {
+				uint64 bit = 1ULL << localIdx;
+				if (visitedLocal & bit)
+					continue;
+				visitedLocal |= bit;
+			}
+
+			if (action(&gPackageEntries[index]))
+				break;
+		}
+		return;
+	}
+
+	uint64 visitedLocalStack[kLocalStackBitmaskSize / 64];
+	if (canDedup) {
+		int32 wordsNeeded = (packagesInNode + 63) / 64;
+		memset(visitedLocalStack, 0, (size_t)wordsNeeded * sizeof(uint64));
+	}
 
 	for (int i = 0; i < kMaxLocalAttempts; i++) {
 		int32 index =
@@ -95,11 +124,12 @@ static void search_local_node(SchedulerNode* node, Action action) {
 
 		if (canDedup) {
 			int32 localIdx = index - nodeBaseIndex;
-			if (localIdx >= 0 && localIdx < 64) {
-				uint64 bit = 1ULL << localIdx;
-				if (visitedLocal & bit)
+			if (localIdx >= 0 && localIdx < kLocalStackBitmaskSize) {
+				int32 word = localIdx / 64;
+				int32 bit = localIdx % 64;
+				if (visitedLocalStack[word] & (1ULL << bit))
 					continue;
-				visitedLocal |= bit;
+				visitedLocalStack[word] |= (1ULL << bit);
 			}
 		}
 
@@ -138,7 +168,7 @@ static void search_global_random(Action action) {
 	// For systems with <= 64 packages, use a single uint64 bitmask (fast path).
 	// the fast-path shift `1ULL << i` where
 	// i is in [0, packageCount-1] with packageCount <= 64 means i is in
-	// [0, 63].  Shifting a 64-bit literal by 63 is defined behaviour.
+	// [0, 63].  Shifting a 64-bit literal by 63 is defined behavior.
 	// No overflow is possible.  No code change required.
 	if (packageCount <= 64) {
 		uint64 visitedBits = 0;

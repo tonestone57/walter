@@ -54,7 +54,7 @@ public:
 	// The word-boundary consistency via retry loop is CORRECT.  It retries
 	// when the two reads DIFFER (unstable) and retry < 3, and breaks when
 	// they are EQUAL (stable) OR retries are exhausted.  This is the
-	// intended behaviour and is NOT inverted.
+	// intended behavior and is NOT inverted.
 	SCHEDULER_INLINE CPUSet GetCPUMask() const {
 		CPUSet enabled;
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;

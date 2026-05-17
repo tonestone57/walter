@@ -314,7 +314,7 @@ void CPUEntry::Stop() {
 
 	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);
-	const int32 kMaxIterations = 1000;
+	const int32 kMaxIterations = 4096;
 	for (int32 i = 0; i < kMaxIterations; i++) {
 		irq_assignment* irq =
 			(irq_assignment*)list_get_first_item(&entry->irqs);
@@ -749,7 +749,7 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 	// so startIndex + i < 2 * registeredCores, requiring at most one
 	// subtraction. (clarification): GetIdleCorePacking shift guard - when
 	// shift==0 the left-shift by kMaxCoresPerPackage is already guarded by "if
-	// (shift > 0)" in PackageEntry::GetIdleCorePacking; no undefined behaviour
+	// (shift > 0)" in PackageEntry::GetIdleCorePacking; no undefined behavior
 	// occurs.
 
 	CPUSet enabled;
@@ -785,7 +785,7 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 		// Note: IdleCoreMask() is read atomically but without holding
 		// a lock. Between this read and TryLockRunQueue(), the victim core may
 		// have transitioned from idle to active. The skip is a best-effort
-		// optimisation, not a guarantee. The comment "guaranteed empty" was
+		// optimization, not a guarantee. The comment "guaranteed empty" was
 		// incorrect - replace with accurate description.
 		// The TryLockRunQueue() + PeekOption() predicate below is the actual
 		// correctness barrier; this skip only avoids a redundant lock attempt.
@@ -830,7 +830,7 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 	// options here before going across the expensive interconnect.
 
 	// Note: declare 'stolen' BEFORE the 'goto phase3' to avoid
-	// jumping over a variable initialisation, which is ill-formed in C++
+	// jumping over a variable initialization, which is ill-formed in C++
 	// (UB even for trivial types when an initialiser is present).
 	ThreadData* stolen = NULL;
 
@@ -1208,7 +1208,7 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 	// Use B_INT32_MIN instead of the implicit magic -1.  B_INT32_MIN is
 	// less than every valid scheduler priority (minimum B_IDLE_PRIORITY == 0),
 	// so the CPU is guaranteed to bubble to the heap root.  The explicit
-	// constant makes the intent clear and prevents silent misbehaviour if the
+	// constant makes the intent clear and prevents silent misbehavior if the
 	// priority range ever grows to include negative values.
 	fCPUHeap.ModifyKey(cpu, B_INT32_MIN);
 	// Note: fCPUHeap is accessed exclusively under fCPULock, which the
@@ -1817,7 +1817,7 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 				load > maxLoad
 				// Note: tie-break by higher PackageIndex (within
 				// the package) rather than lower core ID to spread across
-				// more physical cores instead of always favouring core 0.
+				// more physical cores instead of always favoring core 0.
 				|| (load == maxLoad &&
 					candidate->PackageIndex() > maxEntry->PackageIndex())) {
 				maxLoad = load;
@@ -1885,7 +1885,7 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 				load > maxLoad
 				// Note: tie-break by higher PackageIndex (within
 				// the package) rather than lower core ID to spread across
-				// more physical cores instead of always favouring core 0.
+				// more physical cores instead of always favoring core 0.
 				|| (load == maxLoad &&
 					candidate->PackageIndex() > maxEntry->PackageIndex())) {
 				maxLoad = load;
