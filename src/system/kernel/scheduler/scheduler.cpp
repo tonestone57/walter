@@ -57,7 +57,7 @@ bool gTrackCoreLoad;
 bool gTrackCPULoad;
 int32 gRandomSamples;
 
-int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000;
+int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000000;
 
 CoreType gMinCoreType = CORE_TYPE_UNKNOWN;
 CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
@@ -195,7 +195,7 @@ static status_t interaction_timer_hook(struct timer* timer) {
 	// and the DPC guard (sDPCPending) prevents duplicate DPC enqueueing.
 	StoreRelease(sTimerArmed, 0);
 
-	StoreRelease(sPendingDPCTarget, 5000);
+	StoreRelease(sPendingDPCTarget, 5000000);
 	if (GetAndSet(sDPCPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
@@ -262,7 +262,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 			return;
 	}
 
-	if (currentBucketSize == 1000) {
+	if (currentBucketSize == 1000000) {
 		// Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
 		if (GetAndSet(sTimerArmed, 1) == 0) {
@@ -284,7 +284,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// atomic-get-and-set below.  Clearing sDPCPending unconditionally before
 	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
 	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
-	StoreRelease(sPendingDPCTarget, 1000);
+	StoreRelease(sPendingDPCTarget, 1000000);
 	if (GetAndSet(sDPCPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
@@ -673,7 +673,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 				int64 weight = runningData->GetWeight();
 				if (weight <= 0)
 					weight = 1;
-				bigtime_t vEpsilon = (epsilon * 1000) / weight;
+				bigtime_t vEpsilon = (epsilon * 1000000LL) / weight;
 
 				// Preempt only if runningData->Deadline - threadData->Deadline > vEpsilon
 				if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {

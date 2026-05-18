@@ -649,7 +649,7 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 		requestSize = 1000 + (1000 - fInteractivityScore) * 4;
 	}
 
-	bigtime_t slice = (requestSize * 1000) / weight;
+	bigtime_t slice = (requestSize * 1000000LL) / weight;
 
 	// Note: Deadline floor is unnecessary in the virtual domain.
 	// As long as weight > 0 and requestSize > 0, slice is positive.
@@ -699,7 +699,8 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 			(bigtime_t)LoadAcquire64(fVirtualDeadline) -
 			svt;
 
-		// Convert Virtual difference back to Real difference for urgency mapping.
+		// Convert Virtual difference back to Real difference (nanoseconds)
+		// for urgency mapping.
 		// RealTimeDiff = (VirtualTimeDiff * weight) / kFairShareReferenceWeight
 		int64 weight = GetWeight();
 		if (weight <= 0)

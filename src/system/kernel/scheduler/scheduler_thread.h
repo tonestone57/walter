@@ -671,11 +671,11 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 				bigtime_t vrt = GetVirtualRuntime();
 
 				// Scale the lag floor to virtual time based on thread weight.
-				// vLagFloor = (kMaxLagFloor * 1000) / weight
+				// vLagFloor = (kMaxLagFloor * 1000000) / weight
 				int64 weight = GetWeight();
 				if (weight <= 0)
 					weight = 1;
-				bigtime_t vLagFloor = (kMaxLagFloor * 1000) / weight;
+				bigtime_t vLagFloor = (kMaxLagFloor * 1000000LL) / weight;
 
 				if (vrt < svt - vLagFloor)
 					StoreRelease64(fVirtualRuntime, (int64)(svt - vLagFloor));
@@ -784,7 +784,7 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			int64 weight = GetWeight();
 			if (weight <= 0)
 				weight = 1;
-			bigtime_t vLagFloor = (kMaxLagFloor * 1000) / weight;
+			bigtime_t vLagFloor = (kMaxLagFloor * 1000000LL) / weight;
 
 			if (vrt < svt - vLagFloor)
 				StoreRelease64(fVirtualRuntime, (int64)(svt - vLagFloor));
@@ -873,10 +873,11 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 		if (maxLatency == 0)
 			maxLatency = 3200;
 	}
-	const bigtime_t kLookahead = maxLatency * 100000LL;
+	// Horizon set to ~300 seconds in virtual nanoseconds.
+	const bigtime_t kLookahead = 300000000000LL;
 
 	if (svt == 0)
-		svt = system_time();
+		svt = system_time() * 1000;
 
 	bigtime_t ceiling =
 		(svt > B_INT64_MAX - kLookahead) ? B_INT64_MAX : svt + kLookahead;
@@ -898,18 +899,18 @@ inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t svt,
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (!IsRealTime() && !IsIdle()) {
-		// Note: Formal fair-share runtime update.
-		// delta = (active * kFairShareReferenceWeight) / Weight
+		// Note: Formal fair-share runtime update (nanosecond precision).
+		// delta = (active * 1000000) / Weight
 		int64 weight = GetWeight();
 		if (weight <= 0)
 			weight = 1;
-		bigtime_t delta = (active * 1000) / weight;
+		bigtime_t delta = (active * 1000000LL) / weight;
 
 		UpdateVirtualRuntime(delta, svt);
 
-		// Note: Update Lag.
-		// Lag = (SystemVirtualTime - VirtualRuntime) * Weight
-		int64 lag = (svt - GetVirtualRuntime()) * weight;
+		// Note: Update Lag (Service Lag in nanoseconds).
+		// Lag = (SystemVirtualTime - VirtualRuntime) * Weight / 1000
+		int64 lag = (svt - GetVirtualRuntime()) * weight / 1000;
 		StoreRelease64(fLag, lag);
 	}
 
