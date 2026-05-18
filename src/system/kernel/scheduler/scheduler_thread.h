@@ -147,6 +147,10 @@ public:
 		return (bigtime_t)LoadAcquire64(fVirtualRuntime);
 	}
 
+	SCHEDULER_INLINE bigtime_t GetVirtualDeadline() const {
+		return (bigtime_t)LoadAcquire64(fVirtualDeadline);
+	}
+
 	SCHEDULER_INLINE int64 GetWeight() const {
 		return LoadAcquire64(fWeight);
 	}
@@ -848,16 +852,15 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
 	if (maxLatency == 0)
 		maxLatency =
 			(bigtime_t)LoadAcquire64(sMaxLatency);
-	const bigtime_t kLookahead = maxLatency * 1000LL;
+	const bigtime_t kLookahead = maxLatency * 1000000LL;
 
-	if (now == 0) {
-		now = system_time();
-		if (now == 0)
-			return;
-	}
+	CoreEntry* core = Core();
+	bigtime_t base = (core != NULL) ? core->SystemVirtualTime() : now;
+	if (base == 0)
+		base = system_time();
 
 	bigtime_t ceiling =
-		(now > B_INT64_MAX - kLookahead) ? B_INT64_MAX : now + kLookahead;
+		(base > B_INT64_MAX - kLookahead) ? B_INT64_MAX : base + kLookahead;
 
 	const bigtime_t threshold = ceiling - delta;
 	bigtime_t vRuntime = (bigtime_t)LoadAcquire64(fVirtualRuntime);

@@ -690,7 +690,7 @@ void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 				// Note: Update Dynamic Preemption Threshold.
 				// Scale epsilon based on thread count to protect cache performance.
 				int32 threads = core->ThreadCount();
-				core->SetPreemptionThreshold((int64)(threads * 500)); // 500us per thread
+				core->SetPreemptionThreshold((int64)(200 + threads * 500));
 			} else if (nextThreadData->IsIdle()) {
 				// On an idle system, epsilon is near zero (instant response).
 				core->SetPreemptionThreshold(0);

@@ -58,7 +58,7 @@ void ThreadData::_InitBase() {
 	StoreRelease64(fMeasureAvailableTime, 0);
 
 	StoreRelease64(fWeight, get_weight(fEffectivePriority));
-	StoreRelease64(fRequestSize, 5000); // 5ms default
+	StoreRelease64(fRequestSize, 0); // Use dynamic scaling by default
 	StoreRelease64(fLag, 0);
 
 	StoreRelease64(fVirtualRuntime, 0);
@@ -643,7 +643,11 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 	if (weight <= 0) weight = 1;
 
 	bigtime_t requestSize = LoadAcquire64(fRequestSize);
-	if (requestSize <= 0) requestSize = 5000;
+	if (requestSize <= 0) {
+		// Scale EEVDF request size (latency target) based on interactivity.
+		// Interactive threads get 1ms, CPU-bound get 5ms.
+		requestSize = 1000 + (1000 - fInteractivityScore) * 4;
+	}
 
 	bigtime_t slice = (requestSize * 1000) / weight;
 
@@ -684,13 +688,16 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		fEffectivePriority = GetPriority();
 	else {
 		// Map Virtual Deadline to Dynamic Priority (Urgency).
-		// Urgency = MaxDynamic - (Deadline - Now) / 5ms
-		// If Deadline is Now (or passed), Urgency is Max.
+		// Urgency = MaxDynamic - (Deadline - SVT) / 5ms
+		// If Deadline is SVT (or passed), Urgency is Max.
 		// If Deadline is far, Urgency is 0.
+
+		CoreEntry* core = Core();
+		bigtime_t svt = (core != NULL) ? core->SystemVirtualTime() : now;
 
 		bigtime_t diff =
 			(bigtime_t)LoadAcquire64(fVirtualDeadline) -
-			now;
+			svt;
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
 		bigtime_t urgencyBoost = (fInteractivityScore * bucketSize) / 1000;

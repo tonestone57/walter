@@ -463,6 +463,12 @@ Element* RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const {
 		if (predicate(fEligibleHeap[i]))
 			return fEligibleHeap[i];
 	}
+
+	for (int32 i = 0; i < fIneligibleCount; i++) {
+		if (predicate(fIneligibleHeap[i]))
+			return fIneligibleHeap[i];
+	}
+
 	return NULL;
 }
 

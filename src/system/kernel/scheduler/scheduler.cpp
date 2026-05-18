@@ -665,11 +665,12 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		// significantly more urgent (Delta > epsilon).
 		if (targetCPU->ID() != smp_get_current_cpu()) {
 			bigtime_t epsilon = targetCPU->PreemptionThreshold();
-			ThreadData* top = targetCPU->PeekThread();
-			if (top != NULL && !top->IsIdle()) {
-				// new thread is 'threadData', running thread is 'top'.
-				// Preempt only if top->Deadline - threadData->Deadline > epsilon
-				if (top->GetVirtualDeadline() - threadData->GetVirtualDeadline() < epsilon) {
+			Thread* running = gCPU[targetCPU->ID()].running_thread;
+			ThreadData* runningData = (running != NULL) ? running->scheduler_data : NULL;
+			if (runningData != NULL && !runningData->IsIdle() && !runningData->IsRealTime()) {
+				// new thread is 'threadData', running thread is 'runningData'.
+				// Preempt only if runningData->Deadline - threadData->Deadline > epsilon
+				if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < epsilon) {
 					// Not urgent enough to justify preemption; preserve cache warmth.
 					return true;
 				}
