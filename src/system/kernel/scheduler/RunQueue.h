@@ -67,7 +67,10 @@ public:
 	inline Element* PeekMaximum() const { return PeekBest(); }
 
 	inline uint32 GetFirstLevelBitmap() const { return fFirstLevelBitmap; }
+	inline uint32 GetSecondLevelBitmap(int fli) const { return fSecondLevelBitmap[fli]; }
 	inline uint32 GetRealTimeBitmap() const { return fRealTimeBitmap; }
+
+	inline Element* GetBinHead(int fli, int sli) const { return fQueues[fli][sli].Head(); }
 
 	class ConstIterator {
 	public:

@@ -57,7 +57,7 @@ bool gTrackCoreLoad;
 bool gTrackCPULoad;
 int32 gRandomSamples;
 
-int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000;
+int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000000;
 
 CoreType gMinCoreType = CORE_TYPE_UNKNOWN;
 CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
@@ -195,7 +195,7 @@ static status_t interaction_timer_hook(struct timer* timer) {
 	// and the DPC guard (sDPCPending) prevents duplicate DPC enqueueing.
 	StoreRelease(sTimerArmed, 0);
 
-	StoreRelease(sPendingDPCTarget, 5000);
+	StoreRelease(sPendingDPCTarget, 5000000);
 	if (GetAndSet(sDPCPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
@@ -284,7 +284,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// atomic-get-and-set below.  Clearing sDPCPending unconditionally before
 	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
 	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
-	StoreRelease(sPendingDPCTarget, 1000);
+	StoreRelease(sPendingDPCTarget, 1000000);
 	if (GetAndSet(sDPCPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
@@ -345,18 +345,19 @@ struct RunQueueScanner {
 		uint32 flBitmap = runQueue->GetFirstLevelBitmap();
 		while (flBitmap != 0) {
 			int fli = __builtin_ctz(flBitmap);
-			// We scan the first non-empty sli_index bin of this fli_index
-			// since GetHead(priority < 100) is only implemented for B_IDLE_PRIORITY.
-			// However, _UpdatePriorityBoost expects a priority.
-			// Let's just scan B_IDLE_PRIORITY if it's there.
-			if (fli == 0) {
-				ThreadData* thread = runQueue->GetHead(B_IDLE_PRIORITY);
-				if (thread != NULL)
+			// To ensure interactivity boosting for all FairShare threads,
+			// we iterate through the heads of non-empty bins.
+			uint32 slBitmap = runQueue->GetSecondLevelBitmap(fli);
+			while (slBitmap != 0) {
+				int sli = __builtin_ctz(slBitmap);
+				ThreadData* thread = runQueue->GetBinHead(fli, sli);
+				if (thread != NULL) {
 					thread->_UpdatePriorityBoost(now);
+				}
 				if (++checked >= kMaxPrioritiesToCheckPerQueue)
 					return;
+				slBitmap &= ~(1 << sli);
 			}
-
 			flBitmap &= ~(1U << fli);
 		}
 	}

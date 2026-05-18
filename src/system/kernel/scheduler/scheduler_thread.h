@@ -155,7 +155,7 @@ public:
 	}
 
 	SCHEDULER_INLINE int64 GetWeight() const {
-		int64 weight = (int64)LoadAcquire64(fThread->sched_weight);
+		int64 weight = (int64)LoadAcquire(fThread->sched_weight);
 		return (weight > 0) ? weight : 1;
 	}
 

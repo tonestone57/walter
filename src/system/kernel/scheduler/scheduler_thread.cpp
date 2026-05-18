@@ -57,7 +57,7 @@ void ThreadData::_InitBase() {
 	StoreRelease64(fLastMeasureAvailableTime, 0);
 	StoreRelease64(fMeasureAvailableTime, 0);
 
-	StoreRelease64(fThread->sched_weight, (int64)get_weight(fThread->priority));
+	StoreRelease(fThread->sched_weight, (int32)get_weight(fThread->priority));
 	StoreRelease64(fRequestSize, 0); // Use dynamic scaling by default
 	StoreRelease64(fLag, 0);
 
@@ -661,7 +661,7 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 	_ComputeEffectivePriority(now);
 
 	// Update EEVDF weight to match the current base priority.
-	StoreRelease64(fThread->sched_weight, (int64)get_weight(fThread->priority));
+	StoreRelease(fThread->sched_weight, (int32)get_weight(fThread->priority));
 }
 
 
@@ -849,5 +849,5 @@ void ThreadData::ResetPriorityBoost(bigtime_t now) {
 	_ComputeEffectivePriority(now);
 
 	// Update EEVDF weight to match the current base priority.
-	StoreRelease64(fThread->sched_weight, (int64)get_weight(fThread->priority));
+	StoreRelease(fThread->sched_weight, (int32)get_weight(fThread->priority));
 }
