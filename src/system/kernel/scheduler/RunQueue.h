@@ -196,7 +196,6 @@ void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sl
 
 	// Linearly divide the space between 2^fli and 2^(fli+1)
 	if (fli < 5) {
-		sli = d32 & ((1 << fli) - 1);
 		sli = (d32 - (1 << fli)) << (5 - fli);
 	} else {
 		sli = (d32 - (1 << fli)) >> (fli - 5);
