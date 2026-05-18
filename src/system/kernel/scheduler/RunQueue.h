@@ -75,11 +75,11 @@ public:
 
 	inline native_cpu_mask_t GetFirstLevelBitmap() const
 	{
-		return cpu_mask_get_atomic(const_cast<native_cpu_mask_t*>(&fFirstLevelBitmap));
+		return cpu_mask_get_atomic(&fFirstLevelBitmap);
 	}
 	inline native_cpu_mask_t GetSecondLevelBitmap(int fli) const
 	{
-		return cpu_mask_get_atomic(const_cast<native_cpu_mask_t*>(&fSecondLevelBitmap[fli]));
+		return cpu_mask_get_atomic(&fSecondLevelBitmap[fli]);
 	}
 	inline uint32 GetRealTimeBitmap() const
 	{
@@ -219,7 +219,7 @@ RUN_QUEUE_CLASS_NAME::RunQueue()
 	  fSystemVirtualTime(0),
 	  fTotalCount(0)
 {
-	memset(fSecondLevelBitmap, 0, sizeof(fSecondLevelBitmap));
+	memset(const_cast<native_cpu_mask_t*>(fSecondLevelBitmap), 0, sizeof(fSecondLevelBitmap));
 }
 
 RUN_QUEUE_TEMPLATE_LIST

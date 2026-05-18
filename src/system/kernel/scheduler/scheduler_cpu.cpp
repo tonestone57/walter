@@ -100,9 +100,8 @@ struct LocalNodeStealAction {
 					victim->PushBack(*stolen, (*stolen)->GetThread()->priority);
 					*stolen = NULL;
 				}
+				victim->UnlockRunQueue();
 			}
-
-			victim->UnlockRunQueue();
 		}
 
 		return false;
@@ -178,9 +177,8 @@ struct GlobalRandomStealAction {
 					victim->PushBack(*stolen, (*stolen)->GetThread()->priority);
 					*stolen = NULL;
 				}
+				victim->UnlockRunQueue();
 			}
-
-			victim->UnlockRunQueue();
 		}
 
 		return false;
