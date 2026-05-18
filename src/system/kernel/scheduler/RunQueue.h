@@ -55,7 +55,7 @@ class RunQueue {
 public:
 	RunQueue();
 
-	inline bool IsEmpty() const { return atomic_get((int32 volatile*)&fTotalCount) == 0; }
+	inline bool IsEmpty() const { return LoadAcquire(fTotalCount) == 0; }
 
 	void PushBack(Element* element, unsigned int priority, bigtime_t svt = 0);
 	void PushFront(Element* element, unsigned int priority, bigtime_t svt = 0);
@@ -83,7 +83,7 @@ public:
 	}
 	inline uint32 GetRealTimeBitmap() const
 	{
-		return (uint32)atomic_get((int32 volatile*)&fRealTimeBitmap);
+		return (uint32)LoadAcquire(fRealTimeBitmap);
 	}
 
 	inline bool TestAndClearSliAtomic(int fli, int sli)
@@ -96,13 +96,13 @@ public:
 	inline bool TestAndClearRTAtomic(int index)
 	{
 		uint32 bit = 1U << index;
-		uint32 old = (uint32)atomic_and((int32 volatile*)&fRealTimeBitmap, (int32)~bit);
+		uint32 old = (uint32)AndAtomic(fRealTimeBitmap, (int32)~bit);
 		return (old & bit) != 0;
 	}
 
 	inline void RestoreRTBitAtomic(int index)
 	{
-		atomic_or((int32 volatile*)&fRealTimeBitmap, (int32)(1U << index));
+		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
 	}
 
 	inline void RestoreSliBitAtomic(int fli, int sli)
@@ -206,6 +206,10 @@ private:
 	int32 fTotalCount;
 
 	static GetLink sGetLink;
+
+	// Friends for direct access in work-stealing
+	friend class CPUEntry;
+	friend class CoreEntry;
 };
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -262,14 +266,14 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 	Thread* thread = element->GetThread();
 
 	Traits::SetInRunQueue(element, true);
-	atomic_add((int32 volatile*)&fTotalCount, 1);
+	AddRelease(fTotalCount, 1);
 
 	if (priority >= 100) {
 		int32 index = priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element);
-		atomic_or((int32 volatile*)&fRealTimeBitmap, (int32)(1U << index));
+		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
 		thread->fli_index = -1; // Mark as RT
 		thread->sli_index = index;
 	} else {
@@ -294,14 +298,14 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 	Thread* thread = element->GetThread();
 
 	Traits::SetInRunQueue(element, true);
-	atomic_add((int32 volatile*)&fTotalCount, 1);
+	AddRelease(fTotalCount, 1);
 
 	if (priority >= 100) {
 		int32 index = priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element, false); // Add at head
-		atomic_or((int32 volatile*)&fRealTimeBitmap, (int32)(1U << index));
+		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
 		thread->fli_index = -1; // Mark as RT
 		thread->sli_index = index;
 	} else {
@@ -326,7 +330,7 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 
 		fRealTimeQueues[index].Remove(element);
 		if (fRealTimeQueues[index].IsEmpty())
-			atomic_and((int32 volatile*)&fRealTimeBitmap, (int32)~(1U << index));
+			AndAtomic(fRealTimeBitmap, (int32)~(1U << index));
 	} else {
 		int32 fli = thread->fli_index;
 		int32 sli = thread->sli_index;
@@ -340,7 +344,7 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 	}
 
 	Traits::SetInRunQueue(element, false);
-	atomic_add((int32 volatile*)&fTotalCount, -1);
+	AddRelease(fTotalCount, -1);
 }
 
 RUN_QUEUE_TEMPLATE_LIST
