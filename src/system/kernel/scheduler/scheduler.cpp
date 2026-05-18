@@ -344,12 +344,12 @@ struct RunQueueScanner {
 		// Scan EEVDF FairShare threads (fli_index bins)
 		uint32 flBitmap = runQueue->GetFirstLevelBitmap();
 		while (flBitmap != 0) {
-			int fli = __builtin_ctz(flBitmap);
+			int fli = scheduler_ctz(flBitmap);
 			// To ensure interactivity boosting for all FairShare threads,
 			// we iterate through the heads of non-empty bins.
 			uint32 slBitmap = runQueue->GetSecondLevelBitmap(fli);
 			while (slBitmap != 0) {
-				int sli = __builtin_ctz(slBitmap);
+				int sli = scheduler_ctz(slBitmap);
 				ThreadData* thread = runQueue->GetBinHead(fli, sli);
 				if (thread != NULL) {
 					thread->_UpdatePriorityBoost(now);

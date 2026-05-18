@@ -16,8 +16,8 @@
 #include "scheduler_profiler.h"
 
 // For BMQ EEVDF mapping
-#define PRIMARY_BINS   32
-#define SECONDARY_BINS 32
+static const int32 kPrimaryBins = 32;
+static const int32 kSecondaryBins = 32;
 
 template <typename Element>
 class RunQueueStandardGetLink {
@@ -102,7 +102,7 @@ public:
 					if (fCurrent != NULL) return;
 
 					fSLI++;
-					if (fSLI >= SECONDARY_BINS) {
+					if (fSLI >= kSecondaryBins) {
 						fSLI = 0;
 						fFLI++;
 					}
@@ -124,8 +124,8 @@ public:
 
 		void _AdvanceBin()
 		{
-			while (fFLI < PRIMARY_BINS) {
-				while (fSLI < SECONDARY_BINS) {
+			while (fFLI < kPrimaryBins) {
+				while (fSLI < kSecondaryBins) {
 					fCurrent = fQueue->fQueues[fFLI][fSLI].Head();
 					if (fCurrent != NULL) return;
 					fSLI++;
@@ -149,8 +149,8 @@ private:
 	void _GetIndices(bigtime_t deadline, int32& fli, int32& sli) const;
 
 	uint32 fFirstLevelBitmap;
-	uint32 fSecondLevelBitmap[PRIMARY_BINS];
-	DoublyLinkedList<Element, GetLink> fQueues[PRIMARY_BINS][SECONDARY_BINS];
+	uint32 fSecondLevelBitmap[kPrimaryBins];
+	DoublyLinkedList<Element, GetLink> fQueues[kPrimaryBins][kSecondaryBins];
 
 	uint32 fRealTimeBitmap;
 	DoublyLinkedList<Element, GetLink> fRealTimeQueues[21];
@@ -184,8 +184,8 @@ void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sl
 
 	// Find the highest power of 2 using Count Leading Zeros instruction
 	uint32 d32 = (uint32)min_c((bigtime_t)0xFFFFFFFF, delta);
-	fli = 31 - __builtin_clz(d32);
-	if (fli >= PRIMARY_BINS) fli = PRIMARY_BINS - 1;
+	fli = fls(d32) - 1;
+	if (fli >= kPrimaryBins) fli = kPrimaryBins - 1;
 
 	// Linearly divide the space between 2^fli and 2^(fli+1)
 	if (fli < 5) {
@@ -229,6 +229,8 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bigtime_t svt)
 {
+	// For BMQ EEVDF, PushFront is similar to PushBack since ordering is by deadline,
+	// but within the same bin we can put it at the head.
 	fSystemVirtualTime = svt;
 	Thread* thread = element->GetThread();
 
@@ -286,14 +288,14 @@ RUN_QUEUE_TEMPLATE_LIST
 Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 {
 	if (fRealTimeBitmap != 0) {
-		int32 index = 31 - __builtin_clz(fRealTimeBitmap);
+		int32 index = fls(fRealTimeBitmap) - 1;
 		return fRealTimeQueues[index].Head();
 	}
 
 	if (fFirstLevelBitmap == 0) return NULL;
 
-	int32 fli = __builtin_ctz(fFirstLevelBitmap);
-	int32 sli = __builtin_ctz(fSecondLevelBitmap[fli]);
+	int32 fli = ffs(fFirstLevelBitmap) - 1;
+	int32 sli = ffs(fSecondLevelBitmap[fli]) - 1;
 
 	return fQueues[fli][sli].Head();
 }
@@ -308,7 +310,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 	// Check Real-Time queues
 	uint32 rtBitmap = fRealTimeBitmap;
 	while (rtBitmap != 0) {
-		int32 index = 31 - __builtin_clz(rtBitmap);
+		int32 index = fls(rtBitmap) - 1;
 		typename DoublyLinkedList<Element, GetLink>::Iterator it = fRealTimeQueues[index].GetIterator();
 		while (it.HasNext()) {
 			Element* element = it.Next();
@@ -323,10 +325,10 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 	// Check EEVDF matrix
 	uint32 flBitmap = fFirstLevelBitmap;
 	while (flBitmap != 0) {
-		int32 fli = __builtin_ctz(flBitmap);
+		int32 fli = ffs(flBitmap) - 1;
 		uint32 slBitmap = fSecondLevelBitmap[fli];
 		while (slBitmap != 0) {
-			int32 sli = __builtin_ctz(slBitmap);
+			int32 sli = ffs(slBitmap) - 1;
 			typename DoublyLinkedList<Element, GetLink>::Iterator it = fQueues[fli][sli].GetIterator();
 			while (it.HasNext()) {
 				Element* element = it.Next();

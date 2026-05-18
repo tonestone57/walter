@@ -169,6 +169,7 @@ public:
 
 	SCHEDULER_INLINE void SetQuantum(bigtime_t quantum) {
 		StoreRelease64(fBaseQuantum, (int64)quantum);
+		StoreRelease64(fThread->time_slice, (int64)quantum);
 	}
 
 	SCHEDULER_INLINE bool IsEnqueued() const { return fEnqueued; }
