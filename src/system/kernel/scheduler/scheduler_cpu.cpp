@@ -78,30 +78,26 @@ struct LocalNodeStealAction {
 
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
-			if ((*stolen)->GetLag() < kNUMANodeLagThreshold) {
-				// Thread not under-served enough to justify cross-core steal
-				// within the same node. Restore it.
-				victim->PushBack(*stolen, stolenPriority);
-				*stolen = NULL;
-			}
-
-			if (*stolen != NULL) {
+			bool success = false;
+			if ((*stolen)->GetLag() >= kNUMANodeLagThreshold) {
 				// Re-verify affinity under the lock (mostly redundant but safe).
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core(), now);
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
-					victim->UnlockRunQueue();
-					return true;
-				} else {
-					// Victim no longer matches thief after lock acquisition.
-					// Push it back and abort this victim.
-					victim->PushBack(*stolen, (*stolen)->GetThread()->priority);
-					*stolen = NULL;
+					success = true;
 				}
-				victim->UnlockRunQueue();
 			}
+
+			if (!success) {
+				// Thread not under-served enough or affinity changed; restore it.
+				victim->PushBack(*stolen, stolenPriority);
+				*stolen = NULL;
+			}
+
+			victim->UnlockRunQueue();
+			return success;
 		}
 
 		return false;
@@ -155,30 +151,26 @@ struct GlobalRandomStealAction {
 
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
-			if ((*stolen)->GetLag() < kGlobalLagThreshold) {
-				// Cross-NUMA migration is expensive; only steal if thread is
-				// extremely under-served.
-				victim->PushBack(*stolen, stolenPriority);
-				*stolen = NULL;
-			}
-
-			if (*stolen != NULL) {
+			bool success = false;
+			if ((*stolen)->GetLag() >= kGlobalLagThreshold) {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core(), now);
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
-					victim->UnlockRunQueue();
-					return true;
-				} else {
-					// Victim no longer matches thief after lock acquisition.
-					// Push it back and abort this victim.
-					victim->PushBack(*stolen, (*stolen)->GetThread()->priority);
-					*stolen = NULL;
+					success = true;
 				}
-				victim->UnlockRunQueue();
 			}
+
+			if (!success) {
+				// Thread not under-served enough or affinity changed; restore it.
+				victim->PushBack(*stolen, stolenPriority);
+				*stolen = NULL;
+			}
+
+			victim->UnlockRunQueue();
+			return success;
 		}
 
 		return false;
