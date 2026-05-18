@@ -195,11 +195,10 @@ void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sl
 	if (fli >= kPrimaryBins) fli = kPrimaryBins - 1;
 
 	// Linearly divide the space between 2^fli and 2^(fli+1)
-	if (fli < 5) {
-		sli = (d32 - (1 << fli)) << (5 - fli);
-	} else {
-		sli = (d32 - (1 << fli)) >> (fli - 5);
-	}
+	if (fli < 5)
+		sli = (d32 - (1U << fli)) << (5 - fli);
+	else
+		sli = (d32 - (1U << fli)) >> (fli - 5);
 	sli &= 31;
 }
 
@@ -302,8 +301,8 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 
 	if (fFirstLevelBitmap == 0) return NULL;
 
-	int32 fli = ffs(fFirstLevelBitmap) - 1;
-	int32 sli = ffs(fSecondLevelBitmap[fli]) - 1;
+	int32 fli = scheduler_ctz(fFirstLevelBitmap);
+	int32 sli = scheduler_ctz(fSecondLevelBitmap[fli]);
 
 	return fQueues[fli][sli].Head();
 }
@@ -333,10 +332,10 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 	// Check EEVDF matrix
 	uint32 flBitmap = fFirstLevelBitmap;
 	while (flBitmap != 0) {
-		int32 fli = ffs(flBitmap) - 1;
+		int32 fli = scheduler_ctz(flBitmap);
 		uint32 slBitmap = fSecondLevelBitmap[fli];
 		while (slBitmap != 0) {
-			int32 sli = ffs(slBitmap) - 1;
+			int32 sli = scheduler_ctz(slBitmap);
 			typename DoublyLinkedList<Element, GetLink>::Iterator it = fQueues[fli][sli].GetIterator();
 			while (it.HasNext()) {
 				Element* element = it.Next();

@@ -327,19 +327,9 @@ struct RunQueueScanner {
 
 		int checked = 0;
 
-		// Scan Real-Time threads
-		uint32 rtBitmap = runQueue->GetRealTimeBitmap();
-		while (rtBitmap != 0) {
-			int bit = fls(rtBitmap) - 1;
-			unsigned int priority = 100 + bit;
-			ThreadData* thread = runQueue->GetHead(priority);
-			if (thread != NULL) {
-				thread->_UpdatePriorityBoost(now);
-			}
-			if (++checked >= kMaxPrioritiesToCheckPerQueue)
-				return;
-			rtBitmap &= ~(1U << bit);
-		}
+		// Note: We skip Real-Time threads (priorities 100-120) because they
+		// follow a strict preemption policy and are not subject to interactivity
+		// priority boosting.
 
 		// Scan EEVDF FairShare threads (fli_index bins)
 		uint32 flBitmap = runQueue->GetFirstLevelBitmap();
