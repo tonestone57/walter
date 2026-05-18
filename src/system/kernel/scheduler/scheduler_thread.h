@@ -153,7 +153,8 @@ public:
 	}
 
 	SCHEDULER_INLINE int64 GetWeight() const {
-		return LoadAcquire64(fWeight);
+		int64 weight = LoadAcquire64(fWeight);
+		return (weight > 0) ? weight : 1;
 	}
 
 	SCHEDULER_INLINE int64 GetLag() const {

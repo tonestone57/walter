@@ -705,6 +705,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		int64 weight = GetWeight();
 		if (weight <= 0)
 			weight = 1;
+		// Virtual difference is in nanoseconds. Convert to real-time nanoseconds.
 		diff = (diff * weight) / 1000;
 
 		// Adaptive Urgency Boost: give bursty threads higher urgency.

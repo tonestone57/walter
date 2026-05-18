@@ -765,8 +765,10 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 		return oldPriority;
 
 	if (thread->state != B_THREAD_READY) {
+		bool wasRealTime = threadData->IsRealTime();
 		thread->priority = priority;
 		threadData->ResetPriorityBoost(now);
+		bool isRealTime = threadData->IsRealTime();
 		int64 newWeight = threadData->GetWeight();
 
 		if (thread->state == B_THREAD_RUNNING) {
@@ -776,9 +778,15 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 			CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
 
 			if (!gCPU[cpu->ID()].disabled) {
+				CoreCPUHeapLocker _(threadData->Core());
 				cpu->UpdatePriority(priority);
-				if (!threadData->IsRealTime())
+
+				if (!wasRealTime && !isRealTime)
 					cpu->AddWeight(newWeight - oldWeight);
+				else if (!wasRealTime && isRealTime)
+					cpu->AddWeight(-oldWeight);
+				else if (wasRealTime && !isRealTime)
+					cpu->AddWeight(newWeight);
 			}
 		}
 
@@ -2267,6 +2275,7 @@ void scheduler_on_team_foreground_changed(Team* team) {
 					ASSERT(thread->cpu != NULL);
 					CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
 					if (!gCPU[cpu->ID()].disabled) {
+						CoreCPUHeapLocker _(threadData->Core());
 						cpu->UpdatePriority(threadData->GetEffectivePriority());
 					}
 				}

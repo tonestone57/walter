@@ -1064,7 +1064,7 @@ ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 
 	if (thread != NULL) {
 		// Only steal if thread has positive lag (under-served)
-		int64 lag = (svt - thread->GetVirtualRuntime()) * thread->GetWeight();
+		int64 lag = (svt - thread->GetVirtualRuntime()) * thread->GetWeight() / 1000;
 		if (lag <= 0)
 			return NULL;
 

@@ -173,7 +173,7 @@ inline int64 AndAtomic64(T volatile& value, int64 andValue) {
 
 namespace Scheduler {
 
-const bigtime_t kForegroundVRuntimeOffset = 5000;
+const bigtime_t kForegroundVRuntimeOffset = 5000000;
 
 const bigtime_t kMaxLagFloor = 200000;
 
@@ -233,8 +233,8 @@ struct ThreadDataLagCompare {
 			lagA = a->GetLag();
 			lagB = b->GetLag();
 		} else {
-			lagA = (fSVT - a->GetVirtualRuntime()) * a->GetWeight();
-			lagB = (fSVT - b->GetVirtualRuntime()) * b->GetWeight();
+			lagA = (fSVT - a->GetVirtualRuntime()) * a->GetWeight() / 1000;
+			lagB = (fSVT - b->GetVirtualRuntime()) * b->GetWeight() / 1000;
 		}
 		// Highest positive lag first (most under-served)
 		return (lagA - lagB) > 0;
