@@ -673,7 +673,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 				int64 weight = runningData->GetWeight();
 				if (weight <= 0)
 					weight = 1;
-				bigtime_t vEpsilon = (epsilon * 1000000LL) / weight;
+				bigtime_t vEpsilon = (epsilon * 1000) / weight;
 
 				// Preempt only if runningData->Deadline - threadData->Deadline > vEpsilon
 				if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {
