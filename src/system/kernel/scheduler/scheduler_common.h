@@ -307,6 +307,17 @@ static inline int scheduler_ffs64(uint64 value) {
 }
 
 
+static inline int scheduler_flsnative(native_cpu_mask_t value) {
+	if (value == 0)
+		return 0;
+#if SCHEDULER_MASK_IS_64_BIT
+	return 64 - __builtin_clzll(value);
+#else
+	return 32 - __builtin_clz(value);
+#endif
+}
+
+
 static inline int scheduler_popcount(native_cpu_mask_t value) {
 #if SCHEDULER_MASK_IS_64_BIT
 	return __builtin_popcountll(value);

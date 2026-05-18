@@ -16,8 +16,15 @@
 #include "scheduler_profiler.h"
 
 // For BMQ EEVDF mapping
+#if SCHEDULER_MASK_IS_64_BIT
+static const int32 kPrimaryBins = 64;
+static const int32 kSecondaryBins = 64;
+static const int32 kSecondaryBinsShift = 6;
+#else
 static const int32 kPrimaryBins = 32;
 static const int32 kSecondaryBins = 32;
+static const int32 kSecondaryBinsShift = 5;
+#endif
 
 template <typename Element>
 class RunQueueStandardGetLink {
@@ -66,8 +73,8 @@ public:
 	inline Element* PeekRoot() const { return PeekBest(); }
 	inline Element* PeekMaximum() const { return PeekBest(); }
 
-	inline uint32 GetFirstLevelBitmap() const { return fFirstLevelBitmap; }
-	inline uint32 GetSecondLevelBitmap(int fli) const { return fSecondLevelBitmap[fli]; }
+	inline native_cpu_mask_t GetFirstLevelBitmap() const { return fFirstLevelBitmap; }
+	inline native_cpu_mask_t GetSecondLevelBitmap(int fli) const { return fSecondLevelBitmap[fli]; }
 	inline uint32 GetRealTimeBitmap() const { return fRealTimeBitmap; }
 
 	inline Element* GetBinHead(int fli, int sli) const { return fQueues[fli][sli].Head(); }
@@ -148,8 +155,8 @@ public:
 private:
 	void _GetIndices(bigtime_t deadline, int32& fli, int32& sli) const;
 
-	uint32 fFirstLevelBitmap;
-	uint32 fSecondLevelBitmap[kPrimaryBins];
+	native_cpu_mask_t fFirstLevelBitmap;
+	native_cpu_mask_t fSecondLevelBitmap[kPrimaryBins];
 	DoublyLinkedList<Element, GetLink> fQueues[kPrimaryBins][kSecondaryBins];
 
 	uint32 fRealTimeBitmap;
@@ -190,16 +197,21 @@ void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sl
 	}
 
 	// Find the highest power of 2 using Count Leading Zeros instruction
-	uint32 d32 = (uint32)min_c((bigtime_t)0xFFFFFFFF, delta);
-	fli = fls(d32) - 1;
+#if SCHEDULER_MASK_IS_64_BIT
+	native_cpu_mask_t dnative = (native_cpu_mask_t)delta;
+#else
+	native_cpu_mask_t dnative = (native_cpu_mask_t)min_c((bigtime_t)0xFFFFFFFF, delta);
+#endif
+	fli = scheduler_flsnative(dnative) - 1;
 	if (fli >= kPrimaryBins) fli = kPrimaryBins - 1;
+	if (fli < 0) fli = 0;
 
 	// Linearly divide the space between 2^fli and 2^(fli+1)
-	if (fli < 5)
-		sli = (d32 - (1U << fli)) << (5 - fli);
+	if (fli < kSecondaryBinsShift)
+		sli = (dnative - ((native_cpu_mask_t)1 << fli)) << (kSecondaryBinsShift - fli);
 	else
-		sli = (d32 - (1U << fli)) >> (fli - 5);
-	sli &= 31;
+		sli = (dnative - ((native_cpu_mask_t)1 << fli)) >> (fli - kSecondaryBinsShift);
+	sli &= (kSecondaryBins - 1);
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -217,7 +229,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element);
-		fRealTimeBitmap |= (1 << index);
+		fRealTimeBitmap |= (1U << index);
 		thread->fli_index = -1; // Mark as RT
 		thread->sli_index = index;
 	} else {
@@ -227,8 +239,8 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 		thread->sli_index = sli;
 
 		fQueues[fli][sli].Add(element);
-		fSecondLevelBitmap[fli] |= (1 << sli);
-		fFirstLevelBitmap |= (1 << fli);
+		fSecondLevelBitmap[fli] |= ((native_cpu_mask_t)1 << sli);
+		fFirstLevelBitmap |= ((native_cpu_mask_t)1 << fli);
 	}
 }
 
@@ -249,7 +261,7 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element, false); // Add at head
-		fRealTimeBitmap |= (1 << index);
+		fRealTimeBitmap |= (1U << index);
 		thread->fli_index = -1; // Mark as RT
 		thread->sli_index = index;
 	} else {
@@ -259,8 +271,8 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 		thread->sli_index = sli;
 
 		fQueues[fli][sli].Add(element, false); // Add at head
-		fSecondLevelBitmap[fli] |= (1 << sli);
-		fFirstLevelBitmap |= (1 << fli);
+		fSecondLevelBitmap[fli] |= ((native_cpu_mask_t)1 << sli);
+		fFirstLevelBitmap |= ((native_cpu_mask_t)1 << fli);
 	}
 }
 
@@ -274,16 +286,16 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 
 		fRealTimeQueues[index].Remove(element);
 		if (fRealTimeQueues[index].IsEmpty())
-			fRealTimeBitmap &= ~(1 << index);
+			fRealTimeBitmap &= ~(1U << index);
 	} else {
 		int32 fli = thread->fli_index;
 		int32 sli = thread->sli_index;
 
 		fQueues[fli][sli].Remove(element);
 		if (fQueues[fli][sli].IsEmpty()) {
-			fSecondLevelBitmap[fli] &= ~(1 << sli);
+			fSecondLevelBitmap[fli] &= ~((native_cpu_mask_t)1 << sli);
 			if (fSecondLevelBitmap[fli] == 0)
-				fFirstLevelBitmap &= ~(1 << fli);
+				fFirstLevelBitmap &= ~((native_cpu_mask_t)1 << fli);
 		}
 	}
 
@@ -326,14 +338,14 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 					best = element;
 			}
 		}
-		rtBitmap &= ~(1 << index);
+		rtBitmap &= ~(1U << index);
 	}
 
 	// Check EEVDF matrix
-	uint32 flBitmap = fFirstLevelBitmap;
+	native_cpu_mask_t flBitmap = fFirstLevelBitmap;
 	while (flBitmap != 0) {
 		int32 fli = scheduler_ctz(flBitmap);
-		uint32 slBitmap = fSecondLevelBitmap[fli];
+		native_cpu_mask_t slBitmap = fSecondLevelBitmap[fli];
 		while (slBitmap != 0) {
 			int32 sli = scheduler_ctz(slBitmap);
 			typename DoublyLinkedList<Element, GetLink>::Iterator it = fQueues[fli][sli].GetIterator();
@@ -344,9 +356,9 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 						best = element;
 				}
 			}
-			slBitmap &= ~(1 << sli);
+			slBitmap &= ~((native_cpu_mask_t)1 << sli);
 		}
-		flBitmap &= ~(1 << fli);
+		flBitmap &= ~((native_cpu_mask_t)1 << fli);
 	}
 
 	return best;
