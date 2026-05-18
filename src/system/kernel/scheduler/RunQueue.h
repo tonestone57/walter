@@ -36,11 +36,14 @@ public:
 };
 
 namespace Scheduler {
+
 template <typename Element>
 struct RunQueueTraits {
 	static inline void SetInRunQueue(Element* element, bool inQueue) {}
 };
-}  // namespace Scheduler
+
+class CPUEntry;
+class CoreEntry;
 
 #define RUN_QUEUE_TEMPLATE_LIST                                             \
 	template <typename Element, unsigned int MaxPriority, typename Compare, \
@@ -449,5 +452,7 @@ Element* RUN_QUEUE_CLASS_NAME::PopNext()
 
 RUN_QUEUE_TEMPLATE_LIST
 GetLink RUN_QUEUE_CLASS_NAME::sGetLink;
+
+}  // namespace Scheduler
 
 #endif	// RUN_QUEUE_H
