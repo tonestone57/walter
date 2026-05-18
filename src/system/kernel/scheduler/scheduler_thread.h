@@ -23,8 +23,10 @@ struct RunQueueTraits<ThreadData> {
 };
 
 struct CACHE_LINE_ALIGN ThreadData
-	: public DoublyLinkedListLinkImpl<ThreadData>,
-	  RunQueueLinkImpl<ThreadData> {
+	: public DoublyLinkedListLinkImpl<ThreadData> {
+public:
+	inline DoublyLinkedListLink<ThreadData>* GetRunQueueLink() { return &fRunQueueLink; }
+
 private:
 	inline void _InitBase();
 
@@ -145,15 +147,15 @@ public:
 	static bigtime_t sMaxLatency __attribute__((aligned(8)));
 
 	SCHEDULER_INLINE bigtime_t GetVirtualRuntime() const {
-		return (bigtime_t)LoadAcquire64(fVirtualRuntime);
+		return (bigtime_t)LoadAcquire64(fThread->virtual_runtime);
 	}
 
 	SCHEDULER_INLINE bigtime_t GetVirtualDeadline() const {
-		return (bigtime_t)LoadAcquire64(fVirtualDeadline);
+		return (bigtime_t)LoadAcquire64(fThread->virtual_deadline);
 	}
 
 	SCHEDULER_INLINE int64 GetWeight() const {
-		int64 weight = LoadAcquire64(fWeight);
+		int64 weight = (int64)LoadAcquire64(fThread->sched_weight);
 		return (weight > 0) ? weight : 1;
 	}
 
@@ -239,14 +241,12 @@ private:
 	int32 fNeededLoad;
 	uint32 fLoadMeasurementEpoch;
 
-	int64 fWeight __attribute__((aligned(8)));
 	bigtime_t fRequestSize __attribute__((aligned(8)));
 	int64 fLag __attribute__((aligned(8)));
 
-	bigtime_t fVirtualRuntime __attribute__((aligned(8)));
-	bigtime_t fVirtualDeadline __attribute__((aligned(8)));
-
 	int32 fInteractivityScore;
+
+	DoublyLinkedListLink<ThreadData> fRunQueueLink;
 
 	CoreEntry* fCore __attribute__((aligned(8)));
 };
@@ -679,7 +679,7 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 				bigtime_t vLagFloor = (kMaxLagFloor * 1000000LL) / weight;
 
 				if (vrt < svt - vLagFloor)
-					StoreRelease64(fVirtualRuntime, (int64)(svt - vLagFloor));
+					StoreRelease64(fThread->virtual_runtime, (int64)(svt - vLagFloor));
 
 				_UpdateDeadline(now);
 			}
@@ -788,7 +788,7 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			bigtime_t vLagFloor = (kMaxLagFloor * 1000000LL) / weight;
 
 			if (vrt < svt - vLagFloor)
-				StoreRelease64(fVirtualRuntime, (int64)(svt - vLagFloor));
+				StoreRelease64(fThread->virtual_runtime, (int64)(svt - vLagFloor));
 
 			_UpdateDeadline(now);
 		}
@@ -883,11 +883,11 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 	bigtime_t ceiling =
 		(svt > B_INT64_MAX - kLookahead) ? B_INT64_MAX : svt + kLookahead;
 
-	bigtime_t vRuntime = (bigtime_t)LoadAcquire64(fVirtualRuntime);
+	bigtime_t vRuntime = (bigtime_t)LoadAcquire64(fThread->virtual_runtime);
 	while (vRuntime < ceiling) {
 		bigtime_t next = (vRuntime < ceiling - delta) ? vRuntime + delta : ceiling;
 
-		bigtime_t old = (bigtime_t)TestAndSet64(fVirtualRuntime, (int64)next,
+		bigtime_t old = (bigtime_t)TestAndSet64(fThread->virtual_runtime, (int64)next,
 												(int64)vRuntime);
 		if (old == vRuntime)
 			break;

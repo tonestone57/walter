@@ -256,6 +256,12 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 	bool			has_yielded;	// protected by scheduler lock
 	Thread*			waker;			// protected by scheduler lock
 	Scheduler::ThreadData*	scheduler_data; // protected by scheduler lock
+	bigtime_t		virtual_runtime __attribute__((aligned(8)));   // v_i
+	bigtime_t		virtual_deadline __attribute__((aligned(8)));  // d_i
+	int64			sched_weight __attribute__((aligned(8)));      // w_i
+	bigtime_t		time_slice __attribute__((aligned(8)));        // q_i
+	int32			fli_index;         // Tracks current First-Level Bitmap position
+	int32			sli_index;         // Tracks current Second-Level Bitmap position
 	bigtime_t		lastMigrationTime;
 	bool			inRunQueue;
 	Thread*			next;

@@ -97,6 +97,9 @@ public:
 	inline bool TryLockRunQueue();
 	inline void UnlockRunQueue();
 
+	inline void IncrementThreadCount() { AddRelease(fThreadCount, 1); }
+	inline void DecrementThreadCount() { AddRelease(fThreadCount, -1); }
+
 	// Index of this CPU within its core, assigned sequentially in AddCPU.
 	// Used by UpdatePriorityBoostScalable for round-robin epoch ownership.
 	// Public because UpdatePriorityBoostScalable is a file-scope function.
@@ -259,6 +262,9 @@ public:
 	inline void LockRunQueue();
 	inline bool TryLockRunQueue();
 	inline void UnlockRunQueue();
+
+	inline void IncrementThreadCount() { AddRelease(fThreadCount, 1); }
+	inline void DecrementThreadCount() { AddRelease(fThreadCount, -1); }
 	// Note: lockless check for display-priority threads in the
 	// run queue.  Used by ComputeQuantum to avoid TryLockRunQueue on the
 	// scheduling hot path.

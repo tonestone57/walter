@@ -57,7 +57,7 @@ bool gTrackCoreLoad;
 bool gTrackCPULoad;
 int32 gRandomSamples;
 
-int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000000;
+int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000;
 
 CoreType gMinCoreType = CORE_TYPE_UNKNOWN;
 CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
@@ -195,7 +195,7 @@ static status_t interaction_timer_hook(struct timer* timer) {
 	// and the DPC guard (sDPCPending) prevents duplicate DPC enqueueing.
 	StoreRelease(sTimerArmed, 0);
 
-	StoreRelease(sPendingDPCTarget, 5000000);
+	StoreRelease(sPendingDPCTarget, 5000);
 	if (GetAndSet(sDPCPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
@@ -284,7 +284,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// atomic-get-and-set below.  Clearing sDPCPending unconditionally before
 	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
 	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
-	StoreRelease(sPendingDPCTarget, 1000000);
+	StoreRelease(sPendingDPCTarget, 1000);
 	if (GetAndSet(sDPCPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
@@ -325,39 +325,39 @@ struct RunQueueScanner {
 		if (kMaxPrioritiesToCheckPerQueue <= 0)
 			return;
 
-		const uint32* bitmap = runQueue->GetBitmap();
 		int checked = 0;
 
-		for (int i = ThreadRunQueue::kBitmapSize - 1; i >= 0; i--) {
-			uint32 val = bitmap[i];
+		// Scan Real-Time threads
+		uint32 rtBitmap = runQueue->GetRealTimeBitmap();
+		while (rtBitmap != 0) {
+			int bit = fls(rtBitmap) - 1;
+			unsigned int priority = 100 + bit;
+			ThreadData* thread = runQueue->GetHead(priority);
+			if (thread != NULL) {
+				thread->_UpdatePriorityBoost(now);
+			}
+			if (++checked >= kMaxPrioritiesToCheckPerQueue)
+				return;
+			rtBitmap &= ~(1U << bit);
+		}
 
-			if (i == ThreadRunQueue::kBitmapSize - 1)
-				val &= kTopWordMask;
-
-			if (val == 0)
-				continue;
-
-			int bit = fls(val) - 1;
-			while (true) {
-				unsigned int priority = i * 32 + bit;
-				// Note: RunQueue scanner logic optimized for dual heaps.
-				// For priority boosting we update the most urgent thread
-				// in the requested priority bucket.
-				ThreadData* thread = runQueue->GetHead(priority);
-				// Count each visited priority slot toward the budget, even if
-				// the queue head is transiently NULL (e.g. concurrent dequeue or
-				// stale bitmap bit). This keeps scan work strictly bounded.
-				if (thread != NULL) {
+		// Scan EEVDF FairShare threads (fli_index bins)
+		uint32 flBitmap = runQueue->GetFirstLevelBitmap();
+		while (flBitmap != 0) {
+			int fli = __builtin_ctz(flBitmap);
+			// We scan the first non-empty sli_index bin of this fli_index
+			// since GetHead(priority < 100) is only implemented for B_IDLE_PRIORITY.
+			// However, _UpdatePriorityBoost expects a priority.
+			// Let's just scan B_IDLE_PRIORITY if it's there.
+			if (fli == 0) {
+				ThreadData* thread = runQueue->GetHead(B_IDLE_PRIORITY);
+				if (thread != NULL)
 					thread->_UpdatePriorityBoost(now);
-				}
 				if (++checked >= kMaxPrioritiesToCheckPerQueue)
 					return;
-
-				val &= ~(1U << bit);
-				if (val == 0)
-					break;
-				bit = fls(val) - 1;
 			}
+
+			flBitmap &= ~(1U << fli);
 		}
 	}
 };
@@ -433,12 +433,6 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	// Note: Mask computation optimization. This mask is recomputed from a
 	// compile-time constant on every reschedule.  Hoist it to a static const so
 	// the compiler evaluates it once at startup.
-	static const uint32 kTopWordMask =
-		(uint32)((2ULL << (THREAD_MAX_SET_PRIORITY % 32)) - 1);
-
-	static_assert(THREAD_MAX_SET_PRIORITY < ThreadRunQueue::kBitmapSize * 32,
-				  "THREAD_MAX_SET_PRIORITY exceeds bitmap capacity");
-
 	// Throttle: only run the boost scan every 10 context switches to reduce
 	// overhead.
 	if (cpu->fRescheduleCount++ % 10 != 0)
@@ -454,7 +448,7 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	// not the number of threads.
 	const int kMaxPrioritiesToCheckPerQueue = 5;
 
-	RunQueueScanner scanRunQueue(kTopWordMask, kMaxPrioritiesToCheckPerQueue,
+	RunQueueScanner scanRunQueue(0, kMaxPrioritiesToCheckPerQueue,
 								 now);
 
 	// Check Core RunQueue first to maintain Core -> CPU lock ordering
@@ -654,16 +648,17 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
 							 thread);
 
+	bool isRT = threadPriority >= 100;
 	int32 heapPriority = CPUPriorityHeap::GetKey(targetCPU);
 	if (threadPriority > heapPriority ||
 		(threadPriority == heapPriority && rescheduleNeeded) ||
-		wasRunQueueEmpty || requestPreemption) {
+		wasRunQueueEmpty || requestPreemption || isRT) {
 
 		// Note: Dynamic Preemption Granularity.
 		// Only trigger IPI if Delta(deadline) > epsilon.
 		// A more urgent thread (earlier deadline) only preempts if it is
 		// significantly more urgent (Delta > epsilon).
-		if (targetCPU->ID() != smp_get_current_cpu()) {
+		if (!isRT && targetCPU->ID() != smp_get_current_cpu()) {
 			bigtime_t epsilon = targetCPU->PreemptionThreshold();
 			Thread* running = gCPU[targetCPU->ID()].running_thread;
 			ThreadData* runningData = (running != NULL) ? running->scheduler_data : NULL;

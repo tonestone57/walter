@@ -93,8 +93,7 @@ struct LocalNodeStealAction {
 				} else {
 					// Victim no longer matches thief after lock acquisition.
 					// Push it back and abort this victim.
-					victim->PushBack(*stolen,
-									 (*stolen)->GetRunQueueLink()->fPriority);
+					victim->PushBack(*stolen, (*stolen)->GetThread()->priority);
 					*stolen = NULL;
 				}
 			}
@@ -168,8 +167,7 @@ struct GlobalRandomStealAction {
 				} else {
 					// Victim no longer matches thief after lock acquisition.
 					// Push it back and abort this victim.
-					victim->PushBack(*stolen,
-									 (*stolen)->GetRunQueueLink()->fPriority);
+					victim->PushBack(*stolen, (*stolen)->GetThread()->priority);
 					*stolen = NULL;
 				}
 			}
@@ -364,7 +362,7 @@ void CPUEntry::Stop() {
 void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushFront(thread, priority, SystemVirtualTime());
-	AddRelease(fThreadCount, 1);
+	IncrementThreadCount();
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -379,7 +377,7 @@ void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushBack(thread, priority, SystemVirtualTime());
-	AddRelease(fThreadCount, 1);
+	IncrementThreadCount();
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -397,11 +395,11 @@ void CPUEntry::Remove(ThreadData* thread) {
 
 	// (defensive): capture the priority the thread was enqueued with to
 	// ensure symmetric counter updates.
-	int32 priority = thread->GetRunQueueLink()->fPriority;
+	int32 priority = thread->GetThread()->priority;
 
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
-	AddRelease(fThreadCount, -1);
+	DecrementThreadCount();
 
 	if (!thread->IsIdle()) {
 		Core()->DecrementTotalThreadCount();
@@ -534,6 +532,23 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 	int32 sharedPriority = -1;
 	if (sharedThread != NULL)
 		sharedPriority = sharedThread->GetEffectivePriority();
+
+	// BMQ EEVDF selection logic: Real-Time threads (priority >= 100) always win.
+	if (oldPriority >= 100) {
+		if (oldPriority > pinnedPriority && oldPriority > sharedPriority) {
+			// case A: oldThread is best.
+			if (sharedThreadIsFloating) {
+				// Re-enqueue stolen thread
+				cpuLocker.Unlock();
+				coreLocker.Unlock();
+				bool dummy1, dummy2, updateInteraction;
+				sharedThread->Enqueue(dummy1, dummy2, updateInteraction, now);
+				if (updateInteraction)
+					scheduler_update_interaction_state(now);
+			}
+			return oldThread;
+		}
+	}
 
 	int32 rest = max_c(pinnedPriority, sharedPriority);
 	if (oldPriority > rest || (!putAtBack && oldPriority == rest)) {
@@ -814,8 +829,7 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 				} else {
 					// Victim no longer matches thief after lock acquisition.
 					// Push it back and abort this victim.
-					victim->PushBack(stolen,
-									 stolen->GetRunQueueLink()->fPriority);
+					victim->PushBack(stolen, stolen->GetThread()->priority);
 					stolen = NULL;
 				}
 			}
@@ -1009,7 +1023,7 @@ void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	fRunQueue.PushFront(thread, priority, cpu->SystemVirtualTime());
-	AddRelease(fThreadCount, 1);
+	IncrementThreadCount();
 	IncrementTotalThreadCount();
 	if (priority >= B_DISPLAY_PRIORITY)
 		IncrementDisplayThreadCount();
@@ -1021,7 +1035,7 @@ void CoreEntry::PushBack(ThreadData* thread, int32 priority) {
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	fRunQueue.PushBack(thread, priority, cpu->SystemVirtualTime());
-	AddRelease(fThreadCount, 1);
+	IncrementThreadCount();
 	IncrementTotalThreadCount();
 	if (priority >= B_DISPLAY_PRIORITY)
 		IncrementDisplayThreadCount();
@@ -1036,11 +1050,11 @@ void CoreEntry::Remove(ThreadData* thread) {
 
 	// (defensive): capture the enqueued priority to ensure consistent
 	// fDisplayThreadCount accounting.
-	int32 priority = thread->GetRunQueueLink()->fPriority;
+	int32 priority = thread->GetThread()->priority;
 
 	thread->SetDequeued();
 
-	AddRelease(fThreadCount, -1);
+	DecrementThreadCount();
 	DecrementTotalThreadCount();
 	if (priority >= B_DISPLAY_PRIORITY)
 		DecrementDisplayThreadCount();

@@ -57,12 +57,12 @@ void ThreadData::_InitBase() {
 	StoreRelease64(fLastMeasureAvailableTime, 0);
 	StoreRelease64(fMeasureAvailableTime, 0);
 
-	StoreRelease64(fWeight, get_weight(fThread->priority));
+	StoreRelease64(fThread->sched_weight, (int64)get_weight(fThread->priority));
 	StoreRelease64(fRequestSize, 0); // Use dynamic scaling by default
 	StoreRelease64(fLag, 0);
 
-	StoreRelease64(fVirtualRuntime, 0);
-	StoreRelease64(fVirtualDeadline, 0);
+	StoreRelease64(fThread->virtual_runtime, 0);
+	StoreRelease64(fThread->virtual_deadline, 0);
 
 	fInteractivityScore = 500;
 
@@ -165,7 +165,7 @@ void ThreadData::Init(bigtime_t now) {
 		int retries = 0;
 		do {
 			homeA = LoadAcquire(currentThreadData->fHomePackage);
-			vrt = (bigtime_t)LoadAcquire64(currentThreadData->fVirtualRuntime);
+			vrt = (bigtime_t)LoadAcquire64(currentThread->virtual_runtime);
 			homeB = LoadAcquire(currentThreadData->fHomePackage);
 		} while (homeA != homeB && ++retries < 8);
 
@@ -175,11 +175,11 @@ void ThreadData::Init(bigtime_t now) {
 			homeB = -1;
 		}
 
-		StoreRelease64(fVirtualRuntime, (int64)vrt);
+		StoreRelease64(fThread->virtual_runtime, (int64)vrt);
 		StoreRelease(fHomePackage, homeB);
 	} else {
 		fNeededLoad = 0;
-		StoreRelease64(fVirtualRuntime, 0);
+		StoreRelease64(fThread->virtual_runtime, 0);
 		StoreRelease(fHomePackage, -1);
 	}
 
@@ -656,12 +656,12 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 	// A floor using a real-time constant (like base_quantum) would unfairly
 	// penalize high-priority threads by capping their latency advantage.
 
-	StoreRelease64(fVirtualDeadline, (int64)(GetVirtualRuntime() + slice));
+	StoreRelease64(fThread->virtual_deadline, (int64)(GetVirtualRuntime() + slice));
 
 	_ComputeEffectivePriority(now);
 
 	// Update EEVDF weight to match the current base priority.
-	StoreRelease64(fWeight, get_weight(fThread->priority));
+	StoreRelease64(fThread->sched_weight, (int64)get_weight(fThread->priority));
 }
 
 
@@ -696,7 +696,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		bigtime_t svt = (core != NULL) ? core->SystemVirtualTime() : now;
 
 		bigtime_t diff =
-			(bigtime_t)LoadAcquire64(fVirtualDeadline) -
+			(bigtime_t)LoadAcquire64(fThread->virtual_deadline) -
 			svt;
 
 		// Convert Virtual difference back to Real difference (nanoseconds)
@@ -849,5 +849,5 @@ void ThreadData::ResetPriorityBoost(bigtime_t now) {
 	_ComputeEffectivePriority(now);
 
 	// Update EEVDF weight to match the current base priority.
-	StoreRelease64(fWeight, get_weight(fThread->priority));
+	StoreRelease64(fThread->sched_weight, (int64)get_weight(fThread->priority));
 }

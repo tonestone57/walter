@@ -4,52 +4,28 @@
  *
  * Authors:
  *      Paweł Dziepak, pdziepak@quarnos.org
- *      Jules (2025 Array-Based EEVDF Heap implementation)
+ *      Jules (2025 BMQ-EEVDF implementation)
  */
 #ifndef RUN_QUEUE_H
 #define RUN_QUEUE_H
 
 #include <util/BitUtils.h>
 #include <util/atomic.h>
+#include <util/DoublyLinkedList.h>
 
 #include "scheduler_profiler.h"
 
-template <typename Element>
-struct RunQueueLink {
-	RunQueueLink();
-
-	int32 fIndex; // Positive for Eligible, Negative for Ineligible (-idx-1)
-	unsigned int fPriority;
-
-	Element* fNext;
-	Element* fPrev;
-} __attribute__((aligned(8)));
-
-template <typename Element>
-class RunQueueLinkImpl {
-public:
-	inline RunQueueLink<Element>* GetRunQueueLink();
-
-private:
-	RunQueueLink<Element> fRunQueueLink;
-};
+// For BMQ EEVDF mapping
+#define PRIMARY_BINS   32
+#define SECONDARY_BINS 32
 
 template <typename Element>
 class RunQueueStandardGetLink {
-private:
-	typedef RunQueueLink<Element> Link;
-
 public:
-	inline Link* operator()(Element* element) const;
-};
-
-template <typename Element, RunQueueLink<Element> Element::*LinkMember>
-class RunQueueMemberGetLink {
-private:
-	typedef RunQueueLink<Element> Link;
-
-public:
-	inline Link* operator()(Element* element) const;
+	inline DoublyLinkedListLink<Element>* operator()(Element* element) const
+	{
+		return element->GetRunQueueLink();
+	}
 };
 
 namespace Scheduler {
@@ -64,442 +40,333 @@ struct RunQueueTraits {
 			  typename GetLink>
 #define RUN_QUEUE_CLASS_NAME RunQueue<Element, MaxPriority, Compare, GetLink>
 
-const int32 kMaxThreadsPerCore = 2048;
-
 template <typename Element, unsigned int MaxPriority, typename Compare,
 		  typename GetLink = RunQueueStandardGetLink<Element> >
 class RunQueue {
 	typedef Scheduler::RunQueueTraits<Element> Traits;
 
 public:
-	static const int32 kBitmapSize = (MaxPriority + 31) / 32;
-
-	inline bool IsEmpty() const { return LoadAcquire(fTotalCount) == 0; }
-
 	RunQueue();
 
-	inline status_t GetInitStatus() { return fInitStatus; }
-
-	inline const uint32* GetBitmap() const { return fBitmap; }
-
-	// Ensure the heap array has enough space.
-	// Fixed-size avoids unsafe realloc in kernel hotpath.
-	status_t CheckCapacity(int32 count) {
-		return (count <= kMaxThreadsPerCore) ? B_OK : B_DEVICE_FULL;
-	}
-
-	void CheckEligibility(bigtime_t svt);
-
-	// Eligible threads are ordered by virtual deadline (Compare).
-	// If no eligible threads exist, fall back to the least ineligible thread.
-	inline Element* PeekRoot() const {
-		if (LoadAcquire(fEligibleCount) > 0)
-			return fEligibleHeap[0];
-		if (LoadAcquire(fIneligibleCount) > 0)
-			return fIneligibleHeap[0];
-		return NULL;
-	}
-
-	inline Element* PeekMaximum() const { return PeekRoot(); }
-	inline Element* PeekBest() const { return PeekRoot(); }
+	inline bool IsEmpty() const { return atomic_get(&fTotalCount) == 0; }
 
 	void PushBack(Element* element, unsigned int priority, bigtime_t svt = 0);
 	void PushFront(Element* element, unsigned int priority, bigtime_t svt = 0);
-
 	void Remove(Element* element);
 
-private:
-	void _PushPriority(Element* element, unsigned int priority, bool front);
-	void _RemovePriority(Element* element, unsigned int priority);
+	Element* PeekBest() const;
+	template <typename Compare2, typename Predicate>
+	Element* PeekBest(const Compare2& compare,
+					  const Predicate& predicate) const;
+	Element* PopNext();
 
-	inline int32 Count() const { return LoadAcquire(fTotalCount); }
+	// Compatibility methods
+	inline status_t CheckCapacity(int32 count) { return B_OK; }
+	void CheckEligibility(bigtime_t svt) { fSystemVirtualTime = svt; }
+	inline Element* PeekRoot() const { return PeekBest(); }
+	inline Element* PeekMaximum() const { return PeekBest(); }
+
+	inline uint32 GetFirstLevelBitmap() const { return fFirstLevelBitmap; }
+	inline uint32 GetRealTimeBitmap() const { return fRealTimeBitmap; }
 
 	class ConstIterator {
 	public:
-		ConstIterator() : fList(NULL), fIndex(0) {}
-		ConstIterator(const RunQueue* list) : fList(list), fIndex(0) {}
+		ConstIterator() : fQueue(NULL), fFLI(0), fSLI(0), fRT(0), fCurrent(NULL) {}
+		ConstIterator(const RunQueue* queue) : fQueue(queue), fFLI(0), fSLI(0), fRT(0), fCurrent(NULL)
+		{
+			_Advance();
+		}
 
-		bool HasNext() const { return fIndex < fList->Count(); }
-		Element* Next();
-		void Rewind() { fIndex = 0; }
-
+		bool HasNext() const { return fCurrent != NULL; }
+		Element* Next()
+		{
+			Element* result = fCurrent;
+			_Advance();
+			return result;
+		}
 	private:
-		const RunQueue* fList;
-		int32 fIndex;
+		void _Advance()
+		{
+			if (fQueue == NULL) return;
+
+			if (fCurrent != NULL) {
+				if (fRT < 21) {
+					fCurrent = fQueue->fRealTimeQueues[fRT].GetNext(fCurrent);
+					if (fCurrent != NULL) return;
+					fRT++;
+				} else {
+					fCurrent = fQueue->fQueues[fFLI][fSLI].GetNext(fCurrent);
+					if (fCurrent != NULL) return;
+
+					fSLI++;
+					if (fSLI >= SECONDARY_BINS) {
+						fSLI = 0;
+						fFLI++;
+					}
+					_AdvanceBin();
+					return;
+				}
+			}
+
+			// Find next non-empty RT queue
+			while (fRT < 21) {
+				fCurrent = fQueue->fRealTimeQueues[fRT].Head();
+				if (fCurrent != NULL) return;
+				fRT++;
+			}
+
+			// Find next non-empty EEVDF bin
+			_AdvanceBin();
+		}
+
+		void _AdvanceBin()
+		{
+			while (fFLI < PRIMARY_BINS) {
+				while (fSLI < SECONDARY_BINS) {
+					fCurrent = fQueue->fQueues[fFLI][fSLI].Head();
+					if (fCurrent != NULL) return;
+					fSLI++;
+				}
+				fSLI = 0;
+				fFLI++;
+			}
+			fCurrent = NULL;
+		}
+
+		const RunQueue* fQueue;
+		int fFLI, fSLI, fRT;
+		Element* fCurrent;
 	};
 
 	inline ConstIterator GetConstIterator() const { return ConstIterator(this); }
 
-	inline Element* GetHead(unsigned int priority) const;
-
-	template <typename Predicate>
-	Element* PeekOption(const Predicate& predicate) const;
-
-	template <typename Compare2, typename Predicate>
-	Element* PeekBest(const Compare2& compare,
-					  const Predicate& predicate) const;
+	Element* GetHead(unsigned int priority) const;
 
 private:
-	void _BubbleUp(Element** heap, int32 count, int32 index, bool eligible);
-	void _BubbleDown(Element** heap, int32 count, int32 index, bool eligible);
-	void _Swap(Element** heap, int32 i, int32 j, bool eligible);
+	void _GetIndices(bigtime_t deadline, int32& fli, int32& sli) const;
 
-	bool _CompareIneligible(Element* a, Element* b) const {
-		// Ineligible heap is ordered by VirtualRuntime (earliest first)
-		return (a->GetVirtualRuntime() - b->GetVirtualRuntime()) < 0;
-	}
+	uint32 fFirstLevelBitmap;
+	uint32 fSecondLevelBitmap[PRIMARY_BINS];
+	DoublyLinkedList<Element, GetLink> fQueues[PRIMARY_BINS][SECONDARY_BINS];
 
-	status_t fInitStatus;
+	uint32 fRealTimeBitmap;
+	DoublyLinkedList<Element, GetLink> fRealTimeQueues[21];
 
-	Element* fEligibleHeap[kMaxThreadsPerCore];
-	int32 fEligibleCount __attribute__((aligned(8)));
-
-	Element* fIneligibleHeap[kMaxThreadsPerCore];
-	int32 fIneligibleCount __attribute__((aligned(8)));
-
-	int32 fTotalCount __attribute__((aligned(8)));
-
-	uint32 fBitmap[kBitmapSize];
-	int32 fPriorityCounts[MaxPriority + 1];
-	Element* fPriorityHeads[MaxPriority + 1];
-
-	// Prevent false sharing
-	char _pad0[64] __attribute__((aligned(64)));
+	bigtime_t fSystemVirtualTime;
+	int32 fTotalCount;
 
 	static GetLink sGetLink;
-	static Compare sCompare;
 };
-
-template <typename Element>
-RunQueueLink<Element>::RunQueueLink()
-	: fIndex(0x7FFFFFFF), fPriority(0), fNext(NULL), fPrev(NULL) {}
-
-template <typename Element>
-RunQueueLink<Element>* RunQueueLinkImpl<Element>::GetRunQueueLink() {
-	return &fRunQueueLink;
-}
-
-template <typename Element>
-RunQueueLink<Element>* RunQueueStandardGetLink<Element>::operator()(
-	Element* element) const {
-	return element->GetRunQueueLink();
-}
-
-template <typename Element, RunQueueLink<Element> Element::*LinkMember>
-RunQueueLink<Element>* RunQueueMemberGetLink<Element, LinkMember>::operator()(
-	Element* element) const {
-	return &(element->*LinkMember);
-}
 
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
-	: fInitStatus(B_OK), fEligibleCount(0), fIneligibleCount(0), fTotalCount(0) {
-	memset(fEligibleHeap, 0, sizeof(fEligibleHeap));
-	memset(fIneligibleHeap, 0, sizeof(fIneligibleHeap));
-	memset(fBitmap, 0, sizeof(fBitmap));
-	memset(fPriorityCounts, 0, sizeof(fPriorityCounts));
-	memset(fPriorityHeads, 0, sizeof(fPriorityHeads));
+	: fFirstLevelBitmap(0),
+	  fRealTimeBitmap(0),
+	  fSystemVirtualTime(0),
+	  fTotalCount(0)
+{
+	memset(fSecondLevelBitmap, 0, sizeof(fSecondLevelBitmap));
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt) {
-	while (fIneligibleCount > 0) {
-		Element* root = fIneligibleHeap[0];
-		if (root->IsEligible(svt)) {
-			// Guard: Ensure destination heap has space
-			if (fEligibleCount >= kMaxThreadsPerCore) {
-				dprintf("scheduler: WARNING: eligible heap full; skipping eligibility migration\n");
-				break;
-			}
-
-			// Remove from Ineligible
-			int32 lastIdx = fIneligibleCount - 1;
-			Element* last = fIneligibleHeap[lastIdx];
-			if (0 != lastIdx) {
-				fIneligibleHeap[0] = last;
-				sGetLink(last)->fIndex = -1; // Temp index for bubble
-				_BubbleDown(fIneligibleHeap, lastIdx, 0, false);
-			}
-			StoreRelease(fIneligibleCount, lastIdx);
-			sGetLink(root)->fIndex = 0x7FFFFFFF;
-
-			// Add to Eligible
-			int32 idx = fEligibleCount;
-			fEligibleHeap[idx] = root;
-			sGetLink(root)->fIndex = idx;
-			_BubbleUp(fEligibleHeap, idx + 1, idx, true);
-			StoreRelease(fEligibleCount, idx + 1);
-		} else {
-			break;
-		}
-	}
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, bigtime_t svt) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	RunQueueLink<Element>* link = sGetLink(element);
-	link->fPriority = priority;
-
-	if (priority <= MaxPriority)
-		_PushPriority(element, priority, false);
-
-	Traits::SetInRunQueue(element, true);
-
-	if (element->IsRealTime() || element->IsIdle() || element->IsEligible(svt)) {
-		if (fEligibleCount >= kMaxThreadsPerCore) {
-			panic("scheduler: eligible heap overflow (count=%d)", fEligibleCount);
-		}
-		AddAcquireRelease(fTotalCount, 1);
-		int32 idx = fEligibleCount;
-		fEligibleHeap[idx] = element;
-		link->fIndex = idx;
-		_BubbleUp(fEligibleHeap, idx + 1, idx, true);
-		StoreRelease(fEligibleCount, idx + 1);
-	} else {
-		if (fIneligibleCount >= kMaxThreadsPerCore) {
-			panic("scheduler: ineligible heap overflow (count=%d)", fIneligibleCount);
-		}
-		AddAcquireRelease(fTotalCount, 1);
-		int32 idx = fIneligibleCount;
-		fIneligibleHeap[idx] = element;
-		link->fIndex = -idx - 1;
-		_BubbleUp(fIneligibleHeap, idx + 1, idx, false);
-		StoreRelease(fIneligibleCount, idx + 1);
-	}
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bigtime_t svt) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	RunQueueLink<Element>* link = sGetLink(element);
-	link->fPriority = priority;
-
-	if (priority <= MaxPriority)
-		_PushPriority(element, priority, true);
-
-	Traits::SetInRunQueue(element, true);
-
-	if (element->IsRealTime() || element->IsIdle() || element->IsEligible(svt)) {
-		if (fEligibleCount >= kMaxThreadsPerCore) {
-			panic("scheduler: eligible heap overflow (count=%d)", fEligibleCount);
-		}
-		AddAcquireRelease(fTotalCount, 1);
-		int32 idx = fEligibleCount;
-		fEligibleHeap[idx] = element;
-		link->fIndex = idx;
-		_BubbleUp(fEligibleHeap, idx + 1, idx, true);
-		StoreRelease(fEligibleCount, idx + 1);
-	} else {
-		if (fIneligibleCount >= kMaxThreadsPerCore) {
-			panic("scheduler: ineligible heap overflow (count=%d)", fIneligibleCount);
-		}
-		AddAcquireRelease(fTotalCount, 1);
-		int32 idx = fIneligibleCount;
-		fIneligibleHeap[idx] = element;
-		link->fIndex = -idx - 1;
-		_BubbleUp(fIneligibleHeap, idx + 1, idx, false);
-		StoreRelease(fIneligibleCount, idx + 1);
-	}
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::Remove(Element* element) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	RunQueueLink<Element>* link = sGetLink(element);
-	int32 rawIndex = link->fIndex;
-
-	if (rawIndex == 0x7FFFFFFF) return;
-
-	bool eligible = (rawIndex >= 0);
-	int32 index = eligible ? rawIndex : (-rawIndex - 1);
-	Element** heap = eligible ? fEligibleHeap : fIneligibleHeap;
-	int32& count = eligible ? fEligibleCount : fIneligibleCount;
-
-	if (index < 0 || index >= count || heap[index] != element)
+void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sli) const
+{
+	// Haiku bigtime_t is in microseconds.
+	bigtime_t delta = deadline - fSystemVirtualTime;
+	if (delta <= 0) {
+		fli = 0;
+		sli = 0;
 		return;
-
-	unsigned int priority = link->fPriority;
-	if (priority <= MaxPriority)
-		_RemovePriority(element, priority);
-
-	int32 lastIndex = count - 1;
-	Element* last = heap[lastIndex];
-
-	if (index != lastIndex) {
-		heap[index] = last;
-		sGetLink(last)->fIndex = eligible ? index : (-index - 1);
-
-		_BubbleUp(heap, lastIndex, index, eligible);
-		_BubbleDown(heap, lastIndex, index, eligible);
 	}
 
-	if (eligible)
-		StoreRelease(fEligibleCount, lastIndex);
-	else
-		StoreRelease(fIneligibleCount, lastIndex);
+	// Find the highest power of 2 using Count Leading Zeros instruction
+	uint32 d32 = (uint32)min_c((bigtime_t)0xFFFFFFFF, delta);
+	fli = 31 - __builtin_clz(d32);
+	if (fli >= PRIMARY_BINS) fli = PRIMARY_BINS - 1;
 
-	link->fIndex = 0x7FFFFFFF;
+	// Linearly divide the space between 2^fli and 2^(fli+1)
+	if (fli < 5) {
+		sli = d32 & ((1 << fli) - 1);
+		sli = (d32 - (1 << fli)) << (5 - fli);
+	} else {
+		sli = (d32 - (1 << fli)) >> (fli - 5);
+	}
+	sli &= 31;
+}
+
+RUN_QUEUE_TEMPLATE_LIST
+void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, bigtime_t svt)
+{
+	fSystemVirtualTime = svt;
+	Thread* thread = element->GetThread();
+
+	Traits::SetInRunQueue(element, true);
+	atomic_add(&fTotalCount, 1);
+
+	if (priority >= 100) {
+		int32 index = priority - 100;
+		if (index < 0) index = 0;
+		if (index > 20) index = 20;
+		fRealTimeQueues[index].Add(element);
+		fRealTimeBitmap |= (1 << index);
+		thread->fli_index = -1; // Mark as RT
+		thread->sli_index = index;
+	} else {
+		int32 fli, sli;
+		_GetIndices(thread->virtual_deadline, fli, sli);
+		thread->fli_index = fli;
+		thread->sli_index = sli;
+
+		fQueues[fli][sli].Add(element);
+		fSecondLevelBitmap[fli] |= (1 << sli);
+		fFirstLevelBitmap |= (1 << fli);
+	}
+}
+
+RUN_QUEUE_TEMPLATE_LIST
+void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bigtime_t svt)
+{
+	fSystemVirtualTime = svt;
+	Thread* thread = element->GetThread();
+
+	Traits::SetInRunQueue(element, true);
+	atomic_add(&fTotalCount, 1);
+
+	if (priority >= 100) {
+		int32 index = priority - 100;
+		if (index < 0) index = 0;
+		if (index > 20) index = 20;
+		fRealTimeQueues[index].Add(element, false); // Add at head
+		fRealTimeBitmap |= (1 << index);
+		thread->fli_index = -1; // Mark as RT
+		thread->sli_index = index;
+	} else {
+		int32 fli, sli;
+		_GetIndices(thread->virtual_deadline, fli, sli);
+		thread->fli_index = fli;
+		thread->sli_index = sli;
+
+		fQueues[fli][sli].Add(element, false); // Add at head
+		fSecondLevelBitmap[fli] |= (1 << sli);
+		fFirstLevelBitmap |= (1 << fli);
+	}
+}
+
+RUN_QUEUE_TEMPLATE_LIST
+void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
+{
+	Thread* thread = element->GetThread();
+
+	if (thread->fli_index < 0) {
+		int32 index = thread->sli_index;
+
+		fRealTimeQueues[index].Remove(element);
+		if (fRealTimeQueues[index].IsEmpty())
+			fRealTimeBitmap &= ~(1 << index);
+	} else {
+		int32 fli = thread->fli_index;
+		int32 sli = thread->sli_index;
+
+		fQueues[fli][sli].Remove(element);
+		if (fQueues[fli][sli].IsEmpty()) {
+			fSecondLevelBitmap[fli] &= ~(1 << sli);
+			if (fSecondLevelBitmap[fli] == 0)
+				fFirstLevelBitmap &= ~(1 << fli);
+		}
+	}
+
 	Traits::SetInRunQueue(element, false);
-	SubAcquireRelease(fTotalCount, 1);
+	atomic_add(&fTotalCount, -1);
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_PushPriority(Element* element, unsigned int priority, bool front) {
-	RunQueueLink<Element>* link = sGetLink(element);
-	if (fPriorityCounts[priority]++ == 0) {
-		fBitmap[priority / 32] |= (1U << (priority % 32));
-		fPriorityHeads[priority] = element;
-		link->fNext = element;
-		link->fPrev = element;
-	} else {
-		Element* head = fPriorityHeads[priority];
-		RunQueueLink<Element>* headLink = sGetLink(head);
-		Element* tail = headLink->fPrev;
-		RunQueueLink<Element>* tailLink = sGetLink(tail);
-
-		link->fNext = head;
-		link->fPrev = tail;
-		tailLink->fNext = element;
-		headLink->fPrev = element;
-
-		if (front)
-			fPriorityHeads[priority] = element;
-	}
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_RemovePriority(Element* element, unsigned int priority) {
-	RunQueueLink<Element>* link = sGetLink(element);
-	if (--fPriorityCounts[priority] == 0) {
-		fBitmap[priority / 32] &= ~(1U << (priority % 32));
-		fPriorityHeads[priority] = NULL;
-	} else {
-		Element* next = link->fNext;
-		Element* prev = link->fPrev;
-		sGetLink(next)->fPrev = prev;
-		sGetLink(prev)->fNext = next;
-		if (fPriorityHeads[priority] == element)
-			fPriorityHeads[priority] = next;
-	}
-	link->fNext = NULL;
-	link->fPrev = NULL;
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_BubbleUp(Element** heap, int32 count, int32 index, bool eligible) {
-	while (index > 0) {
-		int32 parent = (index - 1) / 2;
-		bool better = eligible ? sCompare(heap[index], heap[parent]) : _CompareIneligible(heap[index], heap[parent]);
-		if (better) {
-			_Swap(heap, index, parent, eligible);
-			index = parent;
-		} else
-			break;
-	}
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_BubbleDown(Element** heap, int32 count, int32 index, bool eligible) {
-	while (true) {
-		int32 left = 2 * index + 1;
-		int32 right = 2 * index + 2;
-		int32 smallest = index;
-
-		if (left < count) {
-			bool better = eligible ? sCompare(heap[left], heap[smallest]) : _CompareIneligible(heap[left], heap[smallest]);
-			if (better) smallest = left;
-		}
-		if (right < count) {
-			bool better = eligible ? sCompare(heap[right], heap[smallest]) : _CompareIneligible(heap[right], heap[smallest]);
-			if (better) smallest = right;
-		}
-
-		if (smallest != index) {
-			_Swap(heap, index, smallest, eligible);
-			index = smallest;
-		} else
-			break;
-	}
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_Swap(Element** heap, int32 i, int32 j, bool eligible) {
-	Element* temp = heap[i];
-	heap[i] = heap[j];
-	heap[j] = temp;
-
-	sGetLink(heap[i])->fIndex = eligible ? i : (-i - 1);
-	sGetLink(heap[j])->fIndex = eligible ? j : (-j - 1);
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-Element* RUN_QUEUE_CLASS_NAME::ConstIterator::Next() {
-	if (fIndex < fList->fEligibleCount)
-		return fList->fEligibleHeap[fIndex++];
-
-	int32 ineligIdx = fIndex - fList->fEligibleCount;
-	if (ineligIdx < fList->fIneligibleCount) {
-		fIndex++;
-		return fList->fIneligibleHeap[ineligIdx];
-	}
-	return NULL;
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const {
-	if (priority <= MaxPriority)
-		return fPriorityHeads[priority];
-	return NULL;
-}
-
-RUN_QUEUE_TEMPLATE_LIST
-template <typename Predicate>
-Element* RUN_QUEUE_CLASS_NAME::PeekOption(const Predicate& predicate) const {
-	for (int32 i = 0; i < fEligibleCount; i++) {
-		if (predicate(fEligibleHeap[i]))
-			return fEligibleHeap[i];
+Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
+{
+	if (fRealTimeBitmap != 0) {
+		int32 index = 31 - __builtin_clz(fRealTimeBitmap);
+		return fRealTimeQueues[index].Head();
 	}
 
-	for (int32 i = 0; i < fIneligibleCount; i++) {
-		if (predicate(fIneligibleHeap[i]))
-			return fIneligibleHeap[i];
-	}
+	if (fFirstLevelBitmap == 0) return NULL;
 
-	return NULL;
+	int32 fli = __builtin_ctz(fFirstLevelBitmap);
+	int32 sli = __builtin_ctz(fSecondLevelBitmap[fli]);
+
+	return fQueues[fli][sli].Head();
 }
 
 RUN_QUEUE_TEMPLATE_LIST
 template <typename Compare2, typename Predicate>
 Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
-										const Predicate& predicate) const {
+										const Predicate& predicate) const
+{
 	Element* best = NULL;
-	for (int32 i = 0; i < fEligibleCount; i++) {
-		if (predicate(fEligibleHeap[i])) {
-			if (best == NULL || compare(fEligibleHeap[i], best))
-				best = fEligibleHeap[i];
-		}
-	}
 
-	if (best == NULL) {
-		for (int32 i = 0; i < fIneligibleCount; i++) {
-			if (predicate(fIneligibleHeap[i])) {
-				if (best == NULL || compare(fIneligibleHeap[i], best))
-					best = fIneligibleHeap[i];
+	// Check Real-Time queues
+	uint32 rtBitmap = fRealTimeBitmap;
+	while (rtBitmap != 0) {
+		int32 index = 31 - __builtin_clz(rtBitmap);
+		typename DoublyLinkedList<Element, GetLink>::Iterator it = fRealTimeQueues[index].GetIterator();
+		while (it.HasNext()) {
+			Element* element = it.Next();
+			if (predicate(element)) {
+				if (best == NULL || compare(element, best))
+					best = element;
 			}
 		}
+		rtBitmap &= ~(1 << index);
+	}
+
+	// Check EEVDF matrix
+	uint32 flBitmap = fFirstLevelBitmap;
+	while (flBitmap != 0) {
+		int32 fli = __builtin_ctz(flBitmap);
+		uint32 slBitmap = fSecondLevelBitmap[fli];
+		while (slBitmap != 0) {
+			int32 sli = __builtin_ctz(slBitmap);
+			typename DoublyLinkedList<Element, GetLink>::Iterator it = fQueues[fli][sli].GetIterator();
+			while (it.HasNext()) {
+				Element* element = it.Next();
+				if (predicate(element)) {
+					if (best == NULL || compare(element, best))
+						best = element;
+				}
+			}
+			slBitmap &= ~(1 << sli);
+		}
+		flBitmap &= ~(1 << fli);
 	}
 
 	return best;
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-GetLink RUN_QUEUE_CLASS_NAME::sGetLink;
+Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const
+{
+	if (priority >= 100) {
+		int32 index = priority - 100;
+		if (index < 0) index = 0;
+		if (index > 20) index = 20;
+		return fRealTimeQueues[index].Head();
+	}
+
+	if (priority == B_IDLE_PRIORITY) {
+		return fQueues[0][0].Head();
+	}
+
+	return NULL;
+}
 
 RUN_QUEUE_TEMPLATE_LIST
-Compare RUN_QUEUE_CLASS_NAME::sCompare;
+Element* RUN_QUEUE_CLASS_NAME::PopNext()
+{
+	Element* element = PeekBest();
+	if (element != NULL)
+		Remove(element);
+	return element;
+}
+
+RUN_QUEUE_TEMPLATE_LIST
+GetLink RUN_QUEUE_CLASS_NAME::sGetLink;
 
 #endif	// RUN_QUEUE_H
