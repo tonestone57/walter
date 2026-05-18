@@ -294,8 +294,8 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 
 	if (fFirstLevelBitmap == 0) return NULL;
 
-	int32 fli = __builtin_ctz(fFirstLevelBitmap);
-	int32 sli = __builtin_ctz(fSecondLevelBitmap[fli]);
+	int32 fli = ffs(fFirstLevelBitmap) - 1;
+	int32 sli = ffs(fSecondLevelBitmap[fli]) - 1;
 
 	return fQueues[fli][sli].Head();
 }
@@ -325,10 +325,10 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 	// Check EEVDF matrix
 	uint32 flBitmap = fFirstLevelBitmap;
 	while (flBitmap != 0) {
-		int32 fli = __builtin_ctz(flBitmap);
+		int32 fli = ffs(flBitmap) - 1;
 		uint32 slBitmap = fSecondLevelBitmap[fli];
 		while (slBitmap != 0) {
-			int32 sli = __builtin_ctz(slBitmap);
+			int32 sli = ffs(slBitmap) - 1;
 			typename DoublyLinkedList<Element, GetLink>::Iterator it = fQueues[fli][sli].GetIterator();
 			while (it.HasNext()) {
 				Element* element = it.Next();
