@@ -669,8 +669,16 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 			if (!wasReady && !IsRealTime()) {
 				bigtime_t svt = cpu->SystemVirtualTime();
 				bigtime_t vrt = GetVirtualRuntime();
-				if (vrt < svt - kMaxLagFloor)
-					StoreRelease64(fVirtualRuntime, (int64)(svt - kMaxLagFloor));
+
+				// Scale the lag floor to virtual time based on thread weight.
+				// vLagFloor = (kMaxLagFloor * 1000) / weight
+				int64 weight = GetWeight();
+				if (weight <= 0)
+					weight = 1;
+				bigtime_t vLagFloor = (kMaxLagFloor * 1000) / weight;
+
+				if (vrt < svt - vLagFloor)
+					StoreRelease64(fVirtualRuntime, (int64)(svt - vLagFloor));
 
 				_UpdateDeadline(now);
 			}
@@ -771,8 +779,15 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 		if (!wasReady && !IsRealTime()) {
 			bigtime_t svt = core->SystemVirtualTime();
 			bigtime_t vrt = GetVirtualRuntime();
-			if (vrt < svt - kMaxLagFloor)
-				StoreRelease64(fVirtualRuntime, (int64)(svt - kMaxLagFloor));
+
+			// Scale the lag floor to virtual time based on thread weight.
+			int64 weight = GetWeight();
+			if (weight <= 0)
+				weight = 1;
+			bigtime_t vLagFloor = (kMaxLagFloor * 1000) / weight;
+
+			if (vrt < svt - vLagFloor)
+				StoreRelease64(fVirtualRuntime, (int64)(svt - vLagFloor));
 
 			_UpdateDeadline(now);
 		}

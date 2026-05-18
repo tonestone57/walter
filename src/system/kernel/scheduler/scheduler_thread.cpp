@@ -699,6 +699,13 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 			(bigtime_t)LoadAcquire64(fVirtualDeadline) -
 			svt;
 
+		// Convert Virtual difference back to Real difference for urgency mapping.
+		// RealTimeDiff = (VirtualTimeDiff * weight) / kFairShareReferenceWeight
+		int64 weight = GetWeight();
+		if (weight <= 0)
+			weight = 1;
+		diff = (diff * weight) / 1000;
+
 		// Adaptive Urgency Boost: give bursty threads higher urgency.
 		bigtime_t urgencyBoost = (fInteractivityScore * bucketSize) / 1000;
 

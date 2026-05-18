@@ -668,9 +668,15 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 			Thread* running = gCPU[targetCPU->ID()].running_thread;
 			ThreadData* runningData = (running != NULL) ? running->scheduler_data : NULL;
 			if (runningData != NULL && !runningData->IsIdle() && !runningData->IsRealTime()) {
-				// new thread is 'threadData', running thread is 'runningData'.
-				// Preempt only if runningData->Deadline - threadData->Deadline > epsilon
-				if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < epsilon) {
+				// EEVDF Preemption: scale real-time epsilon to virtual time.
+				// vEpsilon = (epsilon * kFairShareReferenceWeight) / weight
+				int64 weight = runningData->GetWeight();
+				if (weight <= 0)
+					weight = 1;
+				bigtime_t vEpsilon = (epsilon * 1000) / weight;
+
+				// Preempt only if runningData->Deadline - threadData->Deadline > vEpsilon
+				if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {
 					// Not urgent enough to justify preemption; preserve cache warmth.
 					return true;
 				}
