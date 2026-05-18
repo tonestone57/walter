@@ -132,14 +132,15 @@ public:
 	SCHEDULER_INLINE bool Dequeue();
 
 	SCHEDULER_INLINE void UpdateVirtualRuntime(bigtime_t delta,
-											   bigtime_t now = 0,
+											   bigtime_t svt,
 											   bigtime_t maxLatency = 0);
 
-	// Accept an optional pre-computed 'now' timestamp.  The caller
-	// (CPUEntry::UpdateActiveTime) already holds a fresh system_time() result
-	// and can pass it here to eliminate a redundant syscall.  Passing 0 (the
-	// default) falls back to an internal system_time() call for compatibility.
-	SCHEDULER_INLINE void UpdateActivity(bigtime_t active, bigtime_t now = 0);
+	// The caller (CPUEntry::UpdateActiveTime) already holds a fresh
+	// system_time() result and the current core's SystemVirtualTime, and
+	// can pass them here to eliminate redundant syscalls and ensure
+	// consistency during migration.
+	SCHEDULER_INLINE void UpdateActivity(bigtime_t active, bigtime_t svt,
+										 bigtime_t now = 0);
 
 	static bigtime_t sMaxLatency __attribute__((aligned(8)));
 
@@ -843,65 +844,58 @@ inline void RunQueueTraits<ThreadData>::SetInRunQueue(ThreadData* element,
 	element->GetThread()->inRunQueue = inQueue;
 }
 
-inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t now,
+inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 											 bigtime_t maxLatency) {
 	if (delta <= 0 || IsRealTime())
 		return;
 
-	// Optimization: Pre-calculate lookahead horizon
-	if (maxLatency == 0)
-		maxLatency =
-			(bigtime_t)LoadAcquire64(sMaxLatency);
-	const bigtime_t kLookahead = maxLatency * 1000000LL;
+	// Optimization: Pre-calculate lookahead horizon.
+	// We use a generous multiplier (100,000x) to allow threads to build
+	// substantial virtual-time credit/debt (~320s at 3.2ms latency)
+	// before clamping, which improves fairness for varied workloads.
+	if (maxLatency == 0) {
+		maxLatency = (bigtime_t)LoadAcquire64(sMaxLatency);
+		if (maxLatency == 0)
+			maxLatency = 3200;
+	}
+	const bigtime_t kLookahead = maxLatency * 100000LL;
 
-	CoreEntry* core = Core();
-	bigtime_t base = (core != NULL) ? core->SystemVirtualTime() : now;
-	if (base == 0)
-		base = system_time();
+	if (svt == 0)
+		svt = system_time();
 
 	bigtime_t ceiling =
-		(base > B_INT64_MAX - kLookahead) ? B_INT64_MAX : base + kLookahead;
+		(svt > B_INT64_MAX - kLookahead) ? B_INT64_MAX : svt + kLookahead;
 
-	const bigtime_t threshold = ceiling - delta;
 	bigtime_t vRuntime = (bigtime_t)LoadAcquire64(fVirtualRuntime);
+	while (vRuntime < ceiling) {
+		bigtime_t next = (vRuntime < ceiling - delta) ? vRuntime + delta : ceiling;
 
-	while (true) {
-		bigtime_t next;
-		if (vRuntime < threshold)
-			next = vRuntime + delta;
-		else if (vRuntime < ceiling)
-			next = ceiling;
-		else
-			break;
-
-		// Optimization: Reuse the value returned by the CAS if it fails
-		bigtime_t old = (bigtime_t)TestAndSet64(fVirtualRuntime, (int64)((uint64)next), (int64)vRuntime);
+		bigtime_t old = (bigtime_t)TestAndSet64(fVirtualRuntime, (int64)next,
+												(int64)vRuntime);
 		if (old == vRuntime)
 			break;
 		vRuntime = old;
 	}
 }
 
-inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t now) {
+inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t svt,
+									   bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (!IsRealTime() && !IsIdle()) {
 		// Note: Formal fair-share runtime update.
 		// delta = (active * kFairShareReferenceWeight) / Weight
 		int64 weight = GetWeight();
-		if (weight <= 0) weight = 1;
+		if (weight <= 0)
+			weight = 1;
 		bigtime_t delta = (active * 1000) / weight;
 
-		UpdateVirtualRuntime(delta, now);
+		UpdateVirtualRuntime(delta, svt);
 
 		// Note: Update Lag.
 		// Lag = (SystemVirtualTime - VirtualRuntime) * Weight
-		CoreEntry* core = Core();
-		if (core != NULL) {
-			bigtime_t svt = core->SystemVirtualTime();
-			int64 lag = (svt - GetVirtualRuntime()) * weight;
-			StoreRelease64(fLag, lag);
-		}
+		int64 lag = (svt - GetVirtualRuntime()) * weight;
+		StoreRelease64(fLag, lag);
 	}
 
 	if (!gTrackCoreLoad)

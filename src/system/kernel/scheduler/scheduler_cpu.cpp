@@ -655,10 +655,13 @@ void CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now) {
 		locker.Unlock();
 
 		AddRelease64(fMeasureActiveTime, (int64)(active));
-		atomic_pointer_get<CoreEntry>(&fCore)->IncreaseActiveTime(active);
 
-		// Use the provided timestamp for UpdateActivity.
-		oldThreadData->UpdateActivity(active, now);
+		CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+		core->IncreaseActiveTime(active);
+
+		// Pass the core's SystemVirtualTime to UpdateActivity to ensure
+		// consistency during potential migration.
+		oldThreadData->UpdateActivity(active, core->SystemVirtualTime(), now);
 	}
 }
 
