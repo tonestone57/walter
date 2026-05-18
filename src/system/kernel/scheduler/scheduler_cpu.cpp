@@ -67,14 +67,18 @@ struct LocalNodeStealAction {
 			 ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
 			return false;
 
-		if (victim->TryLockRunQueue()) {
-			int32 stolenPriority = -1;
+		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
+		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
+			victim->RunQueue()->GetFirstLevelBitmap() == 0)
+			return false;
 
-			// Note: Hierarchical Lag-Based Steal (Local Node).
-			// Prefer threads with highest positive lag.
-			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+		int32 stolenPriority = -1;
+		// Lock-Free Bit-Stealing Phase 2: Atomic Steal Attempt
+		*stolen = victim->StealThreadLockless(stolenPriority, cpu->ID());
 
-			if (*stolen != NULL && (*stolen)->GetLag() < kNUMANodeLagThreshold) {
+		if (*stolen != NULL) {
+			// We have the victim's run-queue lock.
+			if ((*stolen)->GetLag() < kNUMANodeLagThreshold) {
 				// Thread not under-served enough to justify cross-core steal
 				// within the same node. Restore it.
 				victim->PushBack(*stolen, stolenPriority);
@@ -82,7 +86,7 @@ struct LocalNodeStealAction {
 			}
 
 			if (*stolen != NULL) {
-				// Re-verify affinity under the lock.
+				// Re-verify affinity under the lock (mostly redundant but safe).
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core(), now);
@@ -141,14 +145,18 @@ struct GlobalRandomStealAction {
 			 ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
 			return false;
 
-		if (victim->TryLockRunQueue()) {
-			int32 stolenPriority = -1;
+		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
+		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
+			victim->RunQueue()->GetFirstLevelBitmap() == 0)
+			return false;
 
-			// Note: Hierarchical Lag-Based Steal (Global).
-			// Use higher lag threshold for remote nodes to preserve cache warmth.
-			*stolen = victim->StealThread(stolenPriority, cpu->ID());
+		int32 stolenPriority = -1;
+		// Lock-Free Bit-Stealing Phase 2: Atomic Steal Attempt
+		*stolen = victim->StealThreadLockless(stolenPriority, cpu->ID());
 
-			if (*stolen != NULL && (*stolen)->GetLag() < kGlobalLagThreshold) {
+		if (*stolen != NULL) {
+			// We have the victim's run-queue lock.
+			if ((*stolen)->GetLag() < kGlobalLagThreshold) {
 				// Cross-NUMA migration is expensive; only steal if thread is
 				// extremely under-served.
 				victim->PushBack(*stolen, stolenPriority);
@@ -813,31 +821,33 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 			continue;
 		}
 
-		// Use TryLock to avoid contention
-		if (victim->TryLockRunQueue()) {
-			int32 stolenPriority = -1;
-			ThreadData* stolen =
-				victim->StealThread(stolenPriority, fCPUNumber);
-			if (stolen != NULL) {
-				// Re-verify affinity under the lock.
-				const CPUSet& threadMask = stolen->GetThread()->cpumask;
-				if (threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber)) {
-					CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
-					stolen->MigrateTo(core, now);
-					stolen->fStolen = true;
-					core->IncrementTotalThreadCount();
-				} else {
-					// Victim no longer matches thief after lock acquisition.
-					// Push it back and abort this victim.
-					victim->PushBack(stolen, stolen->GetThread()->priority);
-					stolen = NULL;
-				}
+		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
+		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
+			victim->RunQueue()->GetFirstLevelBitmap() == 0)
+			continue;
+
+		int32 stolenPriority = -1;
+		// Lock-Free Bit-Stealing Phase 2: Atomic Steal Attempt
+		ThreadData* stolen = victim->StealThreadLockless(stolenPriority, fCPUNumber);
+
+		if (stolen != NULL) {
+			// We have the victim's run-queue lock.
+			const CPUSet& threadMask = stolen->GetThread()->cpumask;
+			if (threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber)) {
+				CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+				stolen->MigrateTo(core, now);
+				stolen->fStolen = true;
+				core->IncrementTotalThreadCount();
+			} else {
+				// Victim no longer matches thief after lock acquisition.
+				// Push it back and abort this victim.
+				victim->PushBack(stolen, stolen->GetThread()->priority);
+				stolen = NULL;
 			}
 
 			victim->UnlockRunQueue();
-
-			if (stolen != NULL)
-				return stolen;
+			return stolen;
+		}
 		}
 	}
 
@@ -1086,6 +1096,91 @@ ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
 		Remove(thread);
 	}
 	return thread;
+}
+
+ThreadData* CoreEntry::StealThreadLockless(int32& stolenPriority, int32 thiefCPU) {
+	SCHEDULER_ENTER_FUNCTION();
+
+	bigtime_t svt = SystemVirtualTime();
+
+	// Lock-Free Bit-Stealing Phase 1: Real-Time threads
+	uint32 rtBitmap = fRunQueue.GetRealTimeBitmap();
+	while (rtBitmap != 0) {
+		int32 index = fls(rtBitmap) - 1;
+		if (index < 0) break;
+
+		// Atomic Steal: Attempt to claim the RT bin
+		if (fRunQueue.TestAndClearRTAtomic(index)) {
+			// Success! We claimed the bin bit. Now acquire the lock to safely extract.
+			LockRunQueue();
+			ThreadData* thread = fRunQueue.GetRTBinHead(index);
+
+			// Verify affinity and availability
+			while (thread != NULL) {
+				const CPUSet& threadMask = thread->GetThread()->cpumask;
+				if (threadMask.IsEmpty() || threadMask.GetBit(thiefCPU)) {
+					stolenPriority = thread->GetThread()->priority;
+					Remove(thread);
+					// If the bin is NOT empty, we must restore the bit so others can steal.
+					if (!fRunQueue.IsRTBinEmpty(index))
+						fRunQueue.RestoreRTBitAtomic(index);
+					return thread; // LOCK HELD upon return!
+				}
+				thread = fRunQueue.GetNextRT(thread, index);
+			}
+
+			// No suitable thread found in this bin; restore bit, unlock and continue.
+			if (!fRunQueue.IsRTBinEmpty(index))
+				fRunQueue.RestoreRTBitAtomic(index);
+			UnlockRunQueue();
+		}
+		rtBitmap &= ~(1U << index);
+	}
+
+	// Lock-Free Bit-Stealing Phase 2: FairShare (EEVDF) bins
+	native_cpu_mask_t fliBitmap = fRunQueue.GetFirstLevelBitmap();
+	while (fliBitmap != 0) {
+		int32 fli = scheduler_ctz(fliBitmap);
+		if (fli < 0) break;
+
+		native_cpu_mask_t sliBitmap = fRunQueue.GetSecondLevelBitmap(fli);
+		while (sliBitmap != 0) {
+			int32 sli = scheduler_ctz(sliBitmap);
+			if (sli < 0) break;
+
+			// Atomic Steal: Attempt to claim the FairShare bin
+			if (fRunQueue.TestAndClearSliAtomic(fli, sli)) {
+				LockRunQueue();
+				ThreadData* thread = fRunQueue.GetSliBinHead(fli, sli);
+
+				while (thread != NULL) {
+					const CPUSet& threadMask = thread->GetThread()->cpumask;
+					if (threadMask.IsEmpty() || threadMask.GetBit(thiefCPU)) {
+						// Apply EEVDF "Laggiest Wins" policy for steals
+						int64 lag = (svt - thread->GetVirtualRuntime()) * thread->GetWeight() / 1000;
+						if (lag > 0) {
+							stolenPriority = thread->GetEffectivePriority();
+							Remove(thread);
+							// Restore bit if bin still contains threads.
+							if (!fRunQueue.IsSliBinEmpty(fli, sli))
+								fRunQueue.RestoreSliBitAtomic(fli, sli);
+							return thread; // LOCK HELD upon return!
+						}
+					}
+					thread = fRunQueue.GetNextSli(thread, fli, sli);
+				}
+
+				// Restore bit if bin still contains threads or if no thread was eligible.
+				if (!fRunQueue.IsSliBinEmpty(fli, sli))
+					fRunQueue.RestoreSliBitAtomic(fli, sli);
+				UnlockRunQueue();
+			}
+			sliBitmap &= ~((native_cpu_mask_t)1 << sli);
+		}
+		fliBitmap &= ~((native_cpu_mask_t)1 << fli);
+	}
+
+	return NULL;
 }
 
 

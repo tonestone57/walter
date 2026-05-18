@@ -55,7 +55,7 @@ class RunQueue {
 public:
 	RunQueue();
 
-	inline bool IsEmpty() const { return atomic_get(&fTotalCount) == 0; }
+	inline bool IsEmpty() const { return atomic_get((int32 volatile*)&fTotalCount) == 0; }
 
 	void PushBack(Element* element, unsigned int priority, bigtime_t svt = 0);
 	void PushFront(Element* element, unsigned int priority, bigtime_t svt = 0);
@@ -73,11 +73,51 @@ public:
 	inline Element* PeekRoot() const { return PeekBest(); }
 	inline Element* PeekMaximum() const { return PeekBest(); }
 
-	inline native_cpu_mask_t GetFirstLevelBitmap() const { return fFirstLevelBitmap; }
-	inline native_cpu_mask_t GetSecondLevelBitmap(int fli) const { return fSecondLevelBitmap[fli]; }
-	inline uint32 GetRealTimeBitmap() const { return fRealTimeBitmap; }
+	inline native_cpu_mask_t GetFirstLevelBitmap() const
+	{
+		return cpu_mask_get_atomic(const_cast<native_cpu_mask_t*>(&fFirstLevelBitmap));
+	}
+	inline native_cpu_mask_t GetSecondLevelBitmap(int fli) const
+	{
+		return cpu_mask_get_atomic(const_cast<native_cpu_mask_t*>(&fSecondLevelBitmap[fli]));
+	}
+	inline uint32 GetRealTimeBitmap() const
+	{
+		return (uint32)atomic_get((int32 volatile*)&fRealTimeBitmap);
+	}
 
-	inline Element* GetBinHead(int fli, int sli) const { return fQueues[fli][sli].Head(); }
+	inline bool TestAndClearSliAtomic(int fli, int sli)
+	{
+		native_cpu_mask_t bit = (native_cpu_mask_t)1 << sli;
+		native_cpu_mask_t old = cpu_mask_and_atomic(&fSecondLevelBitmap[fli], ~bit);
+		return (old & bit) != 0;
+	}
+
+	inline bool TestAndClearRTAtomic(int index)
+	{
+		uint32 bit = 1U << index;
+		uint32 old = (uint32)atomic_and((int32 volatile*)&fRealTimeBitmap, (int32)~bit);
+		return (old & bit) != 0;
+	}
+
+	inline void RestoreRTBitAtomic(int index)
+	{
+		atomic_or((int32 volatile*)&fRealTimeBitmap, (int32)(1U << index));
+	}
+
+	inline void RestoreSliBitAtomic(int fli, int sli)
+	{
+		cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
+		cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
+	}
+
+	inline Element* GetRTBinHead(int index) const { return fRealTimeQueues[index].Head(); }
+	inline bool IsRTBinEmpty(int index) const { return fRealTimeQueues[index].IsEmpty(); }
+	inline Element* GetNextRT(Element* element, int index) const { return fRealTimeQueues[index].GetNext(element); }
+
+	inline Element* GetSliBinHead(int fli, int sli) const { return fQueues[fli][sli].Head(); }
+	inline bool IsSliBinEmpty(int fli, int sli) const { return fQueues[fli][sli].IsEmpty(); }
+	inline Element* GetNextSli(Element* element, int fli, int sli) const { return fQueues[fli][sli].GetNext(element); }
 
 	class ConstIterator {
 	public:
@@ -222,14 +262,14 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 	Thread* thread = element->GetThread();
 
 	Traits::SetInRunQueue(element, true);
-	atomic_add(&fTotalCount, 1);
+	atomic_add((int32 volatile*)&fTotalCount, 1);
 
 	if (priority >= 100) {
 		int32 index = priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element);
-		fRealTimeBitmap |= (1U << index);
+		atomic_or((int32 volatile*)&fRealTimeBitmap, (int32)(1U << index));
 		thread->fli_index = -1; // Mark as RT
 		thread->sli_index = index;
 	} else {
@@ -239,8 +279,8 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 		thread->sli_index = sli;
 
 		fQueues[fli][sli].Add(element);
-		fSecondLevelBitmap[fli] |= ((native_cpu_mask_t)1 << sli);
-		fFirstLevelBitmap |= ((native_cpu_mask_t)1 << fli);
+		cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
+		cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
 	}
 }
 
@@ -254,14 +294,14 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 	Thread* thread = element->GetThread();
 
 	Traits::SetInRunQueue(element, true);
-	atomic_add(&fTotalCount, 1);
+	atomic_add((int32 volatile*)&fTotalCount, 1);
 
 	if (priority >= 100) {
 		int32 index = priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element, false); // Add at head
-		fRealTimeBitmap |= (1U << index);
+		atomic_or((int32 volatile*)&fRealTimeBitmap, (int32)(1U << index));
 		thread->fli_index = -1; // Mark as RT
 		thread->sli_index = index;
 	} else {
@@ -271,8 +311,8 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 		thread->sli_index = sli;
 
 		fQueues[fli][sli].Add(element, false); // Add at head
-		fSecondLevelBitmap[fli] |= ((native_cpu_mask_t)1 << sli);
-		fFirstLevelBitmap |= ((native_cpu_mask_t)1 << fli);
+		cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
+		cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
 	}
 }
 
@@ -286,35 +326,44 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 
 		fRealTimeQueues[index].Remove(element);
 		if (fRealTimeQueues[index].IsEmpty())
-			fRealTimeBitmap &= ~(1U << index);
+			atomic_and((int32 volatile*)&fRealTimeBitmap, (int32)~(1U << index));
 	} else {
 		int32 fli = thread->fli_index;
 		int32 sli = thread->sli_index;
 
 		fQueues[fli][sli].Remove(element);
 		if (fQueues[fli][sli].IsEmpty()) {
-			fSecondLevelBitmap[fli] &= ~((native_cpu_mask_t)1 << sli);
-			if (fSecondLevelBitmap[fli] == 0)
-				fFirstLevelBitmap &= ~((native_cpu_mask_t)1 << fli);
+			cpu_mask_and_atomic(&fSecondLevelBitmap[fli], ~((native_cpu_mask_t)1 << sli));
+			if (cpu_mask_get_atomic(&fSecondLevelBitmap[fli]) == 0)
+				cpu_mask_and_atomic(&fFirstLevelBitmap, ~((native_cpu_mask_t)1 << fli));
 		}
 	}
 
 	Traits::SetInRunQueue(element, false);
-	atomic_add(&fTotalCount, -1);
+	atomic_add((int32 volatile*)&fTotalCount, -1);
 }
 
 RUN_QUEUE_TEMPLATE_LIST
 Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 {
-	if (fRealTimeBitmap != 0) {
-		int32 index = fls(fRealTimeBitmap) - 1;
-		return fRealTimeQueues[index].Head();
+	uint32 rtBitmap = GetRealTimeBitmap();
+	if (rtBitmap != 0) {
+		int32 index = fls(rtBitmap) - 1;
+		if (index >= 0)
+			return fRealTimeQueues[index].Head();
 	}
 
-	if (fFirstLevelBitmap == 0) return NULL;
+	native_cpu_mask_t flBitmap = GetFirstLevelBitmap();
+	if (flBitmap == 0) return NULL;
 
-	int32 fli = scheduler_ctz(fFirstLevelBitmap);
-	int32 sli = scheduler_ctz(fSecondLevelBitmap[fli]);
+	int32 fli = scheduler_ctz(flBitmap);
+	if (fli < 0) return NULL;
+
+	native_cpu_mask_t slBitmap = GetSecondLevelBitmap(fli);
+	if (slBitmap == 0) return NULL;
+
+	int32 sli = scheduler_ctz(slBitmap);
+	if (sli < 0) return NULL;
 
 	return fQueues[fli][sli].Head();
 }
@@ -327,28 +376,32 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 	Element* best = NULL;
 
 	// Check Real-Time queues
-	uint32 rtBitmap = fRealTimeBitmap;
+	uint32 rtBitmap = GetRealTimeBitmap();
 	while (rtBitmap != 0) {
 		int32 index = fls(rtBitmap) - 1;
-		typename DoublyLinkedList<Element, GetLink>::Iterator it = fRealTimeQueues[index].GetIterator();
-		while (it.HasNext()) {
-			Element* element = it.Next();
-			if (predicate(element)) {
-				if (best == NULL || compare(element, best))
-					best = element;
+		if (index >= 0) {
+			typename DoublyLinkedList<Element, GetLink>::Iterator it = const_cast<DoublyLinkedList<Element, GetLink>&>(fRealTimeQueues[index]).GetIterator();
+			while (it.HasNext()) {
+				Element* element = it.Next();
+				if (predicate(element)) {
+					if (best == NULL || compare(element, best))
+						best = element;
+				}
 			}
 		}
 		rtBitmap &= ~(1U << index);
 	}
 
 	// Check EEVDF matrix
-	native_cpu_mask_t flBitmap = fFirstLevelBitmap;
+	native_cpu_mask_t flBitmap = GetFirstLevelBitmap();
 	while (flBitmap != 0) {
 		int32 fli = scheduler_ctz(flBitmap);
-		native_cpu_mask_t slBitmap = fSecondLevelBitmap[fli];
+		if (fli < 0) break;
+		native_cpu_mask_t slBitmap = GetSecondLevelBitmap(fli);
 		while (slBitmap != 0) {
 			int32 sli = scheduler_ctz(slBitmap);
-			typename DoublyLinkedList<Element, GetLink>::Iterator it = fQueues[fli][sli].GetIterator();
+			if (sli < 0) break;
+			typename DoublyLinkedList<Element, GetLink>::Iterator it = const_cast<DoublyLinkedList<Element, GetLink>&>(fQueues[fli][sli]).GetIterator();
 			while (it.HasNext()) {
 				Element* element = it.Next();
 				if (predicate(element)) {

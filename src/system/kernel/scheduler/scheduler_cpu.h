@@ -271,6 +271,7 @@ public:
 	inline bool HasHighPriorityThread() const;
 
 	ThreadData* StealThread(int32& stolenPriority, int32 thiefCPU);
+	ThreadData* StealThreadLockless(int32& stolenPriority, int32 thiefCPU);
 
 	void PushFront(ThreadData* thread, int32 priority);
 	void PushBack(ThreadData* thread, int32 priority);
