@@ -57,7 +57,7 @@ void ThreadData::_InitBase() {
 	StoreRelease64(fLastMeasureAvailableTime, 0);
 	StoreRelease64(fMeasureAvailableTime, 0);
 
-	StoreRelease64(fWeight, get_weight(fEffectivePriority));
+	StoreRelease64(fWeight, get_weight(fThread->priority));
 	StoreRelease64(fRequestSize, 0); // Use dynamic scaling by default
 	StoreRelease64(fLag, 0);
 
@@ -651,13 +651,10 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 
 	bigtime_t slice = (requestSize * 1000) / weight;
 
-	// Floor at one bucket width so the deadline is always in the future.
-	{
-		const bigtime_t kMinSlice =
-			Scheduler::GetCurrentMode()->base_quantum / 4;
-		if (slice < kMinSlice)
-			slice = kMinSlice;
-	}
+	// Note: Deadline floor is unnecessary in the virtual domain.
+	// As long as weight > 0 and requestSize > 0, slice is positive.
+	// A floor using a real-time constant (like base_quantum) would unfairly
+	// penalize high-priority threads by capping their latency advantage.
 
 	StoreRelease64(fVirtualDeadline, (int64)(GetVirtualRuntime() + slice));
 

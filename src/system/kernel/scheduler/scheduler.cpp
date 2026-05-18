@@ -776,7 +776,6 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 			CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
 
 			if (!gCPU[cpu->ID()].disabled) {
-				CoreCPUHeapLocker _(threadData->Core());
 				cpu->UpdatePriority(priority);
 				if (!threadData->IsRealTime())
 					cpu->AddWeight(newWeight - oldWeight);
@@ -2248,38 +2247,26 @@ void scheduler_on_team_foreground_changed(Team* team) {
 			if (threadData == NULL || threadData->IsIdle() ||
 				threadData->IsRealTime())
 				continue;
+			threadData->SetForeground(team->fIsForeground);
+			if (Scheduler::GetCurrentMode()->update_thread_timeslice !=
+				NULL) {
+				Scheduler::GetCurrentMode()->update_thread_timeslice(
+					threadData);
+			}
+
 			if (thread->state == B_THREAD_READY) {
 				if (threadData->Dequeue()) {
-					threadData->SetForeground(team->fIsForeground);
-					if (Scheduler::GetCurrentMode()->update_thread_timeslice !=
-						NULL) {
-						Scheduler::GetCurrentMode()->update_thread_timeslice(
-							threadData);
-					}
 					threadData->ResetPriorityBoost(now);
 					enqueue(thread, false, NULL, now);
 				} else {
-					threadData->SetForeground(team->fIsForeground);
-					if (Scheduler::GetCurrentMode()->update_thread_timeslice !=
-						NULL) {
-						Scheduler::GetCurrentMode()->update_thread_timeslice(
-							threadData);
-					}
 					threadData->ResetPriorityBoost(now);
 				}
 			} else {
-				threadData->SetForeground(team->fIsForeground);
-				if (Scheduler::GetCurrentMode()->update_thread_timeslice !=
-					NULL) {
-					Scheduler::GetCurrentMode()->update_thread_timeslice(
-						threadData);
-				}
 				if (thread->state == B_THREAD_RUNNING) {
 					threadData->ResetPriorityBoost(now);
 					ASSERT(thread->cpu != NULL);
 					CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
 					if (!gCPU[cpu->ID()].disabled) {
-						CoreCPUHeapLocker _(threadData->Core());
 						cpu->UpdatePriority(threadData->GetEffectivePriority());
 					}
 				}
