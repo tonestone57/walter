@@ -759,13 +759,16 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 		  threadData->GetEffectivePriority());
 
 	bigtime_t now = system_time();
-	thread->priority = priority;
-	threadData->ResetPriorityBoost(now);
+	int64 oldWeight = threadData->GetWeight();
 
 	if (priority == oldPriority)
 		return oldPriority;
 
 	if (thread->state != B_THREAD_READY) {
+		thread->priority = priority;
+		threadData->ResetPriorityBoost(now);
+		int64 newWeight = threadData->GetWeight();
+
 		if (thread->state == B_THREAD_RUNNING) {
 			ASSERT(threadData->Core() != NULL);
 
@@ -775,6 +778,8 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 			if (!gCPU[cpu->ID()].disabled) {
 				CoreCPUHeapLocker _(threadData->Core());
 				cpu->UpdatePriority(priority);
+				if (!threadData->IsRealTime())
+					cpu->AddWeight(newWeight - oldWeight);
 			}
 		}
 
@@ -790,7 +795,14 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 	NotifySchedulerListeners(&SchedulerListener::ThreadRemovedFromRunQueue,
 							 thread);
 
-	if (threadData->Dequeue())
+	// Dequeue while threadData->fWeight still holds the old weight.
+	// This ensures symmetric accounting in CPUEntry::Remove.
+	bool enqueued = threadData->Dequeue();
+
+	thread->priority = priority;
+	threadData->ResetPriorityBoost(now);
+
+	if (enqueued)
 		enqueue(thread, true, NULL, now);
 
 	return oldPriority;

@@ -662,6 +662,9 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 	StoreRelease64(fVirtualDeadline, (int64)(GetVirtualRuntime() + slice));
 
 	_ComputeEffectivePriority(now);
+
+	// Update EEVDF weight to match the current base priority.
+	StoreRelease64(fWeight, get_weight(fThread->priority));
 }
 
 
@@ -845,4 +848,7 @@ void ThreadData::ResetPriorityBoost(bigtime_t now) {
 		_UpdateDeadline(now);
 
 	_ComputeEffectivePriority(now);
+
+	// Update EEVDF weight to match the current base priority.
+	StoreRelease64(fWeight, get_weight(fThread->priority));
 }
