@@ -62,7 +62,7 @@ public:
 
 	// Compatibility methods
 	inline status_t CheckCapacity(int32 count) { return B_OK; }
-	void CheckEligibility(bigtime_t svt) { fSystemVirtualTime = svt; }
+	void CheckEligibility(bigtime_t svt);
 	inline Element* PeekRoot() const { return PeekBest(); }
 	inline Element* PeekMaximum() const { return PeekBest(); }
 
@@ -172,6 +172,13 @@ RUN_QUEUE_CLASS_NAME::RunQueue()
 }
 
 RUN_QUEUE_TEMPLATE_LIST
+void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt)
+{
+	if (IsEmpty())
+		fSystemVirtualTime = svt;
+}
+
+RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sli) const
 {
 	// Haiku bigtime_t is in microseconds.
@@ -200,7 +207,8 @@ void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sl
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, bigtime_t svt)
 {
-	fSystemVirtualTime = svt;
+	if (IsEmpty())
+		fSystemVirtualTime = svt;
 	Thread* thread = element->GetThread();
 
 	Traits::SetInRunQueue(element, true);
@@ -231,7 +239,8 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 {
 	// For BMQ EEVDF, PushFront is similar to PushBack since ordering is by deadline,
 	// but within the same bin we can put it at the head.
-	fSystemVirtualTime = svt;
+	if (IsEmpty())
+		fSystemVirtualTime = svt;
 	Thread* thread = element->GetThread();
 
 	Traits::SetInRunQueue(element, true);
