@@ -228,10 +228,10 @@ public:
 	void Unlock(int* lockable) {
 		release_spinlock(&gSchedulerUpdateLock);
 
-		// RCU Synchronization: Wait for all CPUs to reach a quiescent state
-		// (reschedule) before allowing the caller to proceed. This ensures
-		// that no CPU is still using the old scheduler mode data.
-		scheduler_synchronize();
+		// RCU Synchronization: Synchronous wait replaced with eventual
+		// consistency. Other CPUs will naturally reach a quiescent state
+		// during their next reschedule. Asynchronous callbacks can be
+		// used if specific cleanup is needed after the grace period.
 
 		restore_interrupts(*lockable);
 	}

@@ -72,6 +72,17 @@ spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
 int64 gRCUGeneration __attribute__((aligned(8))) = 1;
 spinlock gSchedulerUpdateLock = B_SPINLOCK_INITIALIZER;
 
+struct rcu_callback {
+	void (*callback)(void*);
+	void* arg;
+	int64 targetGen;
+	struct rcu_callback* next;
+};
+
+static struct rcu_callback* sPendingCallbacks = NULL;
+static spinlock sRCUCallbackLock = B_SPINLOCK_INITIALIZER;
+static object_cache* sRCUCallbackCache = NULL;
+
 void scheduler_synchronize() {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -108,6 +119,67 @@ void scheduler_synchronize() {
 				break;
 			cpu_pause();
 		}
+	}
+}
+
+
+void scheduler_call_rcu(void (*callback)(void*), void* arg) {
+	SCHEDULER_ENTER_FUNCTION();
+
+	struct rcu_callback* entry = (struct rcu_callback*)object_cache_alloc(
+		sRCUCallbackCache, CACHE_DONT_WAIT_FOR_MEMORY);
+	if (entry == NULL) {
+		// Fallback to synchronous if allocation fails
+		scheduler_synchronize();
+		callback(arg);
+		return;
+	}
+
+	entry->callback = callback;
+	entry->arg = arg;
+
+	// Increment generation and set target
+	entry->targetGen = AddAcquireRelease64(gRCUGeneration, 1) + 1;
+
+	InterruptsSpinLocker locker(sRCUCallbackLock);
+	entry->next = sPendingCallbacks;
+	sPendingCallbacks = entry;
+}
+
+
+static void scheduler_process_rcu_callbacks(void* /*arg*/) {
+	struct rcu_callback* readyList = NULL;
+	int64 minGen = LoadAcquire64(gRCUGeneration);
+
+	int32 cpuCount = smp_get_num_cpus();
+	for (int32 i = 0; i < cpuCount; i++) {
+		if (gCPU[i].disabled)
+			continue;
+		int64 gen = LoadAcquire64(CPUEntry::GetCPU(i)->fRCULastGeneration);
+		if (gen < minGen)
+			minGen = gen;
+	}
+
+	{
+		InterruptsSpinLocker locker(sRCUCallbackLock);
+		struct rcu_callback** curr = &sPendingCallbacks;
+		while (*curr != NULL) {
+			if ((*curr)->targetGen <= minGen) {
+				struct rcu_callback* ready = *curr;
+				*curr = ready->next;
+				ready->next = readyList;
+				readyList = ready;
+			} else {
+				curr = &((*curr)->next);
+			}
+		}
+	}
+
+	while (readyList != NULL) {
+		struct rcu_callback* entry = readyList;
+		readyList = entry->next;
+		entry->callback(entry->arg);
+		object_cache_free(sRCUCallbackCache, entry, 0);
 	}
 }
 
@@ -217,6 +289,16 @@ static status_t interaction_timer_hook(struct timer* timer) {
 
 void scheduler_update_interaction_state(bigtime_t now) {
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+
+	// Periodically trigger RCU callback processing. This avoids doing it
+	// on every context switch or interrupt.
+	if (cpu->fInteractionUpdateCounter % 128 == 0) {
+		if (LoadAcquire64(gRCUGeneration) > 1) {
+			// Trigger DPC to process callbacks
+			DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)
+				->Add(&scheduler_process_rcu_callbacks, NULL);
+		}
+	}
 
 	if (cpu->fInteractionUpdateCounter++ % 32 != 0) {
 		// fInteractionUpdateCounter is a
@@ -664,7 +746,10 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 
 				// Preempt only if runningData->Deadline - threadData->Deadline > vEpsilon
 				if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {
-					// Not urgent enough to justify preemption; preserve cache warmth.
+					// Not urgent enough to justify immediate preemption via IPI;
+					// use lazy flagging instead. The remote CPU will pick this
+					// up on its next kernel exit.
+					gCPU[targetCPU->ID()].invoke_scheduler = true;
 					return true;
 				}
 			}
@@ -684,6 +769,10 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 					smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
 								 NULL, SMP_MSG_FLAG_ASYNC);
 				}
+			} else {
+				// Coalesced preemption: if we are within the cooldown period
+				// for IPIs, use lazy flagging.
+				gCPU[targetCPU->ID()].invoke_scheduler = true;
 			}
 		}
 	}
@@ -1191,7 +1280,6 @@ status_t scheduler_set_operation_mode(scheduler_mode mode) {
 
 		ThreadData::ComputeQuantumLengths();
 	}
-	scheduler_synchronize();
 
 	return B_OK;
 }
@@ -1245,8 +1333,6 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 		// startup path enters the scheduler immediately.
 		cpu->Start();
 
-		// RCU Update: Wait for all CPUs to see the new CPU.
-		scheduler_synchronize();
 	} else {
 		// Improve serialization of queue migration/removal:
 		// hold the global scheduler lock scope so concurrent scheduling on
@@ -1301,9 +1387,6 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 			cpu->Stop();
 			sendRescheduleICI = smp_get_current_cpu() != cpuID;
 		}
-		// RCU Update: Wait for all CPUs to see that the CPU is disabled.
-		scheduler_synchronize();
-
 		// don't wait until the thread quantum ends
 		if (sendRescheduleICI)
 			smp_send_ici(cpuID, SMP_MSG_RESCHEDULE, 0, 0, 0, NULL,
@@ -2063,6 +2146,12 @@ void scheduler_init() {
 							CACHE_LINE_SIZE, NULL, NULL, NULL);
 	if (sThreadDataCache == NULL)
 		panic("scheduler_init: failed to create thread data cache");
+
+	sRCUCallbackCache =
+		create_object_cache("scheduler rcu callback", sizeof(rcu_callback),
+							0, NULL, NULL, NULL);
+	if (sRCUCallbackCache == NULL)
+		panic("scheduler_init: failed to create rcu callback cache");
 
 	status_t result = init();
 	if (result != B_OK)
