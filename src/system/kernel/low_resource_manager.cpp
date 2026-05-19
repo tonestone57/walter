@@ -37,6 +37,7 @@ struct low_resource_handler
 	void*				data;
 	uint32				resources;
 	int32				priority;
+	bool				executing;
 };
 
 typedef DoublyLinkedList<low_resource_handler> HandlerList;
@@ -77,6 +78,7 @@ static sem_id sLowResourceWaitSem;
 static HandlerList sLowResourceHandlers;
 
 static ConditionVariable sLowResourceWaiterCondition;
+static ConditionVariable sLowResourceUnregisterCondition;
 
 
 static const char*
@@ -136,12 +138,16 @@ call_handlers(uint32 lowResources)
 
 		int32 resources = handler->resources & lowResources;
 		if (resources != 0) {
+			handler->executing = true;
 			recursive_lock_unlock(&sLowResourceLock);
 			handler->function(handler->data, resources,
 				low_resource_state_no_update(resources));
 			recursive_lock_lock(&sLowResourceLock);
+			handler->executing = false;
 		}
 	}
+
+	sLowResourceUnregisterCondition.NotifyAll();
 
 	// remove marker
 	sLowResourceHandlers.Remove(&marker);
@@ -418,6 +424,7 @@ low_resource_manager_init(void)
 		// so we have to do it here, manually
 
 	sLowResourceWaiterCondition.Init(NULL, "low resource waiters");
+	sLowResourceUnregisterCondition.Init(NULL, "low resource unregister");
 
 	// compute the free memory limits
 	off_t totalMemory = (off_t)vm_page_num_pages() * B_PAGE_SIZE;
@@ -465,6 +472,15 @@ unregister_low_resource_handler(low_resource_func function, void* data)
 		low_resource_handler* handler = iterator.Next();
 
 		if (handler->function == function && handler->data == data) {
+			// wait if it's busy
+			while (handler->executing) {
+				ConditionVariableEntry entry;
+				sLowResourceUnregisterCondition.Add(&entry);
+				recursive_lock_unlock(&sLowResourceLock);
+				entry.Wait();
+				recursive_lock_lock(&sLowResourceLock);
+			}
+
 			sLowResourceHandlers.Remove(handler);
 			delete handler;
 			return B_OK;
@@ -493,6 +509,7 @@ register_low_resource_handler(low_resource_func function, void* data,
 	newHandler->data = data;
 	newHandler->resources = resources;
 	newHandler->priority = priority;
+	newHandler->executing = false;
 
 	RecursiveLocker locker(&sLowResourceLock);
 

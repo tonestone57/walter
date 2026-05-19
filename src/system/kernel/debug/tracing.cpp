@@ -104,6 +104,29 @@ public:
 
 			bool				IsInBuffer(void* address, size_t size);
 
+			bool				VerifyEntry(trace_entry* entry)
+			{
+				if (entry == NULL || !IsInBuffer(entry, sizeof(trace_entry)))
+					return false;
+
+				if (((uintptr_t)entry - (uintptr_t)fBuffer) % sizeof(trace_entry) != 0)
+					return false;
+
+				if (entry->size == 0 || entry->size > kMaxTracingEntryByteSize / sizeof(trace_entry))
+					return false;
+
+				trace_entry* next = NextEntry(entry);
+				if (next != NULL) {
+					if (next->previous_size != entry->size)
+						return false;
+				} else {
+					if (fAfterLastEntry->previous_size != entry->size)
+						return false;
+				}
+
+				return true;
+			}
+
 private:
 			bool				_FreeFirstEntry();
 			bool				_MakeSpace(size_t needed);
@@ -869,6 +892,8 @@ AbstractTraceEntryWithStackTrace::DumpStackTrace(TraceOutput& out)
 
 class KernelTraceEntry : public AbstractTraceEntry {
 	public:
+		virtual uint16 EntryType() const { return 300; }
+
 		KernelTraceEntry(const char* message)
 		{
 			fMessage = alloc_tracing_buffer_strcpy(message, 256, false);
@@ -902,6 +927,8 @@ class KernelTraceEntry : public AbstractTraceEntry {
 
 class UserTraceEntry : public AbstractTraceEntry {
 	public:
+		virtual uint16 EntryType() const { return 301; }
+
 		UserTraceEntry(const char* message)
 		{
 			fMessage = alloc_tracing_buffer_strcpy(message, 256, true);
@@ -935,6 +962,8 @@ class UserTraceEntry : public AbstractTraceEntry {
 
 class TracingLogStartEntry : public AbstractTraceEntry {
 	public:
+		virtual uint16 EntryType() const { return 302; }
+
 		TracingLogStartEntry()
 		{
 			Initialized();
@@ -969,9 +998,10 @@ class ThreadTraceFilter : public TraceFilter {
 public:
 	virtual bool Filter(const TraceEntry* _entry, LazyTraceOutput& out)
 	{
-		const AbstractTraceEntry* entry
-			= dynamic_cast<const AbstractTraceEntry*>(_entry);
-		return (entry != NULL && entry->ThreadID() == fThread);
+		if (_entry == NULL || _entry->EntryType() == 0)
+			return false;
+		const AbstractTraceEntry* entry = (const AbstractTraceEntry*)_entry;
+		return entry->ThreadID() == fThread;
 	}
 };
 
@@ -980,9 +1010,10 @@ class TeamTraceFilter : public TraceFilter {
 public:
 	virtual bool Filter(const TraceEntry* _entry, LazyTraceOutput& out)
 	{
-		const AbstractTraceEntry* entry
-			= dynamic_cast<const AbstractTraceEntry*>(_entry);
-		return (entry != NULL && entry->TeamID() == fTeam);
+		if (_entry == NULL || _entry->EntryType() == 0)
+			return false;
+		const AbstractTraceEntry* entry = (const AbstractTraceEntry*)_entry;
+		return entry->TeamID() == fTeam;
 	}
 };
 
@@ -1727,27 +1758,26 @@ dump_tracing(int argc, char** argv, WrapperTraceFilter* wrapperFilter)
 }
 
 
+// tracing_is_entry_valid: verifies if a trace entry pointer is valid and
+// optionally matches a specific timestamp.  Used for safe type-casting.
 bool
 tracing_is_entry_valid(AbstractTraceEntry* candidate, bigtime_t entryTime)
 {
 #if ENABLE_TRACING
-	if (!sTracingMetaData->IsInBuffer(candidate, sizeof(*candidate)))
+	if (candidate == NULL)
 		return false;
 
-	if (entryTime < 0)
-		return true;
+	if (!sTracingMetaData->VerifyEntry(candidate->ToTraceEntry()))
+		return false;
 
-	TraceEntryIterator iterator;
-	while (TraceEntry* entry = iterator.Next()) {
-		AbstractTraceEntry* abstract = dynamic_cast<AbstractTraceEntry*>(entry);
-		if (abstract == NULL)
-			continue;
-
-		if (abstract != candidate && abstract->Time() > entryTime)
+	if (entryTime >= 0) {
+		if (!(candidate->ToTraceEntry()->flags & ENTRY_INITIALIZED))
 			return false;
-
-		return candidate->Time() == entryTime;
+		if (candidate->Time() != entryTime)
+			return false;
 	}
+
+	return true;
 #endif
 
 	return false;

@@ -278,6 +278,13 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	signal_stack_enabled(false),
 	in_kernel(true),
 	has_yielded(false),
+	lastMigrationTime(0),
+	inRunQueue(false),
+	next(NULL),
+#ifdef DEBUG_SCHEDULER
+	scheduler_lock_depth(0),
+	current_lock_rank(-1),
+#endif
 	user_thread(NULL),
 	fault_handler(0),
 	page_faults_allowed(1),
@@ -3092,8 +3099,25 @@ thread_block_with_timeout(uint32 timeoutFlags, bigtime_t timeout)
 void
 thread_unblock(Thread* thread, status_t status)
 {
+	Thread* waker = thread_get_current_thread();
 	InterruptsSpinLocker locker(thread->scheduler_lock);
-	thread_unblock_locked(thread, status);
+	thread_unblock_locked(thread, status, waker);
+}
+
+
+void
+thread_unblock_waker(Thread* thread, status_t status, Thread* waker)
+{
+	InterruptsSpinLocker locker(thread->scheduler_lock);
+	thread_unblock_locked(thread, status, waker);
+}
+
+
+void
+thread_unblock_waker(Thread* thread, status_t status, Thread* waker)
+{
+	InterruptsSpinLocker locker(thread->scheduler_lock);
+	thread_unblock_locked(thread, status, waker);
 }
 
 
@@ -3130,7 +3154,7 @@ user_unblock_thread(thread_id threadID, status_t status)
 		// case that this thread is actually blocked on something else.
 		if (thread->wait.status > 0
 				&& thread->wait.type == THREAD_BLOCK_TYPE_USER) {
-			thread_unblock_locked(thread, status);
+			thread_unblock_locked(thread, status, NULL);
 		}
 	}
 	return B_OK;

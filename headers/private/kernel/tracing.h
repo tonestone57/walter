@@ -78,6 +78,12 @@ class TraceEntry {
 		virtual void Dump(TraceOutput& out);
 		virtual void DumpStackTrace(TraceOutput& out);
 
+		// EntryType: manual RTTI for GCC 2.95 kernel compatibility.
+		// Returns a unique ID for the entry class. IDs >= 100 are reserved
+		// for specific trace entry classes (scheduler, analysis, etc.).
+		// IDs >= 1 identify AbstractTraceEntry and its descendants.
+		virtual uint16 EntryType() const { return 0; }
+
 		size_t Size() const		{ return ToTraceEntry()->size; }
 		uint16 Flags() const	{ return ToTraceEntry()->flags; }
 
@@ -115,6 +121,8 @@ public:
 	virtual void Dump(TraceOutput& out);
 
 	virtual void AddDump(TraceOutput& out);
+
+	virtual uint16 EntryType() const { return 1; }
 
 	thread_id ThreadID() const	{ return fThread; }
 	thread_id TeamID() const	{ return fTeam; }
@@ -265,6 +273,7 @@ TraceOutput::Print(const char* format,...)
 
 int dump_tracing(int argc, char** argv, WrapperTraceFilter* wrapperFilter);
 
+// tracing_is_entry_valid: safe validation for trace entries.
 bool tracing_is_entry_valid(AbstractTraceEntry* entry,
 	bigtime_t entryTime = -1);
 

@@ -19,6 +19,7 @@
 #include <arch/int.h>
 #include <boot/kernel_args.h>
 #include <elf.h>
+#include <heap.h>
 #include <load_tracking.h>
 #include <util/AutoLock.h>
 #include <smp.h>
@@ -594,7 +595,7 @@ remove_io_interrupt_handler(int32 vector, interrupt_handler handler, void *data)
 
 	// if the handler could be found and removed, we still have to free it
 	if (status == B_OK)
-		free(io);
+		deferred_free(io);
 
 	return status;
 }

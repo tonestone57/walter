@@ -91,7 +91,7 @@ gdb_reply(char const* format, ...)
 
 	va_start(args, format);
 	sReply[0] = '$';
-	vsprintf(sReply + 1, format, args);
+	vsnprintf(sReply + 1, sizeof(sReply) - 4, format, args);
 	va_end(args);
 
 	len = strlen(sReply);

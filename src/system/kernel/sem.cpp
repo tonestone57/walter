@@ -331,7 +331,7 @@ uninit_sem_locked(struct sem_entry& sem, char** _name, SpinLocker& locker)
 	// free any threads waiting for this semaphore
 	while (queued_thread* entry = sem.queue.RemoveHead()) {
 		entry->queued = false;
-		thread_unblock(entry->thread, B_BAD_SEM_ID);
+		thread_unblock_waker(entry->thread, B_BAD_SEM_ID, NULL);
 	}
 
 	int32 id = sem.id;
@@ -622,7 +622,7 @@ remove_thread_from_sem(queued_thread *entry, struct sem_entry *sem)
 			if (entry->count > sem->u.used.net_count)
 				break;
 
-			thread_unblock_locked(entry->thread, B_OK);
+			thread_unblock_waker(entry->thread, B_OK, NULL);
 			sem->u.used.net_count -= entry->count;
 		} else {
 			// The thread is no longer waiting, but still queued, which means
@@ -810,6 +810,15 @@ switch_sem_etc(sem_id semToBeReleased, sem_id id, int32 count,
 		sSems[slot].queue.Add(&queueEntry);
 		queueEntry.queued = true;
 
+		if (sSems[slot].u.used.last_acquirer > 0) {
+			Thread* holder = Thread::Get(sSems[slot].u.used.last_acquirer);
+			if (holder != NULL) {
+				if (thread->priority > holder->priority)
+					thread->scheduler_data->DonateTimesliceTo(holder);
+				holder->ReleaseReference();
+			}
+		}
+
 		thread_prepare_to_block(thread, flags, THREAD_BLOCK_TYPE_SEMAPHORE,
 			(void*)(addr_t)id);
 
@@ -950,7 +959,8 @@ release_sem_etc(sem_id id, int32 count, uint32 flags)
 				break;
 			}
 
-			thread_unblock_locked(entry->thread, unblockStatus);
+			thread_unblock_waker(entry->thread, unblockStatus,
+				thread_get_current_thread());
 
 			int delta = min_c(count, entry->count);
 			sSems[slot].u.used.count += delta;

@@ -5,20 +5,15 @@
 #ifndef KERNEL_SCHEDULER_PROFILER_H
 #define KERNEL_SCHEDULER_PROFILER_H
 
-
 #include <smp.h>
 
-
-//#define SCHEDULER_PROFILING
+// #define SCHEDULER_PROFILING
 #ifdef SCHEDULER_PROFILING
 
-
-#define SCHEDULER_ENTER_FUNCTION()	\
+#define SCHEDULER_ENTER_FUNCTION() \
 	Scheduler::Profiling::Function schedulerProfiler(__PRETTY_FUNCTION__)
 
-#define SCHEDULER_EXIT_FUNCTION()	\
-	schedulerProfiler.Exit()
-
+#define SCHEDULER_EXIT_FUNCTION() schedulerProfiler.Exit()
 
 namespace Scheduler {
 
@@ -26,111 +21,117 @@ namespace Profiling {
 
 class Profiler {
 public:
-							Profiler();
+	Profiler();
+	~Profiler();
 
-			void			EnterFunction(int32 cpu, const char* function);
-			void			ExitFunction(int32 cpu, const char* function);
+	bool EnterFunction(int32 cpu, const char* function);
+	void ExitFunction(int32 cpu, const char* function);
 
-			void			DumpCalled(uint32 count);
-			void			DumpTimeInclusive(uint32 count);
-			void			DumpTimeExclusive(uint32 count);
-			void			DumpTimeInclusivePerCall(uint32 count);
-			void			DumpTimeExclusivePerCall(uint32 count);
+	void DumpCalled(uint32 count);
+	void DumpTimeInclusive(uint32 count);
+	void DumpTimeExclusive(uint32 count);
+	void DumpTimeInclusivePerCall(uint32 count);
+	void DumpTimeExclusivePerCall(uint32 count);
 
-			status_t		GetStatus() const	{ return fStatus; }
+	status_t GetStatus() const { return fStatus; }
 
-	static	Profiler*		Get();
-	static	void			Initialize();
+	static Profiler* Get();
+	static void Initialize();
 
 private:
 	struct FunctionData {
-			const char*		fFunction;
+		const char* fFunction;
 
-			uint32			fCalled;
+		int32 fCalled __attribute__((aligned(8)));
 
-			bigtime_t		fTimeInclusive;
-			bigtime_t		fTimeExclusive;
-	};
+		bigtime_t fTimeInclusive __attribute__((aligned(8)));
+		bigtime_t fTimeExclusive __attribute__((aligned(8)));
+	} __attribute__((aligned(8)));
 
 	struct FunctionEntry {
-			FunctionData*	fFunction;
+		FunctionData* fFunction;
 
-			nanotime_t		fEntryTime;
-			nanotime_t		fOthersTime;
-			nanotime_t		fProfilerTime;
+		nanotime_t fEntryTime __attribute__((aligned(8)));
+		nanotime_t fOthersTime __attribute__((aligned(8)));
+		nanotime_t fProfilerTime __attribute__((aligned(8)));
 	};
 
-			uint32			_FunctionCount() const;
-			void			_Dump(uint32 count);
+	uint32 _FunctionCount() const;
+	void _Dump(FunctionData* data, uint32 count);
 
-			FunctionData*	_FindFunction(const char* function);
+	FunctionData* _FindFunction(const char* function);
 
-			template<typename Type, Type FunctionData::*Member>
-	static	int				_CompareFunctions(const void* a, const void* b);
+	template <typename Type, Type FunctionData::*Member>
+	static int _CompareFunctions(const void* a, const void* b);
 
-			template<typename Type, Type FunctionData::*Member>
-	static	int				_CompareFunctionsPerCall(const void* a,
-								const void* b);
+	template <typename Type, Type FunctionData::*Member>
+	static int _CompareFunctionsPerCall(const void* a, const void* b);
 
-			const uint32	kMaxFunctionEntries;
-			const uint32	kMaxFunctionStackEntries;
+	const uint32 kMaxFunctionEntries;
+	const uint32 kMaxFunctionStackEntries;
 
-			FunctionEntry*	fFunctionStacks[SMP_MAX_CPUS];
-			uint32			fFunctionStackPointers[SMP_MAX_CPUS];
+	FunctionEntry* fFunctionStacks[SMP_MAX_CPUS];
+	int32 fFunctionStackPointers[SMP_MAX_CPUS];
 
-			FunctionData*	fFunctionData;
-			spinlock		fFunctionLock;
+	FunctionData* fFunctionData;
+	FunctionData* fSortBuffer;
 
-			status_t		fStatus;
+	static const uint32 kHashTableSize = 2048;
+	FunctionData* fHashTable[kHashTableSize];
+	uint32 fNextFunctionSlot;
+
+	spinlock fFunctionLock;
+
+	status_t fStatus;
 };
 
 class Function {
 public:
-	inline					Function(const char* functionName);
-	inline					~Function();
+	inline Function(const char* functionName);
+	inline ~Function();
 
-	inline	void			Exit();
+	inline void Exit();
 
 private:
-			const char*		fFunctionName;
+	const char* fFunctionName;
+	int32 fCPU;
+	bool fEntered;
 };
 
-
 Function::Function(const char* functionName)
-	:
-	fFunctionName(functionName)
-{
-	Profiler::Get()->EnterFunction(smp_get_current_cpu(), fFunctionName);
+	: fFunctionName(functionName),
+	  fCPU(smp_get_current_cpu()),
+	  fEntered(false) {
+	Profiler* profiler = Profiler::Get();
+	if (profiler != NULL)
+		fEntered = profiler->EnterFunction(fCPU, fFunctionName);
 }
 
-
-Function::~Function()
-{
+Function::~Function() {
 	if (fFunctionName != NULL)
 		Exit();
 }
 
 
-void
-Function::Exit()
-{
-	Profiler::Get()->ExitFunction(smp_get_current_cpu(), fFunctionName);
+void Function::Exit() {
+	if (fEntered) {
+		// Use the CPU ID captured at entry to maintain stack integrity
+		// even if the thread migrated during execution.
+		Profiler::Get()->ExitFunction(fCPU, fFunctionName);
+		fEntered = false;
+	}
 	fFunctionName = NULL;
 }
 
+}  // namespace Profiling
 
-}	// namespace Profiling
+}  // namespace Scheduler
 
-}	// namespace Scheduler
+#else  // SCHEDULER_PROFILING
 
-
-#else	// SCHEDULER_PROFILING
-
-#define SCHEDULER_ENTER_FUNCTION()	(void)0
-#define SCHEDULER_EXIT_FUNCTION()	(void)0
+#define SCHEDULER_ENTER_FUNCTION() (void)0
+#define SCHEDULER_EXIT_FUNCTION() (void)0
 
 #endif	// !SCHEDULER_PROFILING
 
-
 #endif	// KERNEL_SCHEDULER_PROFILER_H
-

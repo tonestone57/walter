@@ -872,6 +872,12 @@ delete_owned_ports(Team* team)
 		if (status == B_OK) {
 			list_remove_link(&port->team_link);
 			list_add_item(&deletionList, port);
+		} else {
+			// The port has already been deleted (e.g. via delete_port()), but
+			// is still in the list. Since we are destroying the team, we need
+			// to remove it from the list.
+			list_remove_link(&port->team_link);
+			port->ReleaseReference();
 		}
 
 		port = nextPort;
@@ -1125,8 +1131,10 @@ delete_port(port_id id)
 		const uint8 lockIndex = portRef->owner % kTeamListLockCount;
 		MutexLocker teamPortsListLocker(sTeamListLock[lockIndex]);
 
-		list_remove_link(&portRef->team_link);
-		portRef->ReleaseReference();
+		if (portRef->team_link.next != NULL) {
+			list_remove_link(&portRef->team_link);
+			portRef->ReleaseReference();
+		}
 	}
 
 	uninit_port(portRef);
@@ -1502,14 +1510,17 @@ read_port_etc(port_id id, int32* _code, void* buffer, size_t bufferSize,
 	}
 
 	if (peekOnly) {
-		size_t size = copy_port_message(message, _code, buffer, bufferSize,
+		ssize_t size = copy_port_message(message, _code, buffer, bufferSize,
 			userCopy);
 
 		T(Read(portRef, message->code, size));
 
 		portRef->read_condition.NotifyOne();
 			// we only peeked, but didn't grab the message
-		return size;
+
+		if (size < 0)
+			return size;
+		return message->size;
 	}
 
 	portRef->messages.RemoveHead();
@@ -1525,11 +1536,15 @@ read_port_etc(port_id id, int32* _code, void* buffer, size_t bufferSize,
 
 	locker.Unlock();
 
-	size_t size = copy_port_message(message, _code, buffer, bufferSize,
+	ssize_t size = copy_port_message(message, _code, buffer, bufferSize,
 		userCopy);
 
+	size_t messageSize = message->size;
 	put_port_message(message);
-	return size;
+
+	if (size < 0)
+		return size;
+	return messageSize;
 }
 
 

@@ -254,7 +254,22 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 	bool			in_kernel;		// protected by time_lock, only written by
 									// this thread
 	bool			has_yielded;	// protected by scheduler lock
+	Thread*			waker;			// protected by scheduler lock
 	Scheduler::ThreadData*	scheduler_data; // protected by scheduler lock
+	bigtime_t		virtual_runtime __attribute__((aligned(8)));   // v_i
+	bigtime_t		virtual_deadline __attribute__((aligned(8)));  // d_i
+	uint32			sched_weight;      // w_i
+	bigtime_t		time_slice __attribute__((aligned(8)));        // q_i
+	int32			fli_index;         // Tracks current First-Level Bitmap position
+	int32			sli_index;         // Tracks current Second-Level Bitmap position
+	bigtime_t		lastMigrationTime;
+	bool			inRunQueue;
+	Thread*			next;
+
+#ifdef DEBUG_SCHEDULER
+	int				scheduler_lock_depth;
+	int				current_lock_rank;
+#endif
 
 	struct user_thread*	user_thread;	// write-protected by fLock, only
 										// modified by the thread itself and
@@ -503,6 +518,8 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 	gid_t			real_gid;
 	gid_t			effective_gid;
 	BReference<GroupsArray> supplementary_groups;
+
+	bool			fIsForeground;
 
 	// Exit status information. Set when the first terminal event occurs,
 	// immutable afterwards. Protected by fLock.

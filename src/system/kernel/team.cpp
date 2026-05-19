@@ -503,6 +503,7 @@ Team::Team(team_id id, bool kernel)
 
 	fQueuedSignalsCounter = new(std::nothrow) BKernel::QueuedSignalsCounter(
 		kernel ? -1 : MAX_QUEUED_SIGNALS);
+	fIsForeground = false;
 	memset(fSignalActions, 0, sizeof(fSignalActions));
 	fUserDefinedTimerCount = 0;
 
@@ -1326,6 +1327,8 @@ insert_team_into_group(ProcessGroup* group, Team* team)
 	team->group = group;
 	team->group_id = group->id;
 	team->session_id = group->Session()->id;
+
+	team->fIsForeground = team->group_id == group->Session()->foreground_group;
 
 	group->teams.Add(team, false);
 	group->AcquireReference();
@@ -2989,6 +2992,49 @@ team_set_controlling_tty(void* tty)
 }
 
 
+static void
+update_team_foreground_status(Team* team, pid_t foregroundGroup)
+{
+	bool isForeground = team->group_id == foregroundGroup;
+	if (team->fIsForeground == isForeground)
+		return;
+
+	team->fIsForeground = isForeground;
+
+	// team->fLock must be held by caller (TeamLocker)
+	scheduler_on_team_foreground_changed(team);
+}
+
+
+static void
+update_session_foreground_status(ProcessSession* session, pid_t foregroundGroup)
+{
+	const int32 kMaxTeamsToCollect = 512;
+	Team* teamsToUpdate[kMaxTeamsToCollect];
+	int32 teamCount = 0;
+
+	{
+		InterruptsReadSpinLocker teamsLocker(sTeamHashLock);
+		for (TeamTable::Iterator it = sTeamHash.GetIterator(); Team* t = it.Next();) {
+			if (t->group != NULL && t->group->Session() == session) {
+				if (teamCount < kMaxTeamsToCollect) {
+					t->AcquireReference();
+					teamsToUpdate[teamCount++] = t;
+				}
+			}
+		}
+	}
+
+	for (int32 i = 0; i < teamCount; i++) {
+		Team* t = teamsToUpdate[i];
+		TeamLocker teamLocker(t);
+		update_team_foreground_status(t, foregroundGroup);
+		teamLocker.Unlock();
+		t->ReleaseReference();
+	}
+}
+
+
 void*
 team_get_controlling_tty()
 {
@@ -3052,7 +3098,40 @@ team_set_foreground_process_group(void* tty, pid_t processGroupID)
 
 	session->foreground_group = processGroupID;
 
+	sessionLocker.Unlock();
+	teamLocker.Unlock();
+
+	update_session_foreground_status(session, processGroupID);
+
 	return B_OK;
+}
+
+
+void
+scheduler_set_foreground_team(team_id teamID)
+{
+	Team* team = Team::Get(teamID);
+	if (team == NULL)
+		return;
+	BReference<Team> teamReference(team, true);
+
+	ProcessSession* session;
+	pid_t groupID;
+	{
+		TeamLocker teamLocker(team);
+		if (team->group == NULL)
+			return;
+		session = team->group->Session();
+		session->AcquireReference();
+		groupID = team->group_id;
+	}
+	BReference<ProcessSession> sessionReference(session, true);
+
+	AutoLocker<ProcessSession> sessionLocker(session);
+	session->foreground_group = groupID;
+	sessionLocker.Unlock();
+
+	update_session_foreground_status(session, groupID);
 }
 
 
@@ -3877,13 +3956,15 @@ _get_next_team_info(int32* cookie, team_info* info, size_t size)
 
 	InterruptsReadSpinLocker locker(sTeamHashLock);
 
-	team_id lastTeamID = peek_next_thread_id();
-		// TODO: This is broken, since the id can wrap around!
-
 	// get next valid team
 	Team* team = NULL;
-	while (slot < lastTeamID && !(team = team_get_team_struct_locked(slot)))
-		slot++;
+	for (TeamTable::Iterator it = sTeamHash.GetIterator(); it.HasNext();) {
+		Team* candidate = it.Next();
+		if (candidate->id >= slot && candidate->visible) {
+			if (team == NULL || candidate->id < team->id)
+				team = candidate;
+		}
+	}
 
 	if (team == NULL)
 		return B_BAD_TEAM_ID;
@@ -3893,7 +3974,7 @@ _get_next_team_info(int32* cookie, team_info* info, size_t size)
 	locker.Unlock();
 
 	// fill in the info
-	*cookie = ++slot;
+	*cookie = team->id + 1;
 	return fill_team_info(team, info, size);
 }
 

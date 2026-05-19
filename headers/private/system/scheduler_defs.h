@@ -64,7 +64,7 @@ struct scheduling_analysis {
 
 struct loadavg {
 	uint32	ldavg[3];
-	long 	fscale;
+	int32 	fscale;
 };
 
 
