@@ -151,10 +151,6 @@ public:
 		AddRelease64(fTotalWeight, weight);
 	}
 
-	inline void CheckEligibility(bigtime_t svt) {
-		fRunQueue.CheckEligibility(svt);
-	}
-
 	bool SetReschedulePending() {
 		return GetAndSet(fReschedulePending, 1) == 0;
 	}

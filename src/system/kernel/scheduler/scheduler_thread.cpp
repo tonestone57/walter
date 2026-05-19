@@ -693,7 +693,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		// If Deadline is far, Urgency is 0.
 
 		CoreEntry* core = Core();
-		bigtime_t svt = (core != NULL) ? core->SystemVirtualTime() : now;
+		bigtime_t svt = (core != NULL) ? core->SystemVirtualTime() : now * 1000;
 
 		bigtime_t diff =
 			(bigtime_t)LoadAcquire64(fThread->virtual_deadline) -
