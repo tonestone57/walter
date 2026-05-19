@@ -529,6 +529,9 @@ inline bigtime_t CPUEntry::PreemptionThreshold() const {
 inline int32 CPUEntry::GetLoad() const {
 	int32 load = LoadAcquire(fLoad);
 
+	if (gSingleCore)
+		return load;
+
 	// Penalize SMT siblings to prefer physical cores
 	CoreEntry* core =
 		atomic_pointer_get<CoreEntry>(const_cast<CoreEntry* volatile*>(&fCore));

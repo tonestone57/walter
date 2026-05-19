@@ -45,6 +45,7 @@ void ThreadData::_InitBase() {
 	fQuickStartCredit = false;
 
 	fHomePackage = -1;
+	fEnqueuedPriority = -1;
 
 	fEffectivePriority = GetPriority();
 	StoreRelease64(fBaseQuantum,
