@@ -417,6 +417,7 @@ extern int64 gRCUGeneration __attribute__((aligned(8)));
 extern spinlock gSchedulerUpdateLock;
 
 void scheduler_synchronize();
+void scheduler_call_rcu(void (*callback)(void*), void* arg);
 
 extern CoreType gMinCoreType;
 extern CoreType gMaxCoreType;
