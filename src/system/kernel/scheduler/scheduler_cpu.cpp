@@ -1211,17 +1211,25 @@ bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Approximation: return minimum vruntime of all logical CPUs.
+	// Approximation: return minimum vruntime of all logical CPUs in this core.
 	bigtime_t minRuntime = B_INT64_MAX;
 	bool found = false;
 
-	for (int32 i = 0; i < smp_get_num_cpus(); i++) {
-		CPUEntry* cpu = CPUEntry::GetCPU(i);
-		if (cpu->Core() == this && !gCPU[i].disabled) {
-			bigtime_t vrt = cpu->GetMinVirtualRuntime();
-			if (vrt > 0 && vrt < minRuntime) {
-				minRuntime = vrt;
-				found = true;
+	const CPUSet& cpuMask = CPUMask();
+	for (int32 word = 0; word < (SMP_MAX_CPUS + 31) / 32; word++) {
+		uint32 bits = cpuMask.Bits(word);
+		while (bits != 0) {
+			int bit = scheduler_ctz((native_cpu_mask_t)bits);
+			bits &= ~(1U << (bit % 32));
+			int32 i = word * 32 + bit;
+
+			CPUEntry* cpu = CPUEntry::GetCPU(i);
+			if (!gCPU[i].disabled) {
+				bigtime_t vrt = cpu->GetMinVirtualRuntime();
+				if (vrt > 0 && vrt < minRuntime) {
+					minRuntime = vrt;
+					found = true;
+				}
 			}
 		}
 	}
