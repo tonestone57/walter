@@ -1700,6 +1700,7 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 	cpuToPackageDeleter.Detach();
 	cpuToClusterDeleter.Detach();
 	packageToNodeDeleter.Detach();
+	nodeToNUMADeleterMap.Detach();
 	return B_OK;
 }
 
