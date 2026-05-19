@@ -398,6 +398,9 @@ void CPUEntry::Remove(ThreadData* thread) {
 	// (defensive): capture the priority the thread was enqueued with to
 	// ensure symmetric counter updates.
 	int32 priority = thread->fEnqueuedPriority;
+	// Use GetEffectivePriority() for fDisplayThreadCount symmetry
+	// with PushFront/PushBack.
+	int32 priority = thread->GetEffectivePriority();
 
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
@@ -832,6 +835,9 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 				stolen->MigrateTo(core, now);
 				stolen->fStolen = true;
 				core->IncrementTotalThreadCount();
+
+				victim->UnlockRunQueue();
+				return stolen;
 			} else {
 				// Victim no longer matches thief after lock acquisition.
 				// Push it back and abort this victim.
@@ -840,8 +846,23 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 			}
 
 			victim->UnlockRunQueue();
-			return stolen;
-		}
+		} else {
+			// Note: if StealThreadLockless returns NULL, it either failed
+			// its atomic bit-claim OR it acquired the lock but found no
+			// suitable thread. In both cases, we must ensure the lock is
+			// released if it was acquired.
+			//
+			// StealThreadLockless follows the pattern:
+			//   if (TestAndClearAtomic) {
+			//       LockRunQueue();
+			//       ... find thread ...
+			//       if (found) return thread; // LOCK HELD
+			//       UnlockRunQueue();
+			//   }
+			//   return NULL; // LOCK NOT HELD
+			//
+			// Thus if stolen == NULL, the lock is already released or was
+			// never held. No additional UnlockRunQueue() is needed here.
 		}
 	}
 
@@ -1059,6 +1080,8 @@ void CoreEntry::Remove(ThreadData* thread) {
 	// (defensive): capture the enqueued priority to ensure consistent
 	// fDisplayThreadCount accounting.
 	int32 priority = thread->fEnqueuedPriority;
+	// Use GetEffectivePriority() for fDisplayThreadCount symmetry.
+	int32 priority = thread->GetEffectivePriority();
 
 	thread->SetDequeued();
 

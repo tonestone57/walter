@@ -312,11 +312,12 @@ void scheduler_update_interaction_state(bigtime_t now) {
 }
 
 struct RunQueueScanner {
-	uint32 kTopWordMask;
+	native_cpu_mask_t kTopWordMask;
 	int kMaxPrioritiesToCheckPerQueue;
 	bigtime_t now;
 
-	RunQueueScanner(uint32 topWordMask, int maxPriorities, bigtime_t now)
+	RunQueueScanner(native_cpu_mask_t topWordMask, int maxPriorities,
+					bigtime_t now)
 		: kTopWordMask(topWordMask),
 		  kMaxPrioritiesToCheckPerQueue(maxPriorities),
 		  now(now) {}
@@ -332,23 +333,23 @@ struct RunQueueScanner {
 		// priority boosting.
 
 		// Scan EEVDF FairShare threads (fli_index bins)
-		uint32 flBitmap = runQueue->GetFirstLevelBitmap();
+		native_cpu_mask_t flBitmap = runQueue->GetFirstLevelBitmap();
 		while (flBitmap != 0) {
 			int fli = scheduler_ctz(flBitmap);
 			// To ensure interactivity boosting for all FairShare threads,
 			// we iterate through the heads of non-empty bins.
-			uint32 slBitmap = runQueue->GetSecondLevelBitmap(fli);
+			native_cpu_mask_t slBitmap = runQueue->GetSecondLevelBitmap(fli);
 			while (slBitmap != 0) {
 				int sli = scheduler_ctz(slBitmap);
-				ThreadData* thread = runQueue->GetBinHead(fli, sli);
+				ThreadData* thread = runQueue->GetSliBinHead(fli, sli);
 				if (thread != NULL) {
 					thread->_UpdatePriorityBoost(now);
 				}
 				if (++checked >= kMaxPrioritiesToCheckPerQueue)
 					return;
-				slBitmap &= ~(1 << sli);
+				slBitmap &= ~((native_cpu_mask_t)1 << sli);
 			}
-			flBitmap &= ~(1U << fli);
+			flBitmap &= ~((native_cpu_mask_t)1 << fli);
 		}
 	}
 };
