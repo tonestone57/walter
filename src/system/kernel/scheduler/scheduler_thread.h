@@ -229,6 +229,7 @@ private:
 	Thread* fThread;
 
 	int32 fHomePackage __attribute__((aligned(8)));
+	int32 fEnqueuedPriority;
 
 	mutable int32 fEffectivePriority;
 	mutable bigtime_t fBaseQuantum __attribute__((aligned(8)));

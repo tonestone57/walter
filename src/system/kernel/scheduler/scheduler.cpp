@@ -2231,6 +2231,7 @@ void scheduler_on_team_foreground_changed(Team* team) {
 
 		// Second pass: process collected threads without holding list lock.
 		bigtime_t now = system_time();
+		scheduler_mode_operations* mode = Scheduler::GetCurrentMode();
 		for (int i = 0; i < count; i++) {
 			Thread* thread = batch[i];
 			BReference<Thread> ref(thread, true);
@@ -2264,9 +2265,8 @@ void scheduler_on_team_foreground_changed(Team* team) {
 				}
 			}
 
-			if (Scheduler::GetCurrentMode()->update_thread_timeslice != NULL) {
-				Scheduler::GetCurrentMode()->update_thread_timeslice(
-					threadData);
+			if (mode != NULL && mode->update_thread_timeslice != NULL) {
+				mode->update_thread_timeslice(threadData);
 			}
 		}
 	}

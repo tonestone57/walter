@@ -362,6 +362,8 @@ void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 	fRunQueue.PushFront(thread, priority, SystemVirtualTime());
 	IncrementThreadCount();
 
+	thread->fEnqueuedPriority = priority;
+
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
 		if (priority >= B_DISPLAY_PRIORITY)
@@ -376,6 +378,8 @@ void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
 	fRunQueue.PushBack(thread, priority, SystemVirtualTime());
 	IncrementThreadCount();
+
+	thread->fEnqueuedPriority = priority;
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
@@ -393,7 +397,7 @@ void CPUEntry::Remove(ThreadData* thread) {
 
 	// (defensive): capture the priority the thread was enqueued with to
 	// ensure symmetric counter updates.
-	int32 priority = thread->GetThread()->priority;
+	int32 priority = thread->fEnqueuedPriority;
 
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
@@ -1021,6 +1025,8 @@ void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
 	// Threads only enter the active heap when mathematically eligible.
 	// In a shared core queue, we use a global approximation or the waker's CPU SVT.
 
+	thread->fEnqueuedPriority = priority;
+
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	fRunQueue.PushFront(thread, priority, cpu->SystemVirtualTime());
 	IncrementThreadCount();
@@ -1032,6 +1038,8 @@ void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
 
 void CoreEntry::PushBack(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
+
+	thread->fEnqueuedPriority = priority;
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	fRunQueue.PushBack(thread, priority, cpu->SystemVirtualTime());
@@ -1050,7 +1058,7 @@ void CoreEntry::Remove(ThreadData* thread) {
 
 	// (defensive): capture the enqueued priority to ensure consistent
 	// fDisplayThreadCount accounting.
-	int32 priority = thread->GetThread()->priority;
+	int32 priority = thread->fEnqueuedPriority;
 
 	thread->SetDequeued();
 

@@ -45,9 +45,10 @@ static void search_local_node(SchedulerNode* node, Action action) {
 	if (packagesInNode <= 8) {
 		int32 lastIndex = cpu->fLastLocalPackageIndex;
 		int32 start = (lastIndex + 1) % packagesInNode;
+		int32 finalOffset = lastIndex;
 		for (int32 i = 0; i < packagesInNode; i++) {
 			// (clarification): fLastLocalPackageIndex is per-CPU.
-			// Updating it on every iteration gives correct round-robin
+			// Updating it once per call gives correct round-robin
 			// coverage: next call starts from the element after the last
 			// one checked.
 			int32 offset = start + i;
@@ -57,12 +58,13 @@ static void search_local_node(SchedulerNode* node, Action action) {
 			if (index >= gPackageCount)
 				continue;
 
-			// Update per-CPU field; plain store is sufficient as this
-			// state is private to the current CPU's search context.
-			cpu->fLastLocalPackageIndex = offset;
+			finalOffset = offset;
 			if (action(&gPackageEntries[index]))
 				break;
 		}
+		// Update per-CPU field once; plain store is sufficient as this
+		// state is private to the current CPU's search context.
+		cpu->fLastLocalPackageIndex = finalOffset;
 		return;
 	}
 
