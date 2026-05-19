@@ -67,8 +67,6 @@ bool gHasStandardCores = false;
 int32 gTotalRunnableThreads = 0;
 uint64 gIdleMask __attribute__((aligned(8))) = 0;
 
-spinlock gSchedulerLock = B_SPINLOCK_INITIALIZER;
-
 int64 gRCUGeneration __attribute__((aligned(8))) = 1;
 spinlock gSchedulerUpdateLock = B_SPINLOCK_INITIALIZER;
 
@@ -134,12 +132,16 @@ static const int kLoadBalanceThreshold = 2;
 static const bigtime_t kRescheduleCooldown = 500;
 
 extern "C" void AcquireSchedulerSpinlock() {
-	acquire_spinlock(&gSchedulerLock);
+	Thread* thread = get_cpu_struct()->running_thread;
+	if (thread != NULL)
+		acquire_spinlock(&thread->scheduler_lock);
 }
 
 
 extern "C" void ReleaseSchedulerSpinlock() {
-	release_spinlock(&gSchedulerLock);
+	Thread* thread = get_cpu_struct()->running_thread;
+	if (thread != NULL)
+		release_spinlock(&thread->scheduler_lock);
 }
 
 
@@ -422,95 +424,14 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 	if (now == 0)
 		now = system_time();
 
-	// Note: Mask computation optimization. This mask is recomputed from a
-	// compile-time constant on every reschedule.  Hoist it to a static const so
-	// the compiler evaluates it once at startup.
 	// Throttle: only run the boost scan every 10 context switches to reduce
 	// overhead.
 	if (cpu->fRescheduleCount++ % 10 != 0)
 		return;
 
-	// Scalable Priority Boosting:
-	// Instead of scanning all threads (O(N)), we scan only the heads of
-	// priority queues (O(1) relative to thread count).
-	// We verify if the longest-waiting thread in each queue is starving.
-	// This maintains O(1) complexity regardless of the number of threads.
-
-	// Budget is the number of priority buckets examined per run queue,
-	// not the number of threads.
 	const int kMaxPrioritiesToCheckPerQueue = 5;
-
 	RunQueueScanner scanRunQueue(0, kMaxPrioritiesToCheckPerQueue,
 								 now);
-
-	// Check Core RunQueue first to maintain Core -> CPU lock ordering
-	// On an N-way SMT core, all N CPUs previously scanned the shared
-	// core run queue every 10 reschedules, contending on CoreRunQueueLocker N×
-	// more often than necessary.  Gate the scan with round-robin ownership:
-	// only the CPU whose (boost_epoch % cpuCount) matches its modular index
-	// within the core performs the scan.
-	int32 coreCPUCount = max_c(1, core->CPUCount());
-
-	// Note: Counter wrap-around safety. when fRescheduleCount wraps UINT32_MAX
-	// → 0, the post-increment is 0, so (0 % 10 == 0) fires and preCount
-	// becomes UINT32_MAX, making boostEpoch ≈ 429M.  This causes all CPUs to
-	// satisfy the modular ownership check simultaneously, producing a
-	// correlated scan burst. Treat the wrap as a normal epoch boundary by
-	// clamping preCount.
-	uint32 preCount = cpu->fRescheduleCount - 1;
-	// Note: Use a non-zero epoch at wrap boundary to avoid bias.
-	if (cpu->fRescheduleCount == 0) {
-		preCount =
-			THREAD_MAX_SET_PRIORITY;  // Arbitrary but stable non-zero value
-	}
-
-	uint32 boostEpoch = preCount / 10;
-
-	// Calculate a dense local index using the fLocalIndices bitmask.
-	// This ensures fair round-robin ownership even if there are holes
-	// in the assigned local indices.
-	native_cpu_mask_t localMask = cpu_mask_get_atomic(&core->fLocalIndices);
-	const int32 maskBitCount = (int32)(sizeof(native_cpu_mask_t) * 8);
-	// 32/64-bit safety: shifting by the type width is undefined behavior.
-	// Clamp the shift domain so this remains valid on both 32-bit and 64-bit.
-	int32 localIndex = cpu->fCoreLocalIndex;
-	if (localIndex < 0)
-		localIndex = 0;
-	if (localIndex > maskBitCount)
-		localIndex = maskBitCount;
-
-	native_cpu_mask_t lowerMask = 0;
-	if (localIndex == maskBitCount)
-		lowerMask = localMask;
-	else if (localIndex > 0)
-		lowerMask = localMask & (((native_cpu_mask_t)1 << localIndex) - 1);
-
-	int32 denseLocalIndex = scheduler_popcount(lowerMask);
-
-	bool ownsCoreQueueScan = ((int32)(boostEpoch % (uint32)coreCPUCount) ==
-							  (int32)(denseLocalIndex % (uint32)coreCPUCount));
-
-	// Note: CoreRunQueueLocker(core, false) constructs with
-	// alreadyLocked=false and lockIfNotLocked defaulting to false, meaning
-	// the locker starts in an unlocked state. If Lock() is subsequently
-	// called and succeeds, the destructor correctly unlocks. However if
-	// the AutoLocker internal fLocked tracking ever diverges from the
-	// actual spinlock state (e.g. partial construction failure), the
-	// destructor may double-unlock or fail to unlock.
-	// Use explicit Lock()/Unlock() calls instead of the two-argument
-	// constructor to make the locking intent unambiguous.
-
-	// Note: The thread-count check was done without the lock; a thread
-	// could be removed between the check and lock acquisition, making the
-	// locked scan a wasted spinlock round-trip.  Re-check inside the lock.
-	if (ownsCoreQueueScan) {
-		// Scoped locker: ensure Core and CPU run-queue locks are NEVER
-		// held simultaneously in this function to eliminate lock inversion.
-		CoreRunQueueLocker coreLocker(core, false, false);
-		coreLocker.Lock();
-		if (core->CoreRunQueueThreadCount() > 0)
-			scanRunQueue(core->RunQueue());
-	}
 
 	// Check CPU RunQueue
 	if (cpu->ThreadCount() > 0) {
@@ -585,7 +506,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		}
 
 		if (targetCPU == NULL || targetCore == NULL ||
-			!threadData->Enqueue(wasRunQueueEmpty, requestPreemption,
+			!threadData->Enqueue(targetCPU, wasRunQueueEmpty, requestPreemption,
 								 updateInteraction, now)) {
 			targetCore = NULL;
 			targetCPU = NULL;
@@ -1269,9 +1190,6 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 
 			// flush CPU run queue
 			while (true) {
-				// The flush loop holds CPURunQueueLocker per-iteration but not
-				// CoreRunQueueLocker. Global serialization comes from
-				// InterruptsBigSchedulerLocker held for this disable scope.
 				ThreadData* threadData;
 				{
 					CPURunQueueLocker locker(cpu);
@@ -1287,15 +1205,7 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 			{
 				CoreCPUHeapLocker heapLocker(core);
 				cpu->UpdatePriority(B_IDLE_PRIORITY);
-				// Note: document lock ordering.
-				// CoreCPUHeapLocker acquires fCPULock. RemoveCPU internally
-				// calls fPackage->RemoveIdleCore() which acquires fCoreLock
-				// (write). Lock ordering: fCPULock → fCoreLock. Verify no other
-				// path acquires these in reverse order. AddIdleCore() acquires
-				// fCoreLock then is called from AddCPU under fCPULock - same
-				// ordering, safe. CoreGoesIdle calls PackageEntry::CoreGoesIdle
-				// (no fCoreLock) - no ordering conflict.
-				core->RemoveCPU(cpu, enqueuer);
+				core->RemoveCPU(cpu);
 			}
 
 			cpu->Stop();

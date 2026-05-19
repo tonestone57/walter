@@ -100,6 +100,9 @@ public:
 	inline void IncrementThreadCount() { AddRelease(fThreadCount, 1); }
 	inline void DecrementThreadCount() { AddRelease(fThreadCount, -1); }
 
+	ThreadData* StealThread(int32& stolenPriority, int32 thiefCPU);
+	ThreadData* StealThreadLockless(int32& stolenPriority, int32 thiefCPU);
+
 	// Index of this CPU within its core, assigned sequentially in AddCPU.
 	// Used by UpdatePriorityBoostScalable for round-robin epoch ownership.
 	// Public because UpdatePriorityBoostScalable is a file-scope function.
@@ -251,38 +254,6 @@ public:
 	inline void DecrementDisplayThreadCount() {
 		AddRelease(fDisplayThreadCount, -1);
 	}
-	inline int32 CoreRunQueueThreadCount() const {
-		return LoadAcquire(fThreadCount);
-	}
-
-	inline void LockRunQueue();
-	inline bool TryLockRunQueue();
-	inline void UnlockRunQueue();
-
-	inline void IncrementThreadCount() { AddRelease(fThreadCount, 1); }
-	inline void DecrementThreadCount() { AddRelease(fThreadCount, -1); }
-	// Note: lockless check for display-priority threads in the
-	// run queue.  Used by ComputeQuantum to avoid TryLockRunQueue on the
-	// scheduling hot path.
-	inline bool HasHighPriorityThread() const;
-
-	ThreadData* StealThread(int32& stolenPriority, int32 thiefCPU);
-	ThreadData* StealThreadLockless(int32& stolenPriority, int32 thiefCPU);
-
-	void PushFront(ThreadData* thread, int32 priority);
-	void PushBack(ThreadData* thread, int32 priority);
-	void Remove(ThreadData* thread);
-	ThreadData* PeekThread() const;
-	inline ThreadData* PeekHead() const { return fRunQueue.PeekMaximum(); }
-	inline const ThreadRunQueue* RunQueue() const { return &fRunQueue; }
-
-	inline ThreadRunQueue::ConstIterator GetConstIterator() const {
-		return fRunQueue.GetConstIterator();
-	}
-
-	inline void CheckEligibility(bigtime_t svt) {
-		fRunQueue.CheckEligibility(svt);
-	}
 
 	inline bigtime_t SystemVirtualTime() const {
 		return (bigtime_t)LoadAcquire64(fSystemVirtualTime);
@@ -327,7 +298,7 @@ public:
 	CPUEntry* PeekMinimumLoadCPU();
 
 	void AddCPU(CPUEntry* cpu);
-	void RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing);
+	void RemoveCPU(CPUEntry* cpu);
 
 private:
 	void _UpdateLoad(bool forceUpdate = false, bigtime_t now = 0);
@@ -356,11 +327,8 @@ private:
 	CPUPriorityHeap fCPUHeap;
 	spinlock fCPULock;
 
-	spinlock fQueueLock;
-	int32 fThreadCount __attribute__((aligned(8)));
 	int32 fTotalThreadCount __attribute__((aligned(8)));
 	int32 fDisplayThreadCount __attribute__((aligned(8)));
-	ThreadRunQueue fRunQueue;
 
 	int32 fLoad;
 
@@ -569,20 +537,6 @@ inline CPUPriorityHeap* CoreEntry::CPUHeap() {
 	return &fCPUHeap;
 }
 
-inline void CoreEntry::LockRunQueue() {
-	SCHEDULER_ENTER_FUNCTION();
-	acquire_spinlock(&fQueueLock);
-}
-
-inline bool CoreEntry::TryLockRunQueue() {
-	SCHEDULER_ENTER_FUNCTION();
-	return try_acquire_spinlock(&fQueueLock);
-}
-
-inline void CoreEntry::UnlockRunQueue() {
-	SCHEDULER_ENTER_FUNCTION();
-	release_spinlock(&fQueueLock);
-}
 
 inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -911,12 +865,7 @@ inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 inline void PackageEntry::ReadLockCore() { acquire_read_spinlock(&fCoreLock); }
 
 inline bool CoreEntry::HasHighPriorityThread() const {
-	// Note: lockless check for high-priority threads at the heap root.
-	ThreadData* root = fRunQueue.PeekRoot();
-	if (root == NULL)
-		return false;
-
-	return root->GetEffectivePriority() >= B_DISPLAY_PRIORITY;
+	return DisplayThreadCount() > 0;
 }
 
 inline void PackageEntry::ReadUnlockCore() {

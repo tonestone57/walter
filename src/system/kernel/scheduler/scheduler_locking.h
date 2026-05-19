@@ -31,22 +31,25 @@ private:
 	void Acquire() {
 		fStatus = disable_interrupts();
 
-#ifdef DEBUG_SCHEDULER
-		// Use get_cpu_struct()->running_thread for safer access during
-		// context switches and early boot.
+		// Decentralized protection: acquire the current thread's scheduler_lock.
+		// This provides execution-state protection for code that previously
+		// relied on the global gSchedulerLock.
 		Thread* thread = get_cpu_struct()->running_thread;
+		if (thread != NULL)
+			acquire_spinlock(&thread->scheduler_lock);
+
+#ifdef DEBUG_SCHEDULER
 		if (thread != NULL)
 			thread->scheduler_lock_depth++;
 #endif
-
-		AcquireSchedulerSpinlock();
 	}
 
 	void Release() {
-		ReleaseSchedulerSpinlock();
+		Thread* thread = get_cpu_struct()->running_thread;
+		if (thread != NULL)
+			release_spinlock(&thread->scheduler_lock);
 
 #ifdef DEBUG_SCHEDULER
-		Thread* thread = get_cpu_struct()->running_thread;
 		if (thread != NULL) {
 			thread->scheduler_lock_depth--;
 			ASSERT(thread->scheduler_lock_depth >= 0);
@@ -126,26 +129,6 @@ public:
 
 typedef AutoLocker<CPUEntry, CPURunQueueLocking> CPURunQueueLocker;
 
-class CoreRunQueueLocking {
-public:
-	inline bool Lock(CoreEntry* core) {
-		core->LockRunQueue();
-		return true;
-	}
-
-	inline void Unlock(CoreEntry* core) { core->UnlockRunQueue(); }
-};
-
-class CoreRunQueueTryLocking {
-public:
-	inline bool Lock(CoreEntry* core) { return core->TryLockRunQueue(); }
-
-	inline void Unlock(CoreEntry* core) { core->UnlockRunQueue(); }
-};
-
-typedef AutoLocker<CoreEntry, CoreRunQueueTryLocking> CoreRunQueueTryLocker;
-
-typedef AutoLocker<CoreEntry, CoreRunQueueLocking> CoreRunQueueLocker;
 
 class CoreCPUHeapLocking {
 public:
