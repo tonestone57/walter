@@ -495,6 +495,7 @@ static status_t topology_validation_error(status_t strictStatus,
 
 
 static int32* sPackageToNode;
+static int32* sNodeToNUMA;
 static int32* sCPUToCluster = NULL;
 
 static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
@@ -1464,6 +1465,7 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 	delete[] sCPUToCore;
 	delete[] sCPUToCluster;
 	delete[] sPackageToNode;
+	delete[] sNodeToNUMA;
 	delete[] sCPUToPackage;
 
 	sCPUToCore = new (std::nothrow) int32[cpuCount];
@@ -1475,13 +1477,15 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 	// write on systems where the topology detection produces packageCount ==
 	// cpuCount entries.
 	sPackageToNode = new (std::nothrow) int32[cpuCount + 1];
+	sNodeToNUMA = new (std::nothrow) int32[cpuCount + 1];
 	sCPUToPackage = new (std::nothrow) int32[cpuCount];
 
 	if (sCPUToCore == NULL || sCPUToCluster == NULL || sPackageToNode == NULL ||
-		sCPUToPackage == NULL) {
+		sNodeToNUMA == NULL || sCPUToPackage == NULL) {
 		delete[] sCPUToCore;
 		delete[] sCPUToCluster;
 		delete[] sPackageToNode;
+		delete[] sNodeToNUMA;
 		delete[] sCPUToPackage;
 		return B_NO_MEMORY;
 	}
@@ -1497,12 +1501,14 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 
 	// Safe upper bound allocation for mapping packages to nodes
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
+	ArrayDeleter<int32> nodeToNUMADeleterMap(sNodeToNUMA);
 
-	// sPackageToNode is the only mapping array not zero-initialized.
-	// Packages that are never written (guard short-circuits) carry heap
-	// garbage, which init() then uses as a node index, mapping the package to a
-	// non-existent SchedulerNode.
+	// sPackageToNode and sNodeToNUMA are the only mapping arrays not
+	// zero-initialized. Packages that are never written (guard
+	// short-circuits) carry heap garbage, which init() then uses as a node
+	// index, mapping the package to a non-existent SchedulerNode.
 	memset(sPackageToNode, 0, sizeof(int32) * (cpuCount + 1));
+	memset(sNodeToNUMA, 0, sizeof(int32) * (cpuCount + 1));
 
 	// First pass: logical topology from ACPI/Device Tree
 	const cpu_topology_node* root = get_cpu_topology();
@@ -1600,8 +1606,10 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 
 		if (coresInL3 > 0) {
 			// Note: ensure we don't write past cpuCount.
-			if (packageCount < cpuCount)
+			if (packageCount < cpuCount) {
 				sPackageToNode[packageCount] = currentNodeID;
+				sNodeToNUMA[currentNodeID] = sCPUToPackage[cpuList[l3Start]];
+			}
 
 			// Note: when this is the very last package that fits
 			// within the cpuCount limit AND we are at the boundary where
@@ -1624,8 +1632,11 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 					currentNodeID = nodeCount++;
 					coresInCurrentNode = 0;
 
-					if (packageCount < cpuCount)
+					if (packageCount < cpuCount) {
 						sPackageToNode[packageCount] = currentNodeID;
+						sNodeToNUMA[currentNodeID] =
+							sCPUToPackage[cpuList[l3Start]];
+					}
 				}
 
 				int32 clusterSize =
@@ -1642,6 +1653,8 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 						clusterIndex++;
 						packageCount++;
 						sPackageToNode[packageCount] = currentNodeID;
+						sNodeToNUMA[currentNodeID] =
+							sCPUToPackage[cpuList[l3Start]];
 					}
 					// Note: Package limit guard documentation. when the guard
 					// above prevents a new package from being created, the
@@ -1710,6 +1723,7 @@ static status_t init() {
 	ArrayDeleter<int32> cpuToPackageDeleter(sCPUToPackage);
 	ArrayDeleter<int32> cpuToClusterDeleter(sCPUToCluster);
 	ArrayDeleter<int32> packageToNodeDeleter(sPackageToNode);
+	ArrayDeleter<int32> nodeToNUMADeleter(sNodeToNUMA);
 
 	if (packageCount > 4096) {
 		dprintf("scheduler: system has too many packages (%" B_PRId32
@@ -1746,7 +1760,10 @@ static status_t init() {
 		return B_NO_MEMORY;
 	ArrayDeleter<SchedulerNode> schedulerNodesDeleter(gSchedulerNodes);
 
-	for (int32 i = 0; i < nodeCount; i++) gSchedulerNodes[i].Init(i);
+	for (int32 i = 0; i < nodeCount; i++) {
+		gSchedulerNodes[i].Init(i);
+		gSchedulerNodes[i].SetNUMAID(sNodeToNUMA[i]);
+	}
 
 	gCPUEntries = new (std::nothrow) CPUEntry[cpuCount];
 	gCoreEntries = new (std::nothrow) CoreEntry[coreCount];

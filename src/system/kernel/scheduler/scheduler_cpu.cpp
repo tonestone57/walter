@@ -52,6 +52,9 @@ struct LocalNodeStealAction {
 		if (entry == package)
 			return false;
 
+		if (entry->IdleCoreCount() == entry->CoreCount())
+			return false;
+
 		int32 victimCoreCount = entry->RegisteredCoreCount();
 		if (victimCoreCount == 0)
 			return false;
@@ -79,7 +82,7 @@ struct LocalNodeStealAction {
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
 			bool success = false;
-			if ((*stolen)->GetLag() >= kNUMANodeLagThreshold) {
+			if ((*stolen)->GetLag() >= kL3LagThreshold) {
 				// Re-verify affinity under the lock (mostly redundant but safe).
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
@@ -104,15 +107,15 @@ struct LocalNodeStealAction {
 	}
 };
 
-struct GlobalRandomStealAction {
+struct NUMARandomStealAction {
 	CPUEntry* cpu;
 	PackageEntry* package;
 	ThreadData** stolen;
 	const CPUSet& enabled;
 	bigtime_t now;
 
-	GlobalRandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s,
-							const CPUSet& e, bigtime_t n)
+	NUMARandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s,
+						  const CPUSet& e, bigtime_t n)
 		: cpu(c), package(p), stolen(s), enabled(e), now(n) {}
 
 	bool operator()(PackageEntry* entry) const {
@@ -152,7 +155,7 @@ struct GlobalRandomStealAction {
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
 			bool success = false;
-			if ((*stolen)->GetLag() >= kGlobalLagThreshold) {
+			if ((*stolen)->GetLag() >= kNUMANodeLagThreshold) {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
@@ -160,6 +163,106 @@ struct GlobalRandomStealAction {
 					(*stolen)->fStolen = true;
 					cpu->Core()->IncrementTotalThreadCount();
 					success = true;
+				}
+			}
+
+			if (!success) {
+				// Thread not under-served enough or affinity changed; restore
+				// it.
+				victim->PushBack(*stolen, stolenPriority);
+				*stolen = NULL;
+			}
+
+			victim->UnlockRunQueue();
+			return success;
+		}
+
+		return false;
+	}
+};
+
+struct GlobalRandomStealAction {
+	CPUEntry* cpu;
+	PackageEntry* package;
+	ThreadData** stolen;
+	const CPUSet& enabled;
+	bigtime_t now;
+
+	GlobalRandomStealAction(CPUEntry* c, PackageEntry* p, ThreadData** s,
+							const CPUSet& e, bigtime_t n)
+		: cpu(c), package(p), stolen(s), enabled(e), now(n) {}
+
+	bool operator()(PackageEntry* entry) const {
+		if (*stolen != NULL)
+			return true;
+
+		if (entry == package)
+			return false;
+
+		int32 victimCoreCount = entry->RegisteredCoreCount();
+		if (victimCoreCount == 0)
+			return false;
+
+		int32 coreIndex =
+			(int32)get_random_index(cpu->GetRandom(), victimCoreCount);
+		CoreEntry* victim = entry->GetCore(coreIndex);
+
+		if (victim == NULL)
+			return false;
+
+		if ((entry->IdleCoreMask() &
+			 ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
+			return false;
+
+		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
+		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
+			victim->RunQueue()->GetFirstLevelBitmap() == 0)
+			return false;
+
+		int32 stolenPriority = -1;
+		// Lock-Free Bit-Stealing Phase 2: Atomic Steal Attempt
+		*stolen = victim->StealThreadLockless(stolenPriority, cpu->ID());
+
+		if (*stolen != NULL) {
+			// We have the victim's run-queue lock.
+			bool success = false;
+
+			int32 myNUMA = -1;
+			CoreEntry* myCore = cpu->Core();
+			if (myCore != NULL && myCore->Package() != NULL &&
+				myCore->Package()->Node() != NULL) {
+				myNUMA = myCore->Package()->Node()->NUMAID();
+			}
+
+			int32 victimNUMA = -1;
+			if (entry->Node() != NULL)
+				victimNUMA = entry->Node()->NUMAID();
+
+			bool crossNUMA =
+				(myNUMA != -1 && victimNUMA != -1 && myNUMA != victimNUMA);
+			int64 threshold =
+				crossNUMA ? kGlobalLagThreshold : kNUMANodeLagThreshold;
+
+			if ((*stolen)->GetLag() >= threshold) {
+				// Task-Type Gating: Threads with high interactivity or display
+				// priority should never be stolen across NUMA nodes.
+				bool interactive = (*stolen)->GetEffectivePriority() >=
+									   B_DISPLAY_PRIORITY ||
+								   (*stolen)->GetThread()->priority >=
+									   B_DISPLAY_PRIORITY ||
+								   (*stolen)->InteractivityScore() > 750;
+
+				if (crossNUMA && interactive) {
+					success = false;
+				} else {
+					// Re-verify affinity under the lock.
+					const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
+					if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
+						(*stolen)->MigrateTo(cpu->Core(), now);
+						(*stolen)->fStolen = true;
+						cpu->Core()->IncrementTotalThreadCount();
+						success = true;
+					}
 				}
 			}
 
@@ -522,10 +625,29 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 	if (pinnedThread != NULL)
 		pinnedPriority = pinnedThread->GetEffectivePriority();
 
-	ThreadData* sharedThread = core->PeekThread();
-	if (sharedThread == NULL && pinnedThread == NULL) {
-		// try to steal work from other cores in the same package
-		sharedThread = _TryStealWork(now);
+	// Tiered search to avoid SMT contention:
+	// 1. Pinned threads (already peeked)
+	// 2. Shared threads if core is idle (no SMT contention)
+	// 3. Work-stealing from other physical cores (Phase 1-4)
+	// 4. Shared threads if core is busy (accept SMT contention)
+	ThreadData* sharedThread = NULL;
+	if (pinnedThread == NULL) {
+		if (core->CPUCount() == 1 || core->ThreadCount() == 0)
+			sharedThread = core->PeekThread();
+
+		if (sharedThread == NULL)
+			sharedThread = _TryStealWorkL3(now);
+
+		if (sharedThread == NULL)
+			sharedThread = _TryStealWorkNUMA(now);
+
+		if (sharedThread == NULL)
+			sharedThread = _TryStealWorkGlobal(now);
+
+		if (sharedThread == NULL)
+			sharedThread = core->PeekThread();
+	} else {
+		sharedThread = core->PeekThread();
 	}
 
 	bool sharedThreadIsFloating =
@@ -754,13 +876,7 @@ uint32 CPUEntry::GetRandom() {
 	return (uint32)((x * 0x2545F4914F6CDD1DULL) >> 32);
 }
 
-ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	// Note: Formal EEVDF Hierarchical Work-Stealing.
-	// Phase 1 (Sibling): Try to steal from a sibling core sharing cache.
-
-	// iterate over other cores in the package and try to steal work
+ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
 	PackageEntry* package = core->Package();
 
@@ -768,35 +884,10 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 	if (registeredCores <= 1)
 		return NULL;
 
-	// (clarification): The subtraction-wrap "index -= registeredCores"
-	// is safe because startIndex < registeredCores and i < registeredCores,
-	// so startIndex + i < 2 * registeredCores, requiring at most one
-	// subtraction. (clarification): GetIdleCorePacking shift guard - when
-	// shift==0 the left-shift by kMaxCoresPerPackage is already guarded by "if
-	// (shift > 0)" in PackageEntry::GetIdleCorePacking; no undefined behavior
-	// occurs.
-
-	CPUSet enabled;
-	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-	for (int32 i = 0; i < kWords; i++) {
-		uint32 w;
-		int retry = 0;
-		do {
-			w = gCPUEnabled.Bits(i);
-			memory_read_barrier();
-			if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
-				break;
-			cpu_pause();
-		} while (true);
-		enabled.SetWord(i, w);
-	}
-
 	// Pick a random starting point to avoid convoys
-	// We use multiplicative mapping to avoid modulo.
 	int32 startIndex = (int32)get_random_index(GetRandom(), registeredCores);
 
 	for (int32 i = 0; i < registeredCores; i++) {
-		// Optimization: Use subtraction for wrapping instead of modulo
 		int32 index = startIndex + i;
 		if (index >= registeredCores)
 			index -= registeredCores;
@@ -806,108 +897,95 @@ ThreadData* CPUEntry::_TryStealWork(bigtime_t now) {
 		if (victim == NULL || victim == fCore || victim->CPUCount() == 0)
 			continue;
 
-		// Note: IdleCoreMask() is read atomically but without holding
-		// a lock. Between this read and TryLockRunQueue(), the victim core may
-		// have transitioned from idle to active. The skip is a best-effort
-		// optimization, not a guarantee. The comment "guaranteed empty" was
-		// incorrect - replace with accurate description.
-		// The TryLockRunQueue() + PeekOption() predicate below is the actual
-		// correctness barrier; this skip only avoids a redundant lock attempt.
 		if ((package->IdleCoreMask() &
 			 ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0) {
 			continue;
 		}
 
-		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
 		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
 			victim->RunQueue()->GetFirstLevelBitmap() == 0)
 			continue;
 
 		int32 stolenPriority = -1;
-		// Lock-Free Bit-Stealing Phase 2: Atomic Steal Attempt
-		ThreadData* stolen = victim->StealThreadLockless(stolenPriority, fCPUNumber);
+		ThreadData* stolen =
+			victim->StealThreadLockless(stolenPriority, fCPUNumber);
 
 		if (stolen != NULL) {
-			// We have the victim's run-queue lock.
-			const CPUSet& threadMask = stolen->GetThread()->cpumask;
-			if (threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber)) {
-				CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
-				stolen->MigrateTo(core, now);
-				stolen->fStolen = true;
-				core->IncrementTotalThreadCount();
+			bool success = false;
+			if (stolen->GetLag() >= kL3LagThreshold) {
+				const CPUSet& threadMask = stolen->GetThread()->cpumask;
+				if (threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber)) {
+					stolen->MigrateTo(core, now);
+					stolen->fStolen = true;
+					core->IncrementTotalThreadCount();
+					success = true;
+				}
+			}
 
-				victim->UnlockRunQueue();
-				return stolen;
-			} else {
-				// Victim no longer matches thief after lock acquisition.
-				// Push it back and abort this victim.
-				victim->PushBack(stolen, stolen->GetThread()->priority);
+			if (!success) {
+				victim->PushBack(stolen, stolenPriority);
 				stolen = NULL;
 			}
 
 			victim->UnlockRunQueue();
-		} else {
-			// Note: if StealThreadLockless returns NULL, it either failed
-			// its atomic bit-claim OR it acquired the lock but found no
-			// suitable thread. In both cases, we must ensure the lock is
-			// released if it was acquired.
-			//
-			// StealThreadLockless follows the pattern:
-			//   if (TestAndClearAtomic) {
-			//       LockRunQueue();
-			//       ... find thread ...
-			//       if (found) return thread; // LOCK HELD
-			//       UnlockRunQueue();
-			//   }
-			//   return NULL; // LOCK NOT HELD
-			//
-			// Thus if stolen == NULL, the lock is already released or was
-			// never held. No additional UnlockRunQueue() is needed here.
+			if (success)
+				return stolen;
 		}
 	}
 
-	// Phase 2: The Local NUMA Node (Random)
-	// Target: Cores on the same physical socket/die (e.g., 64-128 cores).
-	// Method: Random Sampling
-	// Why: Stealing here is fast (local RAM). You want to exhaust reasonable
-	// options here before going across the expensive interconnect.
-
-	// Note: declare 'stolen' BEFORE the 'goto phase3' to avoid
-	// jumping over a variable initialization, which is ill-formed in C++
-	// (UB even for trivial types when an initializer is present).
 	ThreadData* stolen = NULL;
-
-	{
-		SchedulerNode* node = package->Node();
-		if (node == NULL)
-			goto phase3;
+	SchedulerNode* node = package->Node();
+	if (node != NULL) {
+		CPUSet enabled;
+		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+		for (int32 i = 0; i < kWords; i++) {
+			enabled.SetWord(i, gCPUEnabled.Bits(i));
+		}
 
 		search_local_node(
 			node, LocalNodeStealAction(this, package, &stolen, enabled, now));
-
-		if (stolen != NULL)
-			return stolen;
 	}
 
-phase3:
-	// Note: removed the unconditional stolen = NULL reset.
-	// If Phase 2 fell through with a valid stolen thread, the reset would
-	// lose it.  If Phase 2 jumped here (node == NULL) stolen is already NULL.
-	// Phase 3 correctly checks (stolen != NULL) in its first lambda probe.
+	return stolen;
+}
 
-	// Phase 3: The Global Hail Mary (Random)
-	// Target: Any core in the system (4096 cores).
-	// Method: Logarithmic Formula
-	// Why: This is the last resort. If the local node is empty, you are willing
-	// to pay the high cost to steal from a remote socket to avoid sleeping.
+
+ThreadData* CPUEntry::_TryStealWorkNUMA(bigtime_t now) {
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	PackageEntry* package = core->Package();
+	SchedulerNode* node = package->Node();
+
+	if (node == NULL)
+		return NULL;
+
+	ThreadData* stolen = NULL;
+	CPUSet enabled;
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int32 i = 0; i < kWords; i++) {
+		enabled.SetWord(i, gCPUEnabled.Bits(i));
+	}
+
+	search_numa_random(node->NUMAID(), node->NodeIndex(),
+					   NUMARandomStealAction(this, package, &stolen, enabled,
+											 now));
+	return stolen;
+}
+
+
+ThreadData* CPUEntry::_TryStealWorkGlobal(bigtime_t now) {
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	PackageEntry* package = core->Package();
+
+	ThreadData* stolen = NULL;
+	CPUSet enabled;
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int32 i = 0; i < kWords; i++) {
+		enabled.SetWord(i, gCPUEnabled.Bits(i));
+	}
 
 	search_global_random(
 		GlobalRandomStealAction(this, package, &stolen, enabled, now));
-
-	if (stolen != NULL)
-		return stolen;
-
-	return NULL;
+	return stolen;
 }
 
 
@@ -1563,10 +1641,12 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 }
 
 SchedulerNode::SchedulerNode()
-	: fIdlePackageMask(0), fPackageStartIndex(0), fPackageCount(0) {}
+	: fNodeID(-1), fNUMAID(-1), fIdlePackageMask(0), fPackageStartIndex(0),
+	  fPackageCount(0) {}
 
 void SchedulerNode::Init(int32 id) {
 	fNodeID = id;
+	fNUMAID = -1;
 	cpu_mask_set_atomic(&fIdlePackageMask, 0);
 	fPackageStartIndex = 0;
 	fPackageCount = 0;
