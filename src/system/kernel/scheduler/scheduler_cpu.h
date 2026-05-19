@@ -160,7 +160,10 @@ public:
 
 private:
 	void _RequestPerformanceLevel(ThreadData* threadData, bigtime_t now = 0);
-	ThreadData* _TryStealWork(bigtime_t now = 0);
+
+	ThreadData* _TryStealWorkL3(bigtime_t now = 0);
+	ThreadData* _TryStealWorkNUMA(bigtime_t now = 0);
+	ThreadData* _TryStealWorkGlobal(bigtime_t now = 0);
 
 	static int32 _RescheduleEvent(timer* /* unused */);
 	static int32 _UpdateLoadEvent(timer* /* unused */);
@@ -393,6 +396,9 @@ public:
 	inline native_cpu_mask_t IdlePackageMask() const;
 	inline int32 NodeIndex() const { return fNodeID; }
 
+	inline int32 NUMAID() const { return fNUMAID; }
+	inline void SetNUMAID(int32 id) { fNUMAID = id; }
+
 	inline int32 PackageStartIndex() const { return fPackageStartIndex; }
 	inline void SetPackageStartIndex(int32 start) {
 		fPackageStartIndex = start;
@@ -408,6 +414,8 @@ public:
 
 private:
 	int32 fNodeID;
+	int32 fNUMAID;
+
 	native_cpu_mask_t fIdlePackageMask __attribute__((aligned(8)));
 
 	int32 fPackageStartIndex;

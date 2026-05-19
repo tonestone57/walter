@@ -181,6 +181,10 @@ public:
 
 	SCHEDULER_INLINE int32 GetLoad() const { return fNeededLoad; }
 
+	SCHEDULER_INLINE int32 InteractivityScore() const {
+		return fInteractivityScore;
+	}
+
 	SCHEDULER_INLINE bool IsForeground() const { return fIsForeground; }
 	SCHEDULER_INLINE void SetForeground(bool foreground) {
 		fIsForeground = foreground;

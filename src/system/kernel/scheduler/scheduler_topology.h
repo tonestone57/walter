@@ -146,6 +146,38 @@ static void search_local_node(SchedulerNode* node, Action action) {
 }
 
 template <typename Action>
+static void search_numa_random(int32 numaID, int32 excludeNode, Action action) {
+	const int32 nodeCount = gNodeCount;
+	if (nodeCount <= 0)
+		return;
+
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	int32 samplesToTake = min_c(gRandomSamples, nodeCount);
+	int32 samplesTaken = 0;
+	int32 attempts = 0;
+	const int32 kMaxAttempts = samplesToTake * 8;
+
+	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
+		int32 i = (int32)(((uint64)cpu->GetRandom() * nodeCount) >> 32);
+		SchedulerNode* node = &gSchedulerNodes[i];
+
+		if (i == excludeNode || node->NUMAID() != numaID)
+			continue;
+
+		samplesTaken++;
+
+		int32 packagesInNode = node->PackageCount();
+		if (packagesInNode <= 0)
+			continue;
+
+		int32 pkgOffset =
+			(int32)(((uint64)cpu->GetRandom() * packagesInNode) >> 32);
+		if (action(&gPackageEntries[node->PackageStartIndex() + pkgOffset]))
+			break;
+	}
+}
+
+template <typename Action>
 static void search_global_random(Action action) {
 	// Note: snapshot gPackageCount once at the start of the function.
 	// This ensures consistency if a hot-plug event changes the global count
