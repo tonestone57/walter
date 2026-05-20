@@ -88,7 +88,6 @@ struct LocalNodeStealAction {
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core(), now);
 					(*stolen)->fStolen = true;
-					cpu->Core()->IncrementTotalThreadCount();
 					success = true;
 				}
 			}
@@ -161,7 +160,6 @@ struct NUMARandomStealAction {
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core(), now);
 					(*stolen)->fStolen = true;
-					cpu->Core()->IncrementTotalThreadCount();
 					success = true;
 				}
 			}
@@ -260,7 +258,6 @@ struct GlobalRandomStealAction {
 					if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 						(*stolen)->MigrateTo(cpu->Core(), now);
 						(*stolen)->fStolen = true;
-						cpu->Core()->IncrementTotalThreadCount();
 						success = true;
 					}
 				}
@@ -468,7 +465,10 @@ void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 	thread->fEnqueuedPriority = priority;
 
 	if (!thread->IsIdle()) {
-		Core()->IncrementTotalThreadCount();
+		CoreEntry* core = Core();
+		core->IncrementTotalThreadCount();
+		if (priority >= B_DISPLAY_PRIORITY)
+			core->IncrementHighPriorityThreadCount();
 		if (!thread->IsRealTime())
 			AddWeight(thread->GetWeight());
 	}
@@ -483,7 +483,10 @@ void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 	thread->fEnqueuedPriority = priority;
 
 	if (!thread->IsIdle()) {
-		Core()->IncrementTotalThreadCount();
+		CoreEntry* core = Core();
+		core->IncrementTotalThreadCount();
+		if (priority >= B_DISPLAY_PRIORITY)
+			core->IncrementHighPriorityThreadCount();
 		if (!thread->IsRealTime())
 			AddWeight(thread->GetWeight());
 	}
@@ -503,7 +506,10 @@ void CPUEntry::Remove(ThreadData* thread) {
 	DecrementThreadCount();
 
 	if (!thread->IsIdle()) {
-		Core()->DecrementTotalThreadCount();
+		CoreEntry* core = Core();
+		core->DecrementTotalThreadCount();
+		if (priority >= B_DISPLAY_PRIORITY)
+			core->DecrementHighPriorityThreadCount();
 		if (!thread->IsRealTime())
 			AddWeight(-thread->GetWeight());
 	}
@@ -691,8 +697,11 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 	// Case B: nextThread (either local or stolen) is best.
 	if (nextThreadIsFloating) {
 		if (nextThread->fStolen) {
-			// ACCOUNTING: fStolen threads have already incremented our core's
-			// TotalThreadCount in the steal action.
+			// ACCOUNTING: fStolen threads didn't increment our core's
+			// counters in the steal action; we do it now.
+			// Note: only increment fTotalThreadCount here.
+			// fHighPriorityThreadCount only counts waiting threads.
+			Core()->IncrementTotalThreadCount();
 			nextThread->fStolen = false;
 		}
 		return nextThread;
@@ -946,7 +955,6 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 				if (threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber)) {
 					stolen->MigrateTo(core, now);
 					stolen->fStolen = true;
-					core->IncrementTotalThreadCount();
 					success = true;
 				}
 			}
@@ -1117,6 +1125,7 @@ CoreEntry::CoreEntry()
 	  fCapacity(kDefaultCapacity),
 	  fIdleCPUCount(0),
 	  fTotalThreadCount(0),
+	  fHighPriorityThreadCount(0),
 	  fActiveTime(0),
 	  fLoad(0),
 	  fCombinedLoad(0),
@@ -1410,7 +1419,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 			//
 			// Note: add iteration limit to the inner CAS loop to
 			// prevent livelock under pathological contention. After
-			// kMaxFLoadRetries followers we read the current value and apply
+			// kMaxFLoadRetries failures we read the current value and apply
 			// the delta as best-effort; slight inaccuracy is acceptable
 			// versus spinning indefinitely with interrupts disabled.
 			// The outer CAS on fCombinedLoad already has its own retry, so

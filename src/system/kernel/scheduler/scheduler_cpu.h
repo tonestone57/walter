@@ -244,9 +244,21 @@ public:
 		AddRelease(fTotalThreadCount, -1);
 	}
 
+	inline int32 HighPriorityThreadCount() const {
+		return LoadAcquire(fHighPriorityThreadCount);
+	}
+	inline void IncrementHighPriorityThreadCount() {
+		AddRelease(fHighPriorityThreadCount, 1);
+	}
+	inline void DecrementHighPriorityThreadCount() {
+		AddRelease(fHighPriorityThreadCount, -1);
+	}
+
 	// Note: lockless check for display-priority threads in any
 	// logical processor's run queue.
-	inline bool HasHighPriorityThread() const;
+	inline bool HasHighPriorityThread() const {
+		return HighPriorityThreadCount() > 0;
+	}
 
 	inline bigtime_t SystemVirtualTime() const {
 		return (bigtime_t)LoadAcquire64(fSystemVirtualTime);
@@ -321,6 +333,7 @@ private:
 	spinlock fCPULock;
 
 	int32 fTotalThreadCount __attribute__((aligned(8)));
+	int32 fHighPriorityThreadCount __attribute__((aligned(8)));
 
 	int32 fLoad;
 
@@ -861,23 +874,6 @@ inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 
 inline void PackageEntry::ReadLockCore() { acquire_read_spinlock(&fCoreLock); }
 
-inline bool CoreEntry::HasHighPriorityThread() const {
-	// Note: lockless check for high-priority threads across all CPUs in the core.
-	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-	for (int i = 0; i < kWords; i++) {
-		uint32 bits = fCPUSet.Bits(i);
-		while (bits != 0) {
-			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
-			int cpuID = i * 32 + bit;
-			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
-			ThreadData* root = cpu->PeekThread();
-			if (root != NULL && root->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
-				return true;
-			bits &= ~(1U << bit);
-		}
-	}
-	return false;
-}
 
 inline void PackageEntry::ReadUnlockCore() {
 	release_read_spinlock(&fCoreLock);

@@ -11,12 +11,6 @@
 
 namespace Scheduler {
 
-// Note: with decentralized run-queues, AcquireSchedulerSpinlock and
-// ReleaseSchedulerSpinlock are no longer needed for run-queue protection.
-// They are kept as no-ops to maintain compatibility with other kernel
-// subsystems that may still reference them via SCHEDULER_CRITICAL_SECTION.
-inline void AcquireSchedulerSpinlock() {}
-inline void ReleaseSchedulerSpinlock() {}
 
 inline bool SchedulerLockHeld() {
 	// Decentralized run-queues use interrupts-off as the baseline

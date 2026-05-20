@@ -528,6 +528,18 @@ void ThreadEnqueuer::operator()(ThreadData* thread) {
 }
 
 
+extern "C" void
+AcquireSchedulerSpinlock()
+{
+}
+
+
+extern "C" void
+ReleaseSchedulerSpinlock()
+{
+}
+
+
 void scheduler_dump_thread_data(Thread* thread) {
 	thread->scheduler_data->Dump();
 }
@@ -797,7 +809,7 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 							 thread);
 
 	// Dequeue while threadData->fWeight still holds the old weight.
-	// This ensures symmetric accounting in CoreEntry::Remove.
+	// This ensures symmetric accounting in CPUEntry::Remove.
 	bool enqueued = threadData->Dequeue();
 
 	thread->priority = priority;
