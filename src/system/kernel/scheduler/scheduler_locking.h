@@ -11,12 +11,17 @@
 
 namespace Scheduler {
 
-extern "C" void AcquireSchedulerSpinlock();
-extern "C" void ReleaseSchedulerSpinlock();
+// Note: with decentralized run-queues, AcquireSchedulerSpinlock and
+// ReleaseSchedulerSpinlock are no longer needed for run-queue protection.
+// They are kept as no-ops to maintain compatibility with other kernel
+// subsystems that may still reference them via SCHEDULER_CRITICAL_SECTION.
+inline void AcquireSchedulerSpinlock() {}
+inline void ReleaseSchedulerSpinlock() {}
 
 inline bool SchedulerLockHeld() {
-	Thread* thread = get_cpu_struct()->running_thread;
-	return thread == NULL || thread->scheduler_lock_depth > 0;
+	// Decentralized run-queues use interrupts-off as the baseline
+	// requirement for scheduler operations.
+	return !are_interrupts_enabled();
 }
 
 #define ASSERT_SCHED_LOCK() ASSERT(SchedulerLockHeld())
@@ -30,29 +35,9 @@ public:
 private:
 	void Acquire() {
 		fStatus = disable_interrupts();
-
-#ifdef DEBUG_SCHEDULER
-		// Use get_cpu_struct()->running_thread for safer access during
-		// context switches and early boot.
-		Thread* thread = get_cpu_struct()->running_thread;
-		if (thread != NULL)
-			thread->scheduler_lock_depth++;
-#endif
-
-		AcquireSchedulerSpinlock();
 	}
 
 	void Release() {
-		ReleaseSchedulerSpinlock();
-
-#ifdef DEBUG_SCHEDULER
-		Thread* thread = get_cpu_struct()->running_thread;
-		if (thread != NULL) {
-			thread->scheduler_lock_depth--;
-			ASSERT(thread->scheduler_lock_depth >= 0);
-		}
-#endif
-
 		restore_interrupts(fStatus);
 	}
 
@@ -62,9 +47,8 @@ private:
 #ifdef DEBUG_SCHEDULER
 
 enum SchedulerLockRank {
-	LOCK_RANK_SCHEDULER = 0,
-	LOCK_RANK_RUNQUEUE = 1,
-	LOCK_RANK_THREAD = 2,
+	LOCK_RANK_RUNQUEUE = 0,
+	LOCK_RANK_THREAD = 1,
 };
 
 inline void AssertLockOrder(int rank) {
@@ -126,24 +110,23 @@ public:
 
 typedef AutoLocker<CPUEntry, CPURunQueueLocking> CPURunQueueLocker;
 
+class CPURunQueueTryLocking {
+public:
+	inline bool Lock(CPUEntry* cpu) { return cpu->TryLockRunQueue(); }
+
+	inline void Unlock(CPUEntry* cpu) { cpu->UnlockRunQueue(); }
+};
+
+typedef AutoLocker<CPUEntry, CPURunQueueTryLocking> CPURunQueueTryLocker;
+
 class CoreRunQueueLocking {
 public:
 	inline bool Lock(CoreEntry* core) {
-		core->LockRunQueue();
 		return true;
 	}
 
-	inline void Unlock(CoreEntry* core) { core->UnlockRunQueue(); }
+	inline void Unlock(CoreEntry* core) {}
 };
-
-class CoreRunQueueTryLocking {
-public:
-	inline bool Lock(CoreEntry* core) { return core->TryLockRunQueue(); }
-
-	inline void Unlock(CoreEntry* core) { core->UnlockRunQueue(); }
-};
-
-typedef AutoLocker<CoreEntry, CoreRunQueueTryLocking> CoreRunQueueTryLocker;
 
 typedef AutoLocker<CoreEntry, CoreRunQueueLocking> CoreRunQueueLocker;
 

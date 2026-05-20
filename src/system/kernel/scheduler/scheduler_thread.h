@@ -45,18 +45,7 @@ public:
 
 	SCHEDULER_INLINE int32 GetPriority() const { return fThread->priority; }
 	SCHEDULER_INLINE Thread* GetThread() const { return fThread; }
-	// gCPUEnabled is updated one word at a time by SetBitAtomic/
-	// ClearBitAtomic; there is no compound-And atomicity guarantee.
-	//
-	// Note: iterate with a snapshot approach to ensure word-boundary
-	// consistency.  While word-aligned reads are indivisible on x86, we
-	// can still read two words representing different snapshots.  We
-	// probe the words and re-read if we suspect a race.
-	//
-	// The word-boundary consistency via retry loop is CORRECT.  It retries
-	// when the two reads DIFFER (unstable) and retry < 3, and breaks when
-	// they are EQUAL (stable) OR retries are exhausted.  This is the
-	// intended behavior and is NOT inverted.
+
 	SCHEDULER_INLINE CPUSet GetCPUMask() const {
 		CPUSet enabled;
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
@@ -65,7 +54,6 @@ public:
 			int retry = 0;
 			do {
 				w = gCPUEnabled.Bits(i);
-				// Ensure word-boundary consistency during concurrent updates.
 				memory_read_barrier();
 				if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
 					break;
@@ -110,8 +98,6 @@ public:
 										  bigtime_t now = 0);
 	void DonateTimesliceTo(Thread* beneficiary, bigtime_t now = 0);
 
-	// Continues(), GoesAway(), and Dies() accept an optional 'now' timestamp
-	// to avoid redundant system_time() calls in the reschedule() hot path.
 	SCHEDULER_INLINE void Continues(bigtime_t now = 0);
 	SCHEDULER_INLINE void GoesAway(bigtime_t now = 0);
 	SCHEDULER_INLINE void Dies(bigtime_t now = 0);
@@ -124,11 +110,9 @@ public:
 		return (bigtime_t)LoadAcquire64(fWentSleepActive);
 	}
 
-	// PutBack() and Enqueue() accept an optional 'now' timestamp for
-	// timestamp propagation.
 	SCHEDULER_INLINE void PutBack(bigtime_t now = 0);
-	SCHEDULER_INLINE status_t CheckCapacity();
-	SCHEDULER_INLINE bool Enqueue(bool& wasRunQueueEmpty,
+	SCHEDULER_INLINE status_t CheckCapacity(CPUEntry* targetCPU);
+	SCHEDULER_INLINE bool Enqueue(CPUEntry* targetCPU, bool& wasRunQueueEmpty,
 								  bool& requestPreemption,
 								  bool& updateInteraction, bigtime_t now = 0);
 	SCHEDULER_INLINE bool Dequeue();
@@ -137,10 +121,6 @@ public:
 											   bigtime_t svt,
 											   bigtime_t maxLatency = 0);
 
-	// The caller (CPUEntry::UpdateActiveTime) already holds a fresh
-	// system_time() result and the current core's SystemVirtualTime, and
-	// can pass them here to eliminate redundant syscalls and ensure
-	// consistency during migration.
 	SCHEDULER_INLINE void UpdateActivity(bigtime_t active, bigtime_t svt,
 										 bigtime_t now = 0);
 
@@ -177,6 +157,7 @@ public:
 	SCHEDULER_INLINE void SetDequeued() {
 		fEnqueued = false;
 		fEnqueuedInCPURunQueue = false;
+		atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, (CPUEntry*)NULL);
 	}
 
 	SCHEDULER_INLINE int32 GetLoad() const { return fNeededLoad; }
@@ -194,6 +175,10 @@ public:
 		return atomic_pointer_get<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 	}
+	SCHEDULER_INLINE CPUEntry* EnqueuedCPU() const {
+		return atomic_pointer_get<CPUEntry>(
+			const_cast<CPUEntry* volatile*>(&fEnqueuedCPU));
+	}
 	void UnassignCore(bool running = false);
 	void MigrateTo(CoreEntry* targetCore, bigtime_t now = 0);
 
@@ -203,8 +188,6 @@ private:
 	bigtime_t _ComputeQuantumForCore(CoreEntry* core,
 									 scheduler_mode_operations* mode) const;
 
-	// Must be called with the appropriate run-queue lock held (either
-	// CPUEntry::fQueueLock or CoreEntry::fQueueLock).
 	SCHEDULER_INLINE void _UpdatePriorityBoost(bigtime_t now);
 
 	void _ComputeNeededLoad(bigtime_t now = 0);
@@ -255,6 +238,7 @@ private:
 	DoublyLinkedListLink<ThreadData> fRunQueueLink;
 
 	CoreEntry* fCore __attribute__((aligned(8)));
+	CPUEntry* fEnqueuedCPU __attribute__((aligned(8)));
 };
 
 class ThreadProcessing {
@@ -285,9 +269,6 @@ inline CoreEntry* ThreadData::PreviousCore() const {
 	if (fThread->previous_cpu == NULL)
 		return NULL;
 
-	// Core() can transiently return NULL during hot-unplug: the CPUEntry's
-	// fCore pointer is cleared before the CPU is fully removed from its
-	// package.  Guard against this before dereferencing.
 	CoreEntry* core = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num)->Core();
 	if (core == NULL || core->CPUCount() <= 0)
 		return NULL;
@@ -322,34 +303,15 @@ inline void ThreadData::_UpdatePriorityBoost(bigtime_t now) {
 	int32 newPriority = GetEffectivePriority();
 
 	if (oldPriority != newPriority) {
-		if (fEnqueuedInCPURunQueue) {
-			ASSERT(fThread->pinned_to_cpu > 0);
-			CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
-
-			// Note: lock is already held by caller.
+		CPUEntry* cpu = EnqueuedCPU();
+		if (cpu != NULL) {
+			// Note: lock is already held by caller (RunQueueScanner).
 			cpu->Remove(this);
 			cpu->PushBack(this, newPriority);
 
 			fEnqueued = true;
 			fEnqueuedInCPURunQueue = true;
-		} else {
-			// Note: capture fCore under the assumption that the caller
-			// ALREADY holds the CoreRunQueueLocker for this core.
-			// The previous code attempted to acquire it again, causing a
-			// deadlock.  Re-acquisition is also unnecessary because
-			// MigrateTo() cannot change fCore while we hold the run-queue lock
-			// of the core we are currently enqueued in.
-			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
-			if (core != NULL) {
-				// Set state BEFORE removing to ensure no one sees a
-				// ready-but-not-enqueued thread.
-				fEnqueued = false;
-				core->Remove(this);
-				core->PushBack(this, newPriority);
-				fEnqueued = true;
-			}
-
-			fEnqueuedInCPURunQueue = false;
+			atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
 		}
 	}
 }
@@ -370,7 +332,6 @@ inline void ThreadData::StopCPUTime(bigtime_t now) {
 	fThread->last_time = 0;
 	threadTimeLocker.Unlock();
 
-	// If the old thread's team has user time timers, check them now.
 	Team* team = fThread->team;
 	SpinLocker teamTimeLocker(team->time_lock);
 	if (team->HasActiveUserTimeUserTimers())
@@ -383,22 +344,13 @@ inline void ThreadData::SetStolenInterruptTime(bigtime_t interruptTime) {
 	bigtime_t delta =
 		interruptTime -
 		(bigtime_t)LoadAcquire64(fLastInterruptTime);
-	// Note: if interrupt_time goes backward (e.g. CPU accounting
-	// reset or wrap), delta is negative and fLastInterruptTime must be
-	// reset to the current interruptTime to restore correct accounting.
-	// Otherwise fLastInterruptTime stays at a "future" value permanently
-	// suppressing all stolen-time accounting for this thread.
 	if (delta > 0) {
 		AddRelease64(fStolenTime, (int64)delta);
 	} else if (delta < 0) {
-		// Clock went backward; reset baseline to avoid permanent suppression.
-		// Do not add the negative delta - the time is simply unaccountable.
 		dprintf("scheduler: interrupt_time went backward for thread %" B_PRId32
 				" (delta %" B_PRId64 "); resetting baseline\n",
 				fThread->id, delta);
 	}
-	// fLastInterruptTime is always updated via SetLastInterruptTime() by
-	// the caller; this function only handles the fStolenTime accumulation.
 }
 
 inline bigtime_t ThreadData::GetQuantumLeft() {
@@ -434,11 +386,6 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 	bigtime_t timeUsed =
 		now - (bigtime_t)LoadAcquire64(fQuantumStart);
 	ASSERT(timeUsed >= 0);
-	// Note: cap fTimeUsed accumulation. Under extremely rapid
-	// rescheduling, fTimeUsed can accumulate to near B_INT64_MAX before the
-	// quantum-end check fires. When that happens, quantum - fTimeUsed
-	// underflows to a large positive, granting an unintended stolen-time
-	// bonus. Cap at 2 * MaximumLatency() as a generous but safe upper bound.
 	bigtime_t timeUsedTotal =
 		(bigtime_t)AddAcquireRelease64(fTimeUsed, (int64)timeUsed) +
 		timeUsed;
@@ -458,7 +405,6 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 	bigtime_t timeLeft = quantum - timeUsedTotal;
 	timeLeft = max_c(bigtime_t(0), timeLeft);
 
-	// too little time left, it's better make the next quantum a bit longer
 	bigtime_t skipTime = Scheduler::MinimalQuantum() / 2;
 	if (hasYielded) {
 		timeLeft = 0;
@@ -485,11 +431,6 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 inline void ThreadData::Continues(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Note: fReady is written by GoesAway/Dies without holding the
-	// core run-queue lock. A concurrent CPU calling GoesAway on this thread
-	// while it is being rescheduled can clear fReady before Continues() checks
-	// it, causing a spurious assertion. Demote to a debug dprintf instead of
-	// a hard ASSERT, which would panic in this rare but legitimate race.
 	if (!fReady) {
 		dprintf(
 			"scheduler: Continues() called with fReady=false for thread "
@@ -524,13 +465,6 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 			}
 		}
 	}
-	// Note: DecrementTotalThreadCount (called from GoesAway via
-	// CPUGoesIdle) decrements fTotalThreadCount before the idle-transition
-	// check. Document that ThreadCount() callers (e.g.
-	// UpdatePriorityBoostScalable) may transiently see count-1 during this
-	// window. This is benign for the boost-scan decision (one missed scan
-	// quantum is acceptable) but callers must not rely on ThreadCount() == 0
-	// meaning the core is definitively empty.
 
 	if (!HasQuantumEnded(false, false, now)) {
 		fQuickStartCredit = true;
@@ -540,15 +474,6 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 	StoreRelease64(fLastInterruptTime, 0);
 
 	StoreRelease64(fWentSleep, (int64)now);
-	// Note: fCore can be set to NULL by a concurrent MigrateTo() call.
-	// The original code checked for NULL once then called GetActiveTime() and
-	// RemoveLoad() in separate statements - if fCore became NULL between the
-	// check and either call, both would dereference NULL.
-	// Fix: take ONE snapshot under a read of fCore, then use only the snapshot.
-	// MigrateTo() is only called from ChooseCoreAndCPU which holds
-	// CoreCPULocker; GoesAway is called from reschedule() which holds
-	// SchedulerModeLocker (read). These are different locks, so the race
-	// is real. The snapshot approach is the minimal safe fix.
 	{
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
@@ -599,54 +524,30 @@ inline void ThreadData::PutBack(bigtime_t now) {
 	_ComputeEffectivePriority(now);
 	int32 priority = GetEffectivePriority();
 
-	// Guard: Ensure destination core has space.
-	// In the unlikely case of overflow (kMaxThreadsPerCore), we cannot
-	// easily recover in PutBack as the thread is currently executing.
-	if (CheckCapacity() != B_OK) {
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+
+	if (CheckCapacity(cpu) != B_OK) {
 		panic("scheduler: capacity exceeded in PutBack for thread %" B_PRId32,
 			fThread->id);
 	}
 
-	if (fThread->pinned_to_cpu > 0) {
-		ASSERT(fThread->cpu != NULL);
-		CPUEntry* cpu = CPUEntry::GetCPU(fThread->cpu->cpu_num);
+	CPURunQueueLocker _(cpu);
+	ASSERT(!fEnqueued);
+	fEnqueued = true;
+	fEnqueuedInCPURunQueue = true;
+	atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
 
-		// If the thread is pinned but we are running on a different CPU, it
-		// means the pinned CPU was disabled. We should float until it comes
-		// back.
-		if (fThread->cpu->cpu_num != fThread->pinned_to_cpu - 1)
-			goto enqueue_core;
-
-		CPURunQueueLocker _(cpu);
-		ASSERT(!fEnqueued);
-		fEnqueued = true;
-		fEnqueuedInCPURunQueue = true;
-
-		cpu->PushFront(this, priority);
-	} else {
-	enqueue_core:
-		CoreEntry* core = Core();
-		CoreRunQueueLocker _(core);
-		ASSERT(!fEnqueued);
-		fEnqueued = true;
-		fEnqueuedInCPURunQueue = false;
-
-		core->PushFront(this, priority);
-	}
+	cpu->PushFront(this, priority);
 }
 
-inline status_t ThreadData::CheckCapacity() {
-	if (fThread->pinned_to_cpu > 0) {
-		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
-		return const_cast<ThreadRunQueue*>(cpu->RunQueue())->CheckCapacity(cpu->ThreadCount() + 1);
-	} else {
-		CoreEntry* core = Core();
-		if (core == NULL) return B_OK;
-		return const_cast<ThreadRunQueue*>(core->RunQueue())->CheckCapacity(core->CoreRunQueueThreadCount() + 1);
-	}
+inline status_t ThreadData::CheckCapacity(CPUEntry* targetCPU) {
+	if (targetCPU == NULL)
+		return B_OK;
+	return const_cast<ThreadRunQueue*>(targetCPU->RunQueue())->CheckCapacity(targetCPU->ThreadCount() + 1);
 }
 
-inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
+inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
+								bool& requestPreemption,
 								bool& updateInteraction, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -657,180 +558,80 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 
 	bool wasReady = fReady;
 
-	if (CheckCapacity() != B_OK)
+	if (CheckCapacity(cpu) != B_OK)
 		return false;
 
 	const int32 priority = GetEffectivePriority();
-	bool pinned = fThread->pinned_to_cpu > 0;
-	if (pinned) {
-		ASSERT(fThread->previous_cpu != NULL);
-		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
 
-		CPURunQueueLocker locker(cpu);
+	CPURunQueueLocker locker(cpu);
 
-		// Check if the pinned CPU is disabled under the lock
-		if (gCPU[cpu->ID()].disabled) {
-			locker.Unlock();
-			pinned = false;	 // float
-		} else {
-			if (!wasReady && !IsRealTime()) {
-				bigtime_t svt = cpu->SystemVirtualTime();
-				bigtime_t vrt = GetVirtualRuntime();
+	if (gCPU[cpu->ID()].disabled)
+		return false;
 
-				// Scale the lag floor to virtual time based on thread weight.
-				// vLagFloor = (kMaxLagFloor * 1000000) / weight
-				int64 weight = GetWeight();
-				if (weight <= 0)
-					weight = 1;
-				bigtime_t vLagFloor = (kMaxLagFloor * 1000000LL) / weight;
+	CoreEntry* core = cpu->Core();
 
-				if (vrt < svt - vLagFloor)
-					StoreRelease64(fThread->virtual_runtime, (int64)(svt - vLagFloor));
-
-				_UpdateDeadline(now);
-			}
-
-			// defer the gTotalRunnableThreads increment until after the
-			// CPUCount guard in the non-pinned path (see below).  For the
-			// pinned path the CPU liveness check happens under
-			// CPURunQueueLocker.
-			if (!wasReady && !IsIdle())
-				AddRelease(gTotalRunnableThreads, 1);
-
-			fReady = true;
-			fThread->state = B_THREAD_READY;
-
-			ASSERT(!fEnqueued);
-			fEnqueued = true;
-			fEnqueuedInCPURunQueue = true;
-
-			ThreadData* top = cpu->PeekThread();
-			wasRunQueueEmpty = (top == NULL || top->IsIdle());
-
-			bool isForeground = fIsForeground;
-
-			if (fQuickStartCredit || isForeground) {
-				cpu->PushFront(this, priority);
-				requestPreemption = true;
-				if (isForeground)
-					updateInteraction = true;
-			} else
-				cpu->PushBack(this, priority);
-		}
-	}
-
-	if (!pinned) {
-		// guard fCore NULL before constructing the RAII lockers.
-		// MigrateTo(NULL) can set fCore=NULL when all masked CPUs are disabled.
-		// Both CoreCPULocker and CoreRunQueueLocker dereference their argument
-		// in the constructor; a NULL fCore here causes a null-dereference panic
-		// before we even reach the existing null check below.
-		CoreEntry* coreSnapshot = atomic_pointer_get<CoreEntry>(&fCore);
-		if (coreSnapshot == NULL)
-			return false;
-
-		CoreCPULocker cpuLocker(coreSnapshot);
-		CoreRunQueueLocker locker(coreSnapshot);
-
-		// Note: re-check under the lock - fCore may have been set to
-		// NULL between the guard above and lock acquisition.  The explicit
-		// Unlock() calls were redundant: AutoLocker's destructor checks
-		// fLocked and will not double-unlock.  RAII handles cleanup correctly.
-		if (atomic_pointer_get<CoreEntry>(&fCore) != coreSnapshot)
-			return false;
-
-		CoreEntry* core = coreSnapshot;
-
-		// move the fStolen decrement AFTER the CPUCount guard so
-		// that a return-false path never leaves TotalThreadCount decremented
-		// without a corresponding enqueue to balance it.
-		// Note: AddLoad was previously called unconditionally before
-		// the CPUCount guard, leaving load permanently inflated when
-		// CPUCount==0 caused return false. Move AddLoad AFTER all guards.
-		if (fStolen) {
-			if (core->CPUCount() == 0) {
-				core->DecrementTotalThreadCount();
-				fStolen = false;
-				return false;
-			}
-			// Note: AddLoad happens here, after all early-return guards.
-			if (gTrackCoreLoad && !wasReady) {
-				bigtime_t timeSlept =
-					now - (bigtime_t)LoadAcquire64(fWentSleep);
-				bool updateLoad = timeSlept > 0;
-				core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad,
-							  now);
-				if (updateLoad) {
-					AddRelease64(fMeasureAvailableTime, (int64)timeSlept);
-					_ComputeNeededLoad(now);
-				}
-			}
-			core->DecrementTotalThreadCount();
-			fStolen = false;
-		} else if (core->CPUCount() == 0) {
-			return false;
-		} else if (!wasReady && gTrackCoreLoad) {
-			// Note: for non-stolen threads, AddLoad after CPUCount guard.
-			// Note: ensure AddLoad captures the full sleep time when a thread
-			// is woken up.
+	if (fStolen) {
+		if (gTrackCoreLoad && !wasReady) {
 			bigtime_t timeSlept =
 				now - (bigtime_t)LoadAcquire64(fWentSleep);
 			bool updateLoad = timeSlept > 0;
-			core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad, now);
+			core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad,
+						  now);
 			if (updateLoad) {
 				AddRelease64(fMeasureAvailableTime, (int64)timeSlept);
 				_ComputeNeededLoad(now);
 			}
 		}
-
-		if (!wasReady && !IsRealTime()) {
-			bigtime_t svt = core->SystemVirtualTime();
-			bigtime_t vrt = GetVirtualRuntime();
-
-			// Scale the lag floor to virtual time based on thread weight.
-			int64 weight = GetWeight();
-			if (weight <= 0)
-				weight = 1;
-			bigtime_t vLagFloor = (kMaxLagFloor * 1000000LL) / weight;
-
-			if (vrt < svt - vLagFloor)
-				StoreRelease64(fThread->virtual_runtime, (int64)(svt - vLagFloor));
-
-			_UpdateDeadline(now);
+		fStolen = false;
+	} else if (!wasReady && gTrackCoreLoad) {
+		bigtime_t timeSlept =
+			now - (bigtime_t)LoadAcquire64(fWentSleep);
+		bool updateLoad = timeSlept > 0;
+		core->AddLoad(fNeededLoad, fLoadMeasurementEpoch, !updateLoad, now);
+		if (updateLoad) {
+			AddRelease64(fMeasureAvailableTime, (int64)timeSlept);
+			_ComputeNeededLoad(now);
 		}
-
-		// defer the gTotalRunnableThreads increment until after the
-		// CPUCount guard in the non-pinned path.
-		if (!wasReady && !IsIdle())
-			AddRelease(gTotalRunnableThreads, 1);
-
-		fReady = true;
-		fThread->state = B_THREAD_READY;
-
-		ASSERT(!fEnqueued);
-		fEnqueued = true;
-		fEnqueuedInCPURunQueue = false;
-
-		ThreadData* top = core->PeekThread();
-		wasRunQueueEmpty = (top == NULL || top->IsIdle());
-
-		bool isForeground = fIsForeground;
-
-		if (fQuickStartCredit || isForeground) {
-			core->PushFront(this, priority);
-			requestPreemption = true;
-			if (isForeground)
-				updateInteraction = true;
-		} else
-			core->PushBack(this, priority);
 	}
-	// Note: Global run-queue counter update. gTotalRunnableThreads is
-	// incremented AFTER the CPUCount == 0 guards in both the pinned and
-	// non-pinned paths.  There is no return-false path after the increment;
-	// PushFront/PushBack are infallible.  The counter is therefore always
-	// matched by either a GoesAway/Dies decrement (when the thread leaves the
-	// ready state) or a symmetric Enqueue on the next wakeup. This comment
-	// documents that the ordering is intentional and correct.
+
+	if (!wasReady && !IsRealTime()) {
+		bigtime_t svt = cpu->SystemVirtualTime();
+		bigtime_t vrt = GetVirtualRuntime();
+
+		int64 weight = GetWeight();
+		if (weight <= 0)
+			weight = 1;
+		bigtime_t vLagFloor = (kMaxLagFloor * 1000000LL) / weight;
+
+		if (vrt < svt - vLagFloor)
+			StoreRelease64(fThread->virtual_runtime, (int64)(svt - vLagFloor));
+
+		_UpdateDeadline(now);
+	}
+
+	if (!wasReady && !IsIdle())
+		AddRelease(gTotalRunnableThreads, 1);
+
+	fReady = true;
+	fThread->state = B_THREAD_READY;
+
+	ASSERT(!fEnqueued);
+	fEnqueued = true;
+	fEnqueuedInCPURunQueue = true;
+	atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
+
+	ThreadData* top = cpu->PeekThread();
+	wasRunQueueEmpty = (top == NULL || top->IsIdle());
+
+	bool isForeground = fIsForeground;
+
+	if (fQuickStartCredit || isForeground) {
+		cpu->PushFront(this, priority);
+		requestPreemption = true;
+		if (isForeground)
+			updateInteraction = true;
+	} else
+		cpu->PushBack(this, priority);
 
 	fQuickStartCredit = false;
 	return true;
@@ -839,25 +640,17 @@ inline bool ThreadData::Enqueue(bool& wasRunQueueEmpty, bool& requestPreemption,
 inline bool ThreadData::Dequeue() {
 	SCHEDULER_ENTER_FUNCTION();
 
-	if (fEnqueuedInCPURunQueue) {
-		ASSERT(fThread->previous_cpu != NULL);
-		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
+	CPUEntry* cpu = EnqueuedCPU();
+	if (cpu == NULL)
+		return false;
 
-		CPURunQueueLocker _(cpu);
-		if (!fEnqueued)
-			return false;
-		cpu->Remove(this);
-		ASSERT(!fEnqueued);
-		return true;
-	}
-
-	CoreEntry* core = Core();
-	CoreRunQueueLocker _(core);
+	CPURunQueueLocker _(cpu);
 	if (!fEnqueued)
 		return false;
 
-	core->Remove(this);
+	cpu->Remove(this);
 	ASSERT(!fEnqueued);
+	atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, (CPUEntry*)NULL);
 	return true;
 }
 
@@ -871,16 +664,11 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 	if (delta <= 0 || IsRealTime())
 		return;
 
-	// Optimization: Pre-calculate lookahead horizon.
-	// We use a generous multiplier (100,000x) to allow threads to build
-	// substantial virtual-time credit/debt (~320s at 3.2ms latency)
-	// before clamping, which improves fairness for varied workloads.
 	if (maxLatency == 0) {
 		maxLatency = (bigtime_t)LoadAcquire64(sMaxLatency);
 		if (maxLatency == 0)
 			maxLatency = 3200;
 	}
-	// Horizon set to ~300 seconds in virtual nanoseconds.
 	const bigtime_t kLookahead = 300000000000LL;
 
 	if (svt == 0)
@@ -890,7 +678,7 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 		(svt > B_INT64_MAX - kLookahead) ? B_INT64_MAX : svt + kLookahead;
 
 	bigtime_t vRuntime = (bigtime_t)LoadAcquire64(fThread->virtual_runtime);
-	while (vRuntime < ceiling) {
+	while (fThread->virtual_runtime < ceiling) {
 		bigtime_t next = (vRuntime < ceiling - delta) ? vRuntime + delta : ceiling;
 
 		bigtime_t old = (bigtime_t)TestAndSet64(fThread->virtual_runtime, (int64)next,
@@ -906,8 +694,6 @@ inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t svt,
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (!IsRealTime() && !IsIdle()) {
-		// Note: Formal fair-share runtime update (nanosecond precision).
-		// delta = (active * 1000000) / Weight
 		int64 weight = GetWeight();
 		if (weight <= 0)
 			weight = 1;
@@ -915,8 +701,6 @@ inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t svt,
 
 		UpdateVirtualRuntime(delta, svt);
 
-		// Note: Update Lag (Service Lag in nanoseconds).
-		// Lag = (SystemVirtualTime - VirtualRuntime) * Weight / 1000
 		int64 lag = (svt - GetVirtualRuntime()) * weight / 1000;
 		StoreRelease64(fLag, lag);
 	}

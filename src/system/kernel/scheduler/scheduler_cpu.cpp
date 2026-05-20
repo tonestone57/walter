@@ -61,13 +61,13 @@ struct LocalNodeStealAction {
 
 		int32 coreIndex =
 			(int32)get_random_index(cpu->GetRandom(), victimCoreCount);
-		CoreEntry* victim = entry->GetCore(coreIndex);
+		CoreEntry* victimCore = entry->GetCore(coreIndex);
 
-		if (victim == NULL)
+		if (victimCore == NULL)
 			return false;
 
-		if ((entry->IdleCoreMask() &
-			 ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
+		CPUEntry* victim = victimCore->PeekMinimumLoadCPU();
+		if (victim == NULL || victim->ID() == cpu->ID())
 			return false;
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
@@ -134,13 +134,13 @@ struct NUMARandomStealAction {
 
 		int32 coreIndex =
 			(int32)get_random_index(cpu->GetRandom(), victimCoreCount);
-		CoreEntry* victim = entry->GetCore(coreIndex);
+		CoreEntry* victimCore = entry->GetCore(coreIndex);
 
-		if (victim == NULL)
+		if (victimCore == NULL)
 			return false;
 
-		if ((entry->IdleCoreMask() &
-			 ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
+		CPUEntry* victim = victimCore->PeekMinimumLoadCPU();
+		if (victim == NULL || victim->ID() == cpu->ID())
 			return false;
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
@@ -205,13 +205,13 @@ struct GlobalRandomStealAction {
 
 		int32 coreIndex =
 			(int32)get_random_index(cpu->GetRandom(), victimCoreCount);
-		CoreEntry* victim = entry->GetCore(coreIndex);
+		CoreEntry* victimCore = entry->GetCore(coreIndex);
 
-		if (victim == NULL)
+		if (victimCore == NULL)
 			return false;
 
-		if ((entry->IdleCoreMask() &
-			 ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0)
+		CPUEntry* victim = victimCore->PeekMinimumLoadCPU();
+		if (victim == NULL || victim->ID() == cpu->ID())
 			return false;
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
@@ -469,8 +469,6 @@ void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
-		if (priority >= B_DISPLAY_PRIORITY)
-			Core()->IncrementDisplayThreadCount();
 		if (!thread->IsRealTime())
 			AddWeight(thread->GetWeight());
 	}
@@ -486,8 +484,6 @@ void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 
 	if (!thread->IsIdle()) {
 		Core()->IncrementTotalThreadCount();
-		if (priority >= B_DISPLAY_PRIORITY)
-			Core()->IncrementDisplayThreadCount();
 		if (!thread->IsRealTime())
 			AddWeight(thread->GetWeight());
 	}
@@ -501,9 +497,6 @@ void CPUEntry::Remove(ThreadData* thread) {
 	// (defensive): capture the priority the thread was enqueued with to
 	// ensure symmetric counter updates.
 	int32 priority = thread->fEnqueuedPriority;
-	// Use GetEffectivePriority() for fDisplayThreadCount symmetry
-	// with PushFront/PushBack.
-	int32 priority = thread->GetEffectivePriority();
 
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
@@ -511,17 +504,9 @@ void CPUEntry::Remove(ThreadData* thread) {
 
 	if (!thread->IsIdle()) {
 		Core()->DecrementTotalThreadCount();
-		if (priority >= B_DISPLAY_PRIORITY)
-			Core()->DecrementDisplayThreadCount();
 		if (!thread->IsRealTime())
 			AddWeight(-thread->GetWeight());
 	}
-}
-
-ThreadData* CoreEntry::PeekThread() const {
-	SCHEDULER_ENTER_FUNCTION();
-	const_cast<ThreadRunQueue&>(fRunQueue).CheckEligibility(SystemVirtualTime());
-	return fRunQueue.PeekBest();
 }
 
 ThreadData* CPUEntry::PeekThread() const {
@@ -616,60 +601,51 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 	if (oldThread != NULL)
 		oldPriority = oldThread->GetEffectivePriority();
 
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
-	CoreRunQueueLocker coreLocker(core);
 	CPURunQueueLocker cpuLocker(this);
 
-	ThreadData* pinnedThread = PeekThread();
-	int32 pinnedPriority = -1;
-	if (pinnedThread != NULL)
-		pinnedPriority = pinnedThread->GetEffectivePriority();
+	ThreadData* nextThread = PeekThread();
+	int32 nextPriority = -1;
+	if (nextThread != NULL)
+		nextPriority = nextThread->GetEffectivePriority();
 
-	// Tiered search to avoid SMT contention:
-	// 1. Pinned threads (already peeked)
-	// 2. Shared threads if core is idle (no SMT contention)
-	// 3. Work-stealing from other physical cores (Phase 1-4)
-	// 4. Shared threads if core is busy (accept SMT contention)
-	ThreadData* sharedThread = NULL;
-	if (pinnedThread == NULL) {
-		if (core->CPUCount() == 1 || core->ThreadCount() == 0)
-			sharedThread = core->PeekThread();
+	// Search for work if the local queue is empty or low priority
+	if (nextThread == NULL) {
+		nextThread = _TryStealWorkL3(now);
 
-		if (sharedThread == NULL)
-			sharedThread = _TryStealWorkL3(now);
+		if (nextThread == NULL)
+			nextThread = _TryStealWorkNUMA(now);
 
-		if (sharedThread == NULL)
-			sharedThread = _TryStealWorkNUMA(now);
+		if (nextThread == NULL)
+			nextThread = _TryStealWorkGlobal(now);
 
-		if (sharedThread == NULL)
-			sharedThread = _TryStealWorkGlobal(now);
-
-		if (sharedThread == NULL)
-			sharedThread = core->PeekThread();
-	} else {
-		sharedThread = core->PeekThread();
+		if (nextThread != NULL)
+			nextPriority = nextThread->GetEffectivePriority();
 	}
 
-	bool sharedThreadIsFloating =
-		sharedThread != NULL && !sharedThread->IsEnqueued();
+	bool nextThreadIsFloating =
+		nextThread != NULL && !nextThread->IsEnqueued();
 
-	if (sharedThread == NULL && pinnedThread == NULL && oldThread == NULL)
+	if (nextThread == NULL && oldThread == NULL)
 		return NULL;
-
-	int32 sharedPriority = -1;
-	if (sharedThread != NULL)
-		sharedPriority = sharedThread->GetEffectivePriority();
 
 	// BMQ EEVDF selection logic: Real-Time threads (priority >= 100) always win.
 	if (oldPriority >= 100) {
-		if (oldPriority > pinnedPriority && oldPriority > sharedPriority) {
+		if (oldPriority > nextPriority) {
 			// case A: oldThread is best.
-			if (sharedThreadIsFloating) {
+			if (nextThreadIsFloating) {
 				// Re-enqueue stolen thread
 				cpuLocker.Unlock();
-				coreLocker.Unlock();
 				bool dummy1, dummy2, updateInteraction;
-				sharedThread->Enqueue(dummy1, dummy2, updateInteraction, now);
+				if (!nextThread->Enqueue(this, dummy1, dummy2, updateInteraction, now)) {
+					Thread* const thread = nextThread->GetThread();
+					dprintf("scheduler: WARNING: floating thread %" B_PRId32
+						" lost during RT selection - forcing to current CPU\n",
+						thread->id);
+					nextThread->MigrateTo(fCore, now);
+					if (!nextThread->Enqueue(this, dummy1, dummy2, updateInteraction, now)) {
+						panic("scheduler: CRITICAL: thread %" B_PRId32 " lost", thread->id);
+					}
+				}
 				if (updateInteraction)
 					scheduler_update_interaction_state(now);
 			}
@@ -677,32 +653,25 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 		}
 	}
 
-	int32 rest = max_c(pinnedPriority, sharedPriority);
-	if (oldPriority > rest || (!putAtBack && oldPriority == rest)) {
+	if (oldPriority > nextPriority || (!putAtBack && oldPriority == nextPriority)) {
 		// Case A: oldThread is best.
-		if (sharedThreadIsFloating) {
+		if (nextThreadIsFloating) {
 			cpuLocker.Unlock();
-			coreLocker.Unlock();
 
 			bool wasRunQueueEmpty;
 			bool requestPreemption;
 			bool updateInteraction;
-			if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
+			if (!nextThread->Enqueue(this, wasRunQueueEmpty, requestPreemption,
 									   updateInteraction, now)) {
-				// Note: cache the Thread* once; sharedThread->GetThread()
-				// is called multiple times below and the pointer must be
-				// consistent.
-				Thread* const stolenThread = sharedThread->GetThread();
+				Thread* const stolenThread = nextThread->GetThread();
 				if (!enqueue_safe(stolenThread, now)) {
 					dprintf(
 						"scheduler: WARNING: stolen thread %" B_PRId32
 						" lost during hot-unplug -- forcing to current CPU\n",
 						stolenThread->id);
-					sharedThread->MigrateTo(fCore, now);
+					nextThread->MigrateTo(fCore, now);
 					bool dummy1, dummy2;
-					// Note: check return value; log if the last-resort also
-					// fails.
-					if (!sharedThread->Enqueue(dummy1, dummy2,
+					if (!nextThread->Enqueue(this, dummy1, dummy2,
 											   updateInteraction, now)) {
 						dprintf(
 							"scheduler: CRITICAL: thread %" B_PRId32
@@ -713,71 +682,132 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 				}
 			}
 
-			// Note: call while NOT holding run-queue locks.
 			if (updateInteraction)
 				scheduler_update_interaction_state(now);
 		}
 		return oldThread;
 	}
 
-	if (sharedPriority > pinnedPriority) {
-		// Case B: sharedThread is best.
-		if (sharedThread->fStolen) {
-			core->DecrementTotalThreadCount();
-			sharedThread->fStolen = false;
+	// Case B: nextThread (either local or stolen) is best.
+	if (nextThreadIsFloating) {
+		if (nextThread->fStolen) {
+			// ACCOUNTING: fStolen threads have already incremented our core's
+			// TotalThreadCount in the steal action.
+			nextThread->fStolen = false;
 		}
-		if (sharedThread->Core() == core && !sharedThreadIsFloating)
-			core->Remove(sharedThread);
-
-		return sharedThread;
+		return nextThread;
 	}
 
-	// Case C: pinnedThread is best (or fallback).
-	// We MUST remove the thread while holding the locks to avoid a race
-	// condition.
-	ThreadData* nextThread = NULL;
-	if (pinnedThread != NULL && pinnedThread->IsEnqueued()) {
-		Remove(pinnedThread);
-		nextThread = pinnedThread;
+	// nextThread is local and enqueued.
+	if (nextThread->IsEnqueued()) {
+		Remove(nextThread);
 	} else {
-		// pinnedThread was stolen while we were stealing/peeking; fallback.
+		// Race: local thread was stolen; fallback.
 		nextThread = PeekThread();
 		if (nextThread != NULL)
 			Remove(nextThread);
 	}
 
-	if (sharedThreadIsFloating) {
-		// We decided to run a pinned thread; put back the stolen shared thread.
-		cpuLocker.Unlock();
-		coreLocker.Unlock();
+	return nextThread;
+}
 
-		bool wasRunQueueEmpty;
-		bool requestPreemption;
-		bool updateInteraction;
-		if (!sharedThread->Enqueue(wasRunQueueEmpty, requestPreemption,
-								   updateInteraction, now)) {
-			Thread* const thread = sharedThread->GetThread();
-			if (!enqueue_safe(thread, now)) {
-				dprintf("scheduler: WARNING: shared thread %" B_PRId32
-						" lost during hot-unplug -- forcing to current CPU\n",
-						thread->id);
-				sharedThread->MigrateTo(fCore, now);
-				bool dummy1, dummy2;
-				if (!sharedThread->Enqueue(dummy1, dummy2, updateInteraction,
-										   now)) {
-					dprintf("scheduler: CRITICAL: thread %" B_PRId32
-							" could not be re-enqueued after forced migration;"
-							" scheduler state is inconsistent\n",
-							thread->id);
+ThreadData* CPUEntry::StealThreadLockless(int32& stolenPriority, int32 thiefCPU) {
+	SCHEDULER_ENTER_FUNCTION();
+
+	bigtime_t svt = SystemVirtualTime();
+
+	// Lock-Free Bit-Stealing Phase 1: Real-Time threads
+	uint32 rtBitmap = fRunQueue.GetRealTimeBitmap();
+	while (rtBitmap != 0) {
+		int32 index = fls(rtBitmap) - 1;
+		if (index < 0) break;
+
+		// Atomic Steal: Attempt to claim the RT bin
+		if (fRunQueue.TestAndClearRTAtomic(index)) {
+			// Success! We claimed the bin bit. Now acquire the lock to safely extract.
+			if (TryLockRunQueue()) {
+				ThreadData* thread = fRunQueue.GetRTBinHead(index);
+
+				// Verify affinity and availability
+				while (thread != NULL) {
+					const CPUSet& threadMask = thread->GetThread()->cpumask;
+					if (threadMask.IsEmpty() || threadMask.GetBit(thiefCPU)) {
+						stolenPriority = thread->GetThread()->priority;
+						Remove(thread);
+						// If the bin is NOT empty, we must restore the bit so
+						// others can steal.
+						if (!fRunQueue.IsRTBinEmpty(index))
+							fRunQueue.RestoreRTBitAtomic(index);
+						return thread;	// LOCK HELD upon return!
+					}
+					thread = fRunQueue.GetNextRT(thread, index);
 				}
+
+				// No suitable thread found in this bin; restore bit, unlock
+				// and continue.
+				if (!fRunQueue.IsRTBinEmpty(index))
+					fRunQueue.RestoreRTBitAtomic(index);
+				UnlockRunQueue();
+			} else {
+				// Failed to acquire lock; restore bit and continue.
+				fRunQueue.RestoreRTBitAtomic(index);
 			}
 		}
-
-		if (updateInteraction)
-			scheduler_update_interaction_state(now);
+		rtBitmap &= ~(1U << index);
 	}
 
-	return nextThread;
+	// Lock-Free Bit-Stealing Phase 2: FairShare (EEVDF) bins
+	native_cpu_mask_t fliBitmap = fRunQueue.GetFirstLevelBitmap();
+	while (fliBitmap != 0) {
+		int32 fli = scheduler_ctz(fliBitmap);
+		if (fli < 0) break;
+
+		native_cpu_mask_t sliBitmap = fRunQueue.GetSecondLevelBitmap(fli);
+		while (sliBitmap != 0) {
+			int32 sli = scheduler_ctz(sliBitmap);
+			if (sli < 0) break;
+
+			// Atomic Steal: Attempt to claim the FairShare bin
+			if (fRunQueue.TestAndClearSliAtomic(fli, sli)) {
+				if (TryLockRunQueue()) {
+					ThreadData* thread = fRunQueue.GetSliBinHead(fli, sli);
+
+					while (thread != NULL) {
+						const CPUSet& threadMask = thread->GetThread()->cpumask;
+						if (threadMask.IsEmpty() ||
+							threadMask.GetBit(thiefCPU)) {
+							// Apply EEVDF "Laggiest Wins" policy for steals
+							int64 lag = (svt - thread->GetVirtualRuntime()) *
+										thread->GetWeight() / 1000;
+							if (lag > 0) {
+								stolenPriority =
+									thread->GetEffectivePriority();
+								Remove(thread);
+								// Restore bit if bin still contains threads.
+								if (!fRunQueue.IsSliBinEmpty(fli, sli))
+									fRunQueue.RestoreSliBitAtomic(fli, sli);
+								return thread;	// LOCK HELD upon return!
+							}
+						}
+						thread = fRunQueue.GetNextSli(thread, fli, sli);
+					}
+
+					// Restore bit if bin still contains threads or if no thread
+					// was eligible.
+					if (!fRunQueue.IsSliBinEmpty(fli, sli))
+						fRunQueue.RestoreSliBitAtomic(fli, sli);
+					UnlockRunQueue();
+				} else {
+					// Failed to acquire lock; restore bit and continue.
+					fRunQueue.RestoreSliBitAtomic(fli, sli);
+				}
+			}
+			sliBitmap &= ~((native_cpu_mask_t)1 << sli);
+		}
+		fliBitmap &= ~((native_cpu_mask_t)1 << fli);
+	}
+
+	return NULL;
 }
 
 
@@ -892,15 +922,14 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 		if (index >= registeredCores)
 			index -= registeredCores;
 
-		CoreEntry* victim = package->GetCore(index);
+		CoreEntry* victimCore = package->GetCore(index);
 
-		if (victim == NULL || victim == fCore || victim->CPUCount() == 0)
+		if (victimCore == NULL || victimCore == fCore || victimCore->CPUCount() == 0)
 			continue;
 
-		if ((package->IdleCoreMask() &
-			 ((native_cpu_mask_t)1 << victim->PackageIndex())) != 0) {
+		CPUEntry* victim = victimCore->PeekMinimumLoadCPU();
+		if (victim == NULL || victim->ID() == fCPUNumber)
 			continue;
-		}
 
 		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
 			victim->RunQueue()->GetFirstLevelBitmap() == 0)
@@ -1087,9 +1116,7 @@ CoreEntry::CoreEntry()
 	  fCPUCount(0),
 	  fCapacity(kDefaultCapacity),
 	  fIdleCPUCount(0),
-	  fThreadCount(0),
 	  fTotalThreadCount(0),
-	  fDisplayThreadCount(0),
 	  fActiveTime(0),
 	  fLoad(0),
 	  fCombinedLoad(0),
@@ -1097,7 +1124,6 @@ CoreEntry::CoreEntry()
 	  fScoreFactor(1 << 16),
 	  fLocalIndices(0) {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
-	B_INITIALIZE_SPINLOCK(&fQueueLock);
 }
 
 
@@ -1114,172 +1140,6 @@ void CoreEntry::Init(int32 id, PackageEntry* package) {
 	new (&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
 	if (fCPUHeap.InitCheck() != B_OK)
 		panic("CoreEntry::Init: failed to allocate CPU heap");
-}
-
-
-void CoreEntry::PushFront(ThreadData* thread, int32 priority) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	// Note: Formal EEVDF Eligibility.
-	// Threads only enter the active heap when mathematically eligible.
-	// In a shared core queue, we use a global approximation or the waker's CPU SVT.
-
-	thread->fEnqueuedPriority = priority;
-
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-	fRunQueue.PushFront(thread, priority, cpu->SystemVirtualTime());
-	IncrementThreadCount();
-	IncrementTotalThreadCount();
-	if (priority >= B_DISPLAY_PRIORITY)
-		IncrementDisplayThreadCount();
-}
-
-
-void CoreEntry::PushBack(ThreadData* thread, int32 priority) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	thread->fEnqueuedPriority = priority;
-
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-	fRunQueue.PushBack(thread, priority, cpu->SystemVirtualTime());
-	IncrementThreadCount();
-	IncrementTotalThreadCount();
-	if (priority >= B_DISPLAY_PRIORITY)
-		IncrementDisplayThreadCount();
-}
-
-
-void CoreEntry::Remove(ThreadData* thread) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	ASSERT(!thread->IsIdle());
-	ASSERT(thread->IsEnqueued());
-
-	// (defensive): capture the enqueued priority to ensure consistent
-	// fDisplayThreadCount accounting.
-	int32 priority = thread->fEnqueuedPriority;
-	// Use GetEffectivePriority() for fDisplayThreadCount symmetry.
-	int32 priority = thread->GetEffectivePriority();
-
-	thread->SetDequeued();
-
-	DecrementThreadCount();
-	DecrementTotalThreadCount();
-	if (priority >= B_DISPLAY_PRIORITY)
-		DecrementDisplayThreadCount();
-	fRunQueue.Remove(thread);
-}
-
-ThreadData* CoreEntry::StealThread(int32& stolenPriority, int32 thiefCPU) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	// Note: Formal EEVDF Steal Criteria: "The Laggiest Wins".
-	// Unlike traditional schedulers, we prefer threads with the
-	// highest positive Lag (most under-served).
-
-	const_cast<ThreadRunQueue&>(fRunQueue).CheckEligibility(SystemVirtualTime());
-
-	// Thief prefers cores with lower total weight pressure.
-	// (Target pressure comparison is handled in _TryStealWork)
-
-	bigtime_t svt = SystemVirtualTime();
-	ThreadData* thread = fRunQueue.PeekBest(ThreadDataLagCompare(svt), StealThreadPredicate(thiefCPU));
-
-	if (thread != NULL) {
-		// Only steal if thread has positive lag (under-served)
-		int64 lag = (svt - thread->GetVirtualRuntime()) * thread->GetWeight() / 1000;
-		if (lag <= 0)
-			return NULL;
-
-		stolenPriority = thread->GetEffectivePriority();
-		Remove(thread);
-	}
-	return thread;
-}
-
-ThreadData* CoreEntry::StealThreadLockless(int32& stolenPriority, int32 thiefCPU) {
-	SCHEDULER_ENTER_FUNCTION();
-
-	bigtime_t svt = SystemVirtualTime();
-
-	// Lock-Free Bit-Stealing Phase 1: Real-Time threads
-	uint32 rtBitmap = fRunQueue.GetRealTimeBitmap();
-	while (rtBitmap != 0) {
-		int32 index = fls(rtBitmap) - 1;
-		if (index < 0) break;
-
-		// Atomic Steal: Attempt to claim the RT bin
-		if (fRunQueue.TestAndClearRTAtomic(index)) {
-			// Success! We claimed the bin bit. Now acquire the lock to safely extract.
-			LockRunQueue();
-			ThreadData* thread = fRunQueue.GetRTBinHead(index);
-
-			// Verify affinity and availability
-			while (thread != NULL) {
-				const CPUSet& threadMask = thread->GetThread()->cpumask;
-				if (threadMask.IsEmpty() || threadMask.GetBit(thiefCPU)) {
-					stolenPriority = thread->GetThread()->priority;
-					Remove(thread);
-					// If the bin is NOT empty, we must restore the bit so others can steal.
-					if (!fRunQueue.IsRTBinEmpty(index))
-						fRunQueue.RestoreRTBitAtomic(index);
-					return thread; // LOCK HELD upon return!
-				}
-				thread = fRunQueue.GetNextRT(thread, index);
-			}
-
-			// No suitable thread found in this bin; restore bit, unlock and continue.
-			if (!fRunQueue.IsRTBinEmpty(index))
-				fRunQueue.RestoreRTBitAtomic(index);
-			UnlockRunQueue();
-		}
-		rtBitmap &= ~(1U << index);
-	}
-
-	// Lock-Free Bit-Stealing Phase 2: FairShare (EEVDF) bins
-	native_cpu_mask_t fliBitmap = fRunQueue.GetFirstLevelBitmap();
-	while (fliBitmap != 0) {
-		int32 fli = scheduler_ctz(fliBitmap);
-		if (fli < 0) break;
-
-		native_cpu_mask_t sliBitmap = fRunQueue.GetSecondLevelBitmap(fli);
-		while (sliBitmap != 0) {
-			int32 sli = scheduler_ctz(sliBitmap);
-			if (sli < 0) break;
-
-			// Atomic Steal: Attempt to claim the FairShare bin
-			if (fRunQueue.TestAndClearSliAtomic(fli, sli)) {
-				LockRunQueue();
-				ThreadData* thread = fRunQueue.GetSliBinHead(fli, sli);
-
-				while (thread != NULL) {
-					const CPUSet& threadMask = thread->GetThread()->cpumask;
-					if (threadMask.IsEmpty() || threadMask.GetBit(thiefCPU)) {
-						// Apply EEVDF "Laggiest Wins" policy for steals
-						int64 lag = (svt - thread->GetVirtualRuntime()) * thread->GetWeight() / 1000;
-						if (lag > 0) {
-							stolenPriority = thread->GetEffectivePriority();
-							Remove(thread);
-							// Restore bit if bin still contains threads.
-							if (!fRunQueue.IsSliBinEmpty(fli, sli))
-								fRunQueue.RestoreSliBitAtomic(fli, sli);
-							return thread; // LOCK HELD upon return!
-						}
-					}
-					thread = fRunQueue.GetNextSli(thread, fli, sli);
-				}
-
-				// Restore bit if bin still contains threads or if no thread was eligible.
-				if (!fRunQueue.IsSliBinEmpty(fli, sli))
-					fRunQueue.RestoreSliBitAtomic(fli, sli);
-				UnlockRunQueue();
-			}
-			sliBitmap &= ~((native_cpu_mask_t)1 << sli);
-		}
-		fliBitmap &= ~((native_cpu_mask_t)1 << fli);
-	}
-
-	return NULL;
 }
 
 
@@ -1382,43 +1242,6 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 		if (oldIdleCount == 1)
 			fPackage->RemoveIdleCore(this);
 
-		// Note: use CoreRunQueueLocker per-iteration to prevent
-		// a concurrent work-stealer (which uses TryLockRunQueue) from
-		// stealing a thread between PeekMaximum and Remove, leaving
-		// fThreadCount positive with an empty queue.
-		// The steal path checks CPUCount()==0 before adding stolen threads,
-		// so once we set oldCPUCount==1 no new threads can arrive.
-		while (true) {
-			ThreadData* threadData;
-			{
-				CoreRunQueueLocker locker(this);
-				threadData = fRunQueue.PeekMaximum();
-				if (threadData == NULL)
-					break;
-
-				Remove(threadData);
-			}
-
-			ASSERT(threadData->Core() == NULL);
-			// Note: threadPostProcessing calls enqueue() which calls
-			// Enqueue() which increments gTotalRunnableThreads for non-idle
-			// threads. If enqueue() subsequently fails (all cores disabled),
-			// it returns false without a matching decrement. Detect this case
-			// and decrement manually to avoid a permanent counter leak.
-			threadPostProcessing(threadData);
-		}
-
-		// Note: after drain, explicitly verify fThreadCount is zero.
-		// If a concurrent steal occurred in the narrow window, fThreadCount
-		// may be positive. Force it to zero since CPUCount==0 prevents
-		// further enqueues, making any residual count a permanent leak.
-		int32 residual = LoadAcquire(fThreadCount);
-		if (residual != 0) {
-			dprintf("CoreEntry::RemoveCPU: fThreadCount=%" B_PRId32
-					" after drain (expected 0) - resetting\n",
-					residual);
-			StoreRelease(fThreadCount, 0);
-		}
 	}
 
 	// Use B_INT32_MIN instead of the implicit magic -1.  B_INT32_MIN is
@@ -1457,12 +1280,27 @@ bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
-	CoreRunQueueLocker locker(const_cast<CoreEntry*>(this));
-	ThreadData* thread =
-		fRunQueue.PeekBest(ThreadDataVRuntimeCompare(), ThreadDataOptimal());
-	if (thread == NULL)
-		return 0;
-	return thread->GetVirtualRuntime();
+	// Aggregate min vruntime across all CPUs in the core
+	bigtime_t minVRuntime = 0;
+	bool found = false;
+
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int i = 0; i < kWords; i++) {
+		uint32 bits = fCPUSet.Bits(i);
+		while (bits != 0) {
+			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
+			int cpuID = i * 32 + bit;
+			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
+			bigtime_t vrt = cpu->GetMinVirtualRuntime();
+			if (vrt > 0 && (!found || vrt < minVRuntime)) {
+				minVRuntime = vrt;
+				found = true;
+			}
+			bits &= ~(1U << bit);
+		}
+	}
+
+	return minVRuntime;
 }
 
 CPUEntry* CoreEntry::PeekMinimumLoadCPU() {
@@ -1572,7 +1410,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 			//
 			// Note: add iteration limit to the inner CAS loop to
 			// prevent livelock under pathological contention. After
-			// kMaxFLoadRetries failures we read the current value and apply
+			// kMaxFLoadRetries followers we read the current value and apply
 			// the delta as best-effort; slight inaccuracy is acceptable
 			// versus spinning indefinitely with interrupts disabled.
 			// The outer CAS on fCombinedLoad already has its own retry, so
@@ -2125,7 +1963,17 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 }
 
 /* static */ void DebugDumper::DumpCoreRunQueue(CoreEntry* core) {
-	core->fRunQueue.Dump();
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int i = 0; i < kWords; i++) {
+		uint32 bits = core->CPUMask().Bits(i);
+		while (bits != 0) {
+			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
+			int cpuID = i * 32 + bit;
+			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
+			DumpCPURunQueue(cpu);
+			bits &= ~(1U << bit);
+		}
+	}
 }
 
 /* static */ void DebugDumper::DumpCoreEntryLoad(CoreEntry* entry) {
@@ -2179,14 +2027,8 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 
 static int dump_run_queue(int /* argc */, char** /* argv */) {
 	int32 cpuCount = smp_get_num_cpus();
-	int32 coreCount = gCoreCount;
 
-	for (int32 i = 0; i < coreCount; i++) {
-		kprintf("%sCore %" B_PRId32 " run queue:\n", i > 0 ? "\n" : "", i);
-		DebugDumper::DumpCoreRunQueue(&gCoreEntries[i]);
-	}
-
-	for (int32 i = 0; i < cpuCount; i++)
+	for (int i = 0; i < cpuCount; i++)
 		DebugDumper::DumpCPURunQueue(&gCPUEntries[i]);
 
 	return 0;

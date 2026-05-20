@@ -61,9 +61,7 @@ static_assert(kMaxCoresPerPackage <= (int32)(sizeof(native_cpu_mask_t) * 8),
 			  "native_cpu_mask_t too narrow");
 
 // The run queues. Holds the threads ready to run ordered by virtual deadline.
-// One queue per schedulable target per core. Additionally, each
-// logical processor has its sPinnedRunQueues used for scheduling
-// pinned threads.
+// One queue per logical processor.
 class ThreadRunQueue : public RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY,
 									   ThreadDataDeadlineCompare> {
 public:
@@ -110,6 +108,7 @@ public:
 	void PushFront(ThreadData* thread, int32 priority);
 	void PushBack(ThreadData* thread, int32 priority);
 	void Remove(ThreadData* thread);
+	ThreadData* StealThreadLockless(int32& stolenPriority, int32 thiefCPU);
 	ThreadData* PeekThread() const;
 	ThreadData* PeekIdleThread() const;
 	// Required by UpdatePriorityBoostScalable in scheduler.cpp,
@@ -245,47 +244,9 @@ public:
 		AddRelease(fTotalThreadCount, -1);
 	}
 
-	inline int32 DisplayThreadCount() const {
-		return LoadAcquire(fDisplayThreadCount);
-	}
-	inline void IncrementDisplayThreadCount() {
-		AddRelease(fDisplayThreadCount, 1);
-	}
-	inline void DecrementDisplayThreadCount() {
-		AddRelease(fDisplayThreadCount, -1);
-	}
-	inline int32 CoreRunQueueThreadCount() const {
-		return LoadAcquire(fThreadCount);
-	}
-
-	inline void LockRunQueue();
-	inline bool TryLockRunQueue();
-	inline void UnlockRunQueue();
-
-	inline void IncrementThreadCount() { AddRelease(fThreadCount, 1); }
-	inline void DecrementThreadCount() { AddRelease(fThreadCount, -1); }
-	// Note: lockless check for display-priority threads in the
-	// run queue.  Used by ComputeQuantum to avoid TryLockRunQueue on the
-	// scheduling hot path.
+	// Note: lockless check for display-priority threads in any
+	// logical processor's run queue.
 	inline bool HasHighPriorityThread() const;
-
-	ThreadData* StealThread(int32& stolenPriority, int32 thiefCPU);
-	ThreadData* StealThreadLockless(int32& stolenPriority, int32 thiefCPU);
-
-	void PushFront(ThreadData* thread, int32 priority);
-	void PushBack(ThreadData* thread, int32 priority);
-	void Remove(ThreadData* thread);
-	ThreadData* PeekThread() const;
-	inline ThreadData* PeekHead() const { return fRunQueue.PeekMaximum(); }
-	inline const ThreadRunQueue* RunQueue() const { return &fRunQueue; }
-
-	inline ThreadRunQueue::ConstIterator GetConstIterator() const {
-		return fRunQueue.GetConstIterator();
-	}
-
-	inline void CheckEligibility(bigtime_t svt) {
-		fRunQueue.CheckEligibility(svt);
-	}
 
 	inline bigtime_t SystemVirtualTime() const {
 		return (bigtime_t)LoadAcquire64(fSystemVirtualTime);
@@ -335,7 +296,7 @@ public:
 private:
 	void _UpdateLoad(bool forceUpdate = false, bigtime_t now = 0);
 
-	static void _UnassignThread(Thread* thread, void* core);
+	static void _UnassignThread(Thread* thread, void* data);
 
 	bigtime_t fActiveTime __attribute__((aligned(8)));
 
@@ -359,11 +320,7 @@ private:
 	CPUPriorityHeap fCPUHeap;
 	spinlock fCPULock;
 
-	spinlock fQueueLock;
-	int32 fThreadCount __attribute__((aligned(8)));
 	int32 fTotalThreadCount __attribute__((aligned(8)));
-	int32 fDisplayThreadCount __attribute__((aligned(8)));
-	ThreadRunQueue fRunQueue;
 
 	int32 fLoad;
 
@@ -577,20 +534,6 @@ inline CPUPriorityHeap* CoreEntry::CPUHeap() {
 	return &fCPUHeap;
 }
 
-inline void CoreEntry::LockRunQueue() {
-	SCHEDULER_ENTER_FUNCTION();
-	acquire_spinlock(&fQueueLock);
-}
-
-inline bool CoreEntry::TryLockRunQueue() {
-	SCHEDULER_ENTER_FUNCTION();
-	return try_acquire_spinlock(&fQueueLock);
-}
-
-inline void CoreEntry::UnlockRunQueue() {
-	SCHEDULER_ENTER_FUNCTION();
-	release_spinlock(&fQueueLock);
-}
 
 inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 	SCHEDULER_ENTER_FUNCTION();
@@ -919,12 +862,21 @@ inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 inline void PackageEntry::ReadLockCore() { acquire_read_spinlock(&fCoreLock); }
 
 inline bool CoreEntry::HasHighPriorityThread() const {
-	// Note: lockless check for high-priority threads at the heap root.
-	ThreadData* root = fRunQueue.PeekRoot();
-	if (root == NULL)
-		return false;
-
-	return root->GetEffectivePriority() >= B_DISPLAY_PRIORITY;
+	// Note: lockless check for high-priority threads across all CPUs in the core.
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int i = 0; i < kWords; i++) {
+		uint32 bits = fCPUSet.Bits(i);
+		while (bits != 0) {
+			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
+			int cpuID = i * 32 + bit;
+			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
+			ThreadData* root = cpu->PeekThread();
+			if (root != NULL && root->GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+				return true;
+			bits &= ~(1U << bit);
+		}
+	}
+	return false;
 }
 
 inline void PackageEntry::ReadUnlockCore() {
