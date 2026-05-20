@@ -278,6 +278,8 @@ static inline T* atomic_pointer_test_and_set(T* volatile* pointer, T* newValue,
 
 }  // namespace Scheduler
 
+extern int64 gDeadlineBucketSize __attribute__((aligned(8)));
+
 #include "RunQueue.h"
 #include "scheduler_modes.h"
 
@@ -408,8 +410,6 @@ extern int32 gRandomSamples;
 
 extern const bigtime_t kMinMeasurementWindow __attribute__((aligned(8)));
 extern const int kLoadClampMax;
-
-extern int64 gDeadlineBucketSize __attribute__((aligned(8)));
 
 extern int32 gTotalRunnableThreads;
 extern uint64 gIdleMask __attribute__((aligned(8)));

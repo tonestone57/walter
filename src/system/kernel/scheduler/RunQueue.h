@@ -16,15 +16,40 @@
 #include "scheduler_profiler.h"
 
 // For BMQ EEVDF mapping
-#if SCHEDULER_MASK_IS_64_BIT
-static const int32 kPrimaryBins = 64;
-static const int32 kSecondaryBins = 64;
-static const int32 kSecondaryBinsShift = 6;
-#else
-static const int32 kPrimaryBins = 32;
+static const int32 kPrimaryBins = 16;
 static const int32 kSecondaryBins = 32;
 static const int32 kSecondaryBinsShift = 5;
-#endif
+
+/*
+ * Haiku OS non-realtime priority mapping table for a 16x32 BMQ-EEVDF matrix.
+ * Maps priority values 0-99 to matrix rows 0-15.
+ * Real-time threads (100+) bypass this matrix.
+ */
+static const uint8 kPriorityToRowMap[100] = {
+    /* 0 - 9   */ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    /* 10 - 19 */ 2, 2, 2, 2, 2, 3, 3, 3, 4, 4,
+    /* 20 - 29 */ 5, 6, 6, 7, 7, 8, 8, 8, 9, 9,
+    /* 30 - 39 */ 10, 11, 11, 11, 11, 12, 12, 12, 12, 12,
+    /* 40 - 49 */ 13, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+    /* 50 - 59 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    /* 60 - 69 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    /* 70 - 79 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    /* 80 - 89 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    /* 90 - 99 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15
+};
+
+inline uint8 GetSchedulerMatrixRow(int32 priority) {
+    // Safety clamp for invalid inputs
+    if (unlikely(priority < 0)) return 0;
+
+    // Real-Time subsystem escape hatch
+    if (unlikely(priority >= 100)) {
+        return 15;
+    }
+
+    // Direct, single-cycle O(1) cache-friendly lookup
+    return kPriorityToRowMap[priority];
+}
 
 template <typename Element>
 class RunQueueStandardGetLink {
@@ -58,7 +83,7 @@ class RunQueue {
 public:
 	RunQueue();
 
-	inline bool IsEmpty() const { return LoadAcquire(fTotalCount) == 0; }
+	inline bool IsEmpty() const { return Scheduler::LoadAcquire(fTotalCount) == 0; }
 
 	void PushBack(Element* element, unsigned int priority, bigtime_t svt = 0);
 	void PushFront(Element* element, unsigned int priority, bigtime_t svt = 0);
@@ -78,40 +103,40 @@ public:
 
 	inline native_cpu_mask_t GetFirstLevelBitmap() const
 	{
-		return cpu_mask_get_atomic(&fFirstLevelBitmap);
+		return Scheduler::cpu_mask_get_atomic(&fFirstLevelBitmap);
 	}
 	inline native_cpu_mask_t GetSecondLevelBitmap(int fli) const
 	{
-		return cpu_mask_get_atomic(&fSecondLevelBitmap[fli]);
+		return Scheduler::cpu_mask_get_atomic(&fSecondLevelBitmap[fli]);
 	}
 	inline uint32 GetRealTimeBitmap() const
 	{
-		return (uint32)LoadAcquire(fRealTimeBitmap);
+		return (uint32)Scheduler::LoadAcquire(fRealTimeBitmap);
 	}
 
 	inline bool TestAndClearSliAtomic(int fli, int sli)
 	{
 		native_cpu_mask_t bit = (native_cpu_mask_t)1 << sli;
-		native_cpu_mask_t old = cpu_mask_and_atomic(&fSecondLevelBitmap[fli], ~bit);
+		native_cpu_mask_t old = Scheduler::cpu_mask_and_atomic(&fSecondLevelBitmap[fli], ~bit);
 		return (old & bit) != 0;
 	}
 
 	inline bool TestAndClearRTAtomic(int index)
 	{
 		uint32 bit = 1U << index;
-		uint32 old = (uint32)AndAtomic(fRealTimeBitmap, (int32)~bit);
+		uint32 old = (uint32)Scheduler::AndAtomic(fRealTimeBitmap, (int32)~bit);
 		return (old & bit) != 0;
 	}
 
 	inline void RestoreRTBitAtomic(int index)
 	{
-		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+		Scheduler::OrAtomic(fRealTimeBitmap, (int32)(1U << index));
 	}
 
 	inline void RestoreSliBitAtomic(int fli, int sli)
 	{
-		cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
-		cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
+		Scheduler::cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
+		Scheduler::cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
 	}
 
 	inline Element* GetRTBinHead(int index) const { return fRealTimeQueues[index].Head(); }
@@ -124,8 +149,8 @@ public:
 
 	class ConstIterator {
 	public:
-		ConstIterator() : fQueue(NULL), fFLI(0), fSLI(0), fRT(0), fCurrent(NULL) {}
-		ConstIterator(const RunQueue* queue) : fQueue(queue), fFLI(0), fSLI(0), fRT(0), fCurrent(NULL)
+		ConstIterator() : fQueue(NULL), fFLI(kPrimaryBins - 1), fSLI(0), fRT(0), fCurrent(NULL) {}
+		ConstIterator(const RunQueue* queue) : fQueue(queue), fFLI(kPrimaryBins - 1), fSLI(0), fRT(0), fCurrent(NULL)
 		{
 			_Advance();
 		}
@@ -154,7 +179,7 @@ public:
 					fSLI++;
 					if (fSLI >= kSecondaryBins) {
 						fSLI = 0;
-						fFLI++;
+						fFLI--;
 					}
 					_AdvanceBin();
 					return;
@@ -174,14 +199,14 @@ public:
 
 		void _AdvanceBin()
 		{
-			while (fFLI < kPrimaryBins) {
+			while (fFLI >= 0) {
 				while (fSLI < kSecondaryBins) {
 					fCurrent = fQueue->fQueues[fFLI][fSLI].Head();
 					if (fCurrent != NULL) return;
 					fSLI++;
 				}
 				fSLI = 0;
-				fFLI++;
+				fFLI--;
 			}
 			fCurrent = NULL;
 		}
@@ -196,11 +221,11 @@ public:
 	Element* GetHead(unsigned int priority) const;
 
 private:
-	void _GetIndices(bigtime_t deadline, int32& fli, int32& sli) const;
+	void _GetIndices(bigtime_t deadline, int32 priority, int32& fli, int32& sli) const;
 
 	native_cpu_mask_t fFirstLevelBitmap;
-	native_cpu_mask_t fSecondLevelBitmap[kPrimaryBins];
-	DoublyLinkedList<Element, GetLink> fQueues[kPrimaryBins][kSecondaryBins];
+	native_cpu_mask_t fSecondLevelBitmap[kPrimaryBins] __attribute__((aligned(64)));
+	DoublyLinkedList<Element, GetLink> fQueues[kPrimaryBins][kSecondaryBins] __attribute__((aligned(64)));
 
 	uint32 fRealTimeBitmap;
 	DoublyLinkedList<Element, GetLink> fRealTimeQueues[21];
@@ -233,32 +258,24 @@ void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt)
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sli) const
+void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32 priority, int32& fli, int32& sli) const
 {
+	fli = (int32)GetSchedulerMatrixRow(priority);
+
 	// Haiku bigtime_t is in microseconds.
 	bigtime_t delta = deadline - fSystemVirtualTime;
 	if (delta <= 0) {
-		fli = 0;
 		sli = 0;
 		return;
 	}
 
-	// Find the highest power of 2 using Count Leading Zeros instruction
-#if SCHEDULER_MASK_IS_64_BIT
-	native_cpu_mask_t dnative = (native_cpu_mask_t)delta;
-#else
-	native_cpu_mask_t dnative = (native_cpu_mask_t)min_c((bigtime_t)0xFFFFFFFF, delta);
-#endif
-	fli = scheduler_flsnative(dnative) - 1;
-	if (fli >= kPrimaryBins) fli = kPrimaryBins - 1;
-	if (fli < 0) fli = 0;
+	// Map deadline delta to secondary bins using gDeadlineBucketSize.
+	int64 bucketSize = Scheduler::LoadAcquire64(gDeadlineBucketSize);
+	if (bucketSize <= 0) bucketSize = 5000000;
 
-	// Linearly divide the space between 2^fli and 2^(fli+1)
-	if (fli < kSecondaryBinsShift)
-		sli = (dnative - ((native_cpu_mask_t)1 << fli)) << (kSecondaryBinsShift - fli);
-	else
-		sli = (dnative - ((native_cpu_mask_t)1 << fli)) >> (fli - kSecondaryBinsShift);
-	sli &= (kSecondaryBins - 1);
+	sli = (int32)(delta / bucketSize);
+	if (sli >= kSecondaryBins) sli = kSecondaryBins - 1;
+	if (sli < 0) sli = 0;
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -269,25 +286,25 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 	Thread* thread = element->GetThread();
 
 	Traits::SetInRunQueue(element, true);
-	AddRelease(fTotalCount, 1);
+	Scheduler::AddRelease(fTotalCount, 1);
 
 	if (priority >= 100) {
 		int32 index = priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element);
-		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+		Scheduler::OrAtomic(fRealTimeBitmap, (int32)(1U << index));
 		thread->fli_index = -1; // Mark as RT
 		thread->sli_index = index;
 	} else {
 		int32 fli, sli;
-		_GetIndices(thread->virtual_deadline, fli, sli);
+		_GetIndices(thread->virtual_deadline, (int32)priority, fli, sli);
 		thread->fli_index = fli;
 		thread->sli_index = sli;
 
 		fQueues[fli][sli].Add(element);
-		cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
-		cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
+		Scheduler::cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
+		Scheduler::cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
 	}
 }
 
@@ -301,25 +318,25 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 	Thread* thread = element->GetThread();
 
 	Traits::SetInRunQueue(element, true);
-	AddRelease(fTotalCount, 1);
+	Scheduler::AddRelease(fTotalCount, 1);
 
 	if (priority >= 100) {
 		int32 index = priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element, false); // Add at head
-		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+		Scheduler::OrAtomic(fRealTimeBitmap, (int32)(1U << index));
 		thread->fli_index = -1; // Mark as RT
 		thread->sli_index = index;
 	} else {
 		int32 fli, sli;
-		_GetIndices(thread->virtual_deadline, fli, sli);
+		_GetIndices(thread->virtual_deadline, (int32)priority, fli, sli);
 		thread->fli_index = fli;
 		thread->sli_index = sli;
 
 		fQueues[fli][sli].Add(element, false); // Add at head
-		cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
-		cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
+		Scheduler::cpu_mask_or_atomic(&fSecondLevelBitmap[fli], (native_cpu_mask_t)1 << sli);
+		Scheduler::cpu_mask_or_atomic(&fFirstLevelBitmap, (native_cpu_mask_t)1 << fli);
 	}
 }
 
@@ -333,21 +350,21 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 
 		fRealTimeQueues[index].Remove(element);
 		if (fRealTimeQueues[index].IsEmpty())
-			AndAtomic(fRealTimeBitmap, (int32)~(1U << index));
+			Scheduler::AndAtomic(fRealTimeBitmap, (int32)~(1U << index));
 	} else {
 		int32 fli = thread->fli_index;
 		int32 sli = thread->sli_index;
 
 		fQueues[fli][sli].Remove(element);
 		if (fQueues[fli][sli].IsEmpty()) {
-			cpu_mask_and_atomic(&fSecondLevelBitmap[fli], ~((native_cpu_mask_t)1 << sli));
-			if (cpu_mask_get_atomic(&fSecondLevelBitmap[fli]) == 0)
-				cpu_mask_and_atomic(&fFirstLevelBitmap, ~((native_cpu_mask_t)1 << fli));
+			Scheduler::cpu_mask_and_atomic(&fSecondLevelBitmap[fli], ~((native_cpu_mask_t)1 << sli));
+			if (Scheduler::cpu_mask_get_atomic(&fSecondLevelBitmap[fli]) == 0)
+				Scheduler::cpu_mask_and_atomic(&fFirstLevelBitmap, ~((native_cpu_mask_t)1 << fli));
 		}
 	}
 
 	Traits::SetInRunQueue(element, false);
-	AddRelease(fTotalCount, -1);
+	Scheduler::AddRelease(fTotalCount, -1);
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -363,13 +380,13 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 	native_cpu_mask_t flBitmap = GetFirstLevelBitmap();
 	if (flBitmap == 0) return NULL;
 
-	int32 fli = scheduler_ctz(flBitmap);
+	int32 fli = Scheduler::scheduler_flsnative(flBitmap) - 1;
 	if (fli < 0) return NULL;
 
 	native_cpu_mask_t slBitmap = GetSecondLevelBitmap(fli);
 	if (slBitmap == 0) return NULL;
 
-	int32 sli = scheduler_ctz(slBitmap);
+	int32 sli = Scheduler::scheduler_ctz(slBitmap);
 	if (sli < 0) return NULL;
 
 	return fQueues[fli][sli].Head();
@@ -402,11 +419,11 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 	// Check EEVDF matrix
 	native_cpu_mask_t flBitmap = GetFirstLevelBitmap();
 	while (flBitmap != 0) {
-		int32 fli = scheduler_ctz(flBitmap);
+		int32 fli = Scheduler::scheduler_flsnative(flBitmap) - 1;
 		if (fli < 0) break;
 		native_cpu_mask_t slBitmap = GetSecondLevelBitmap(fli);
 		while (slBitmap != 0) {
-			int32 sli = scheduler_ctz(slBitmap);
+			int32 sli = Scheduler::scheduler_ctz(slBitmap);
 			if (sli < 0) break;
 			typename DoublyLinkedList<Element, GetLink>::Iterator it = const_cast<DoublyLinkedList<Element, GetLink>&>(fQueues[fli][sli]).GetIterator();
 			while (it.HasNext()) {
