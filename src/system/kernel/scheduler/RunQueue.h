@@ -15,12 +15,23 @@
 
 #include "scheduler_profiler.h"
 
+template <typename Element>
+class RunQueueStandardGetLink {
+public:
+	inline DoublyLinkedListLink<Element>* operator()(Element* element) const
+	{
+		return element->GetRunQueueLink();
+	}
+};
+
+namespace Scheduler {
+
 // For BMQ EEVDF mapping
 static const int32 kPrimaryBins = 16;
 static const int32 kSecondaryBins = 32;
 static const int32 kSecondaryBinsShift = 5;
 
-#define RT_SUBSYSTEM_SIGNAL 15
+static const int32 kRTSubsystemSignal = 15;
 
 /*
  * Haiku OS non-realtime priority mapping table for a 16x32 BMQ-EEVDF matrix.
@@ -46,23 +57,12 @@ inline uint8 GetSchedulerMatrixRow(int32 priority) {
 
     // Real-Time subsystem escape hatch
     if (unlikely(priority >= 100)) {
-        return RT_SUBSYSTEM_SIGNAL;
+        return kRTSubsystemSignal;
     }
 
     // Direct, single-cycle O(1) cache-friendly lookup
     return kPriorityToRowMap[priority];
 }
-
-template <typename Element>
-class RunQueueStandardGetLink {
-public:
-	inline DoublyLinkedListLink<Element>* operator()(Element* element) const
-	{
-		return element->GetRunQueueLink();
-	}
-};
-
-namespace Scheduler {
 
 template <typename Element>
 struct RunQueueTraits {
@@ -151,8 +151,8 @@ public:
 
 	class ConstIterator {
 	public:
-		ConstIterator() : fQueue(NULL), fFLI(kPrimaryBins - 1), fSLI(0), fRT(0), fCurrent(NULL) {}
-		ConstIterator(const RunQueue* queue) : fQueue(queue), fFLI(kPrimaryBins - 1), fSLI(0), fRT(0), fCurrent(NULL)
+		ConstIterator() : fQueue(NULL), fFLI(kPrimaryBins - 1), fSLI(0), fRT(20), fCurrent(NULL) {}
+		ConstIterator(const RunQueue* queue) : fQueue(queue), fFLI(kPrimaryBins - 1), fSLI(0), fRT(20), fCurrent(NULL)
 		{
 			_Advance();
 		}
@@ -170,10 +170,10 @@ public:
 			if (fQueue == NULL) return;
 
 			if (fCurrent != NULL) {
-				if (fRT < 21) {
+				if (fRT >= 0) {
 					fCurrent = fQueue->fRealTimeQueues[fRT].GetNext(fCurrent);
 					if (fCurrent != NULL) return;
-					fRT++;
+					fRT--;
 				} else {
 					fCurrent = fQueue->fQueues[fFLI][fSLI].GetNext(fCurrent);
 					if (fCurrent != NULL) return;
@@ -189,10 +189,10 @@ public:
 			}
 
 			// Find next non-empty RT queue
-			while (fRT < 21) {
+			while (fRT >= 0) {
 				fCurrent = fQueue->fRealTimeQueues[fRT].Head();
 				if (fCurrent != NULL) return;
-				fRT++;
+				fRT--;
 			}
 
 			// Find next non-empty EEVDF bin
