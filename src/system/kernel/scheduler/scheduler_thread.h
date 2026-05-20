@@ -133,6 +133,11 @@ public:
 								  bool& updateInteraction, bigtime_t now = 0);
 	SCHEDULER_INLINE bool Dequeue();
 
+	inline CPUEntry* EnqueuedCPU() const {
+		return atomic_pointer_get<CPUEntry>(
+			const_cast<CPUEntry* volatile*>(&fEnqueuedCPU));
+	}
+
 	SCHEDULER_INLINE void UpdateVirtualRuntime(bigtime_t delta,
 											   bigtime_t svt,
 											   bigtime_t maxLatency = 0);
@@ -177,6 +182,7 @@ public:
 	SCHEDULER_INLINE void SetDequeued() {
 		fEnqueued = false;
 		fEnqueuedInCPURunQueue = false;
+		atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, (CPUEntry*)NULL);
 	}
 
 	SCHEDULER_INLINE int32 GetLoad() const { return fNeededLoad; }
@@ -250,6 +256,7 @@ private:
 
 	DoublyLinkedListLink<ThreadData> fRunQueueLink;
 
+	CPUEntry* fEnqueuedCPU __attribute__((aligned(8)));
 	CoreEntry* fCore __attribute__((aligned(8)));
 };
 
@@ -608,6 +615,7 @@ inline void ThreadData::PutBack(bigtime_t now) {
 
 	CPURunQueueLocker _(cpu);
 	ASSERT(!fEnqueued);
+	atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
 	fEnqueued = true;
 	fEnqueuedInCPURunQueue = true;
 
@@ -690,6 +698,7 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty, bool& req
 	fThread->state = B_THREAD_READY;
 
 	ASSERT(!fEnqueued);
+	atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
 	fEnqueued = true;
 	fEnqueuedInCPURunQueue = true;
 
@@ -721,15 +730,25 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty, bool& req
 inline bool ThreadData::Dequeue() {
 	SCHEDULER_ENTER_FUNCTION();
 
-	ASSERT(fEnqueuedInCPURunQueue);
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-
-	CPURunQueueLocker _(cpu);
 	if (!fEnqueued)
 		return false;
-	cpu->Remove(this);
-	ASSERT(!fEnqueued);
-	return true;
+
+	while (true) {
+		CPUEntry* cpu = EnqueuedCPU();
+		if (cpu == NULL)
+			return false;
+
+		CPURunQueueLocker locker(cpu);
+		if (EnqueuedCPU() != cpu)
+			continue;
+
+		if (!fEnqueued)
+			return false;
+
+		cpu->Remove(this);
+		ASSERT(!fEnqueued);
+		return true;
+	}
 }
 
 inline void RunQueueTraits<ThreadData>::SetInRunQueue(ThreadData* element,

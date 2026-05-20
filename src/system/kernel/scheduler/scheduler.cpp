@@ -434,9 +434,12 @@ static void UpdatePriorityBoostScalable(CoreEntry* core, CPUEntry* cpu,
 								 now);
 
 	// Check CPU RunQueue
+	// Note: We only scan the local CPU's run-queue to maintain decentralization.
+	// Cross-CPU scanning is handled by work-stealing and load balancing.
 	if (cpu->ThreadCount() > 0) {
 		CPURunQueueLocker cpuLocker(cpu);
-		scanRunQueue(cpu->RunQueue());
+		if (cpu->ThreadCount() > 0)
+			scanRunQueue(cpu->RunQueue());
 	}
 }
 
