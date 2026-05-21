@@ -29,6 +29,13 @@
 
 namespace Scheduler {
 
+struct rcu_callback {
+	void (*callback)(void*);
+	void* arg;
+	int64 targetGen;
+	struct rcu_callback* next;
+};
+
 // Type-safe atomic wrappers to eliminate messy casts and ensure 32/64-bit safety.
 
 template <typename T>
@@ -406,13 +413,6 @@ extern uint64 gIdleMask __attribute__((aligned(8)));
 
 extern int64 gRCUGeneration __attribute__((aligned(8)));
 extern spinlock gSchedulerUpdateLock;
-
-struct rcu_callback {
-	void (*callback)(void*);
-	void* arg;
-	int64 targetGen;
-	struct rcu_callback* next;
-};
 
 void scheduler_synchronize();
 void scheduler_call_rcu(void (*callback)(void*), void* arg);

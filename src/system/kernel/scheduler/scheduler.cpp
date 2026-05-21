@@ -150,8 +150,15 @@ static void scheduler_process_rcu_callbacks(void* /*arg*/) {
 			minGen = gen;
 	}
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
-	{
+	// Corrected De-centralized RCU processing:
+	// While the processing DPC runs on one CPU, it must iterate over all CPUs
+	// and drain their ready callbacks to avoid resource leaks. Since each
+	// CPUEntry has its own lock, this remains highly scalable.
+	for (int32 i = 0; i < cpuCount; i++) {
+		if (gCPU[i].disabled)
+			continue;
+
+		CPUEntry* cpu = CPUEntry::GetCPU(i);
 		InterruptsSpinLocker locker(cpu->fRCUCallbackLock);
 		struct rcu_callback** curr = &cpu->fPendingCallbacks;
 		while (*curr != NULL) {
