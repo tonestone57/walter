@@ -81,25 +81,23 @@ struct LocalNodeStealAction {
 
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
-			bool success = false;
 			if ((*stolen)->GetLag() >= kL3LagThreshold) {
 				// Re-verify affinity under the lock (mostly redundant but safe).
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core(), now);
 					(*stolen)->fStolen = true;
-					success = true;
+					victim->UnlockRunQueue();
+					return true;
 				}
 			}
 
-			if (!success) {
-				// Thread not under-served enough or affinity changed; restore it.
-				victim->PushBack(*stolen, stolenPriority);
-				*stolen = NULL;
-			}
+			// Thread not under-served enough or affinity changed; restore it.
+			victim->PushBack(*stolen, stolenPriority);
+			*stolen = NULL;
 
 			victim->UnlockRunQueue();
-			return success;
+			return false;
 		}
 
 		return false;
@@ -153,26 +151,23 @@ struct NUMARandomStealAction {
 
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
-			bool success = false;
 			if ((*stolen)->GetLag() >= kNUMANodeLagThreshold) {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 					(*stolen)->MigrateTo(cpu->Core(), now);
 					(*stolen)->fStolen = true;
-					success = true;
+					victim->UnlockRunQueue();
+					return true;
 				}
 			}
 
-			if (!success) {
-				// Thread not under-served enough or affinity changed; restore
-				// it.
-				victim->PushBack(*stolen, stolenPriority);
-				*stolen = NULL;
-			}
+			// Thread not under-served enough or affinity changed; restore it.
+			victim->PushBack(*stolen, stolenPriority);
+			*stolen = NULL;
 
 			victim->UnlockRunQueue();
-			return success;
+			return false;
 		}
 
 		return false;
@@ -223,7 +218,6 @@ struct GlobalRandomStealAction {
 
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
-			bool success = false;
 
 			int32 myNUMA = -1;
 			CoreEntry* myCore = cpu->Core();
@@ -250,27 +244,24 @@ struct GlobalRandomStealAction {
 									   B_DISPLAY_PRIORITY ||
 								   (*stolen)->InteractivityScore() > 750;
 
-				if (crossNUMA && interactive) {
-					success = false;
-				} else {
+				if (!(crossNUMA && interactive)) {
 					// Re-verify affinity under the lock.
 					const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 					if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
 						(*stolen)->MigrateTo(cpu->Core(), now);
 						(*stolen)->fStolen = true;
-						success = true;
+						victim->UnlockRunQueue();
+						return true;
 					}
 				}
 			}
 
-			if (!success) {
-				// Thread not under-served enough or affinity changed; restore it.
-				victim->PushBack(*stolen, stolenPriority);
-				*stolen = NULL;
-			}
+			// Thread not under-served enough or affinity changed; restore it.
+			victim->PushBack(*stolen, stolenPriority);
+			*stolen = NULL;
 
 			victim->UnlockRunQueue();
-			return success;
+			return false;
 		}
 
 		return false;
@@ -464,8 +455,6 @@ void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 	fRunQueue.PushFront(thread, priority, SystemVirtualTime());
 	IncrementThreadCount();
 
-	thread->fEnqueuedPriority = priority;
-
 	if (!thread->IsIdle() && !thread->IsRealTime())
 		AddWeight(thread->GetWeight());
 }
@@ -477,8 +466,6 @@ void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 	thread->SetEnqueued(this);
 	fRunQueue.PushBack(thread, priority, SystemVirtualTime());
 	IncrementThreadCount();
-
-	thread->fEnqueuedPriority = priority;
 
 	if (!thread->IsIdle() && !thread->IsRealTime())
 		AddWeight(thread->GetWeight());
@@ -623,6 +610,7 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 			if (nextThreadIsFloating) {
 				// Re-enqueue stolen thread
 				cpuLocker.Unlock();
+
 				bool dummy1, dummy2, updateInteraction;
 				if (!nextThread->Enqueue(this, dummy1, dummy2, updateInteraction, now)) {
 					Thread* const thread = nextThread->GetThread();
@@ -678,9 +666,7 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 
 	// Case B: nextThread (either local or stolen) is best.
 	if (nextThreadIsFloating) {
-		if (nextThread->fStolen) {
-			nextThread->fStolen = false;
-		}
+		nextThread->fStolen = false;
 		return nextThread;
 	}
 

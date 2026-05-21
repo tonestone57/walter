@@ -217,11 +217,11 @@ private:
 	bool fQuickStartCredit;
 	bool fIsForeground;
 	bool fStolen;
+	mutable bool fIsHighPriorityContributed;
 
 	Thread* fThread;
 
 	int32 fHomePackage __attribute__((aligned(8)));
-	int32 fEnqueuedPriority;
 
 	mutable int32 fEffectivePriority;
 	mutable bigtime_t fBaseQuantum __attribute__((aligned(8)));
@@ -313,18 +313,6 @@ inline void ThreadData::_UpdatePriorityBoost(bigtime_t now) {
 			// Note: lock is already held by caller (RunQueueScanner).
 			cpu->Remove(this);
 			cpu->PushBack(this, newPriority);
-
-			// Note: adjust high-priority count for the core.
-			CoreEntry* core = cpu->Core();
-			if (core != NULL) {
-				if (oldPriority < B_DISPLAY_PRIORITY &&
-					newPriority >= B_DISPLAY_PRIORITY) {
-					core->IncrementHighPriorityThreadCount();
-				} else if (oldPriority >= B_DISPLAY_PRIORITY &&
-						   newPriority < B_DISPLAY_PRIORITY) {
-					core->DecrementHighPriorityThreadCount();
-				}
-			}
 		}
 	}
 }
@@ -465,6 +453,12 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 		now = system_time();
 
 	if (!IsIdle()) {
+		if (IsEnqueued()) {
+			CPUEntry* cpu = EnqueuedCPU();
+			if (cpu != NULL)
+				cpu->Remove(this);
+		}
+
 		int32 prev = AddAcquireRelease(*const_cast<int32 volatile*>(&gTotalRunnableThreads), -1);
 		if (prev <= 0) {
 			int32 cur = LoadAcquire(gTotalRunnableThreads);
@@ -482,8 +476,10 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 			const_cast<CoreEntry* volatile*>(&fCore));
 		if (snap != NULL) {
 			snap->DecrementTotalThreadCount();
-			if (GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+			if (fIsHighPriorityContributed) {
 				snap->DecrementHighPriorityThreadCount();
+				fIsHighPriorityContributed = false;
+			}
 		}
 	}
 
@@ -514,6 +510,12 @@ inline void ThreadData::Dies(bigtime_t now) {
 		now = system_time();
 
 	if (!IsIdle()) {
+		if (IsEnqueued()) {
+			CPUEntry* cpu = EnqueuedCPU();
+			if (cpu != NULL)
+				cpu->Remove(this);
+		}
+
 		int32 prev = AddAcquireRelease(*const_cast<int32 volatile*>(&gTotalRunnableThreads), -1);
 		if (prev <= 0) {
 			int32 cur = LoadAcquire(gTotalRunnableThreads);
@@ -531,8 +533,10 @@ inline void ThreadData::Dies(bigtime_t now) {
 			const_cast<CoreEntry* volatile*>(&fCore));
 		if (snap != NULL) {
 			snap->DecrementTotalThreadCount();
-			if (GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+			if (fIsHighPriorityContributed) {
 				snap->DecrementHighPriorityThreadCount();
+				fIsHighPriorityContributed = false;
+			}
 		}
 	}
 
@@ -562,6 +566,23 @@ inline void ThreadData::PutBack(bigtime_t now) {
 
 	CPURunQueueLocker _(cpu);
 	ASSERT(!fEnqueued);
+	if (!fReady) {
+		fReady = true;
+		fThread->state = B_THREAD_READY;
+
+		if (!IsIdle()) {
+			AddRelease(gTotalRunnableThreads, 1);
+			CoreEntry* core = cpu->Core();
+			if (core != NULL) {
+				core->IncrementTotalThreadCount();
+				if (priority >= B_DISPLAY_PRIORITY) {
+					core->IncrementHighPriorityThreadCount();
+					fIsHighPriorityContributed = true;
+				}
+			}
+		}
+	}
+
 	cpu->PushFront(this, priority);
 }
 
@@ -634,20 +655,24 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
 		_UpdateDeadline(now);
 	}
 
-	if (!wasReady && !IsIdle()) {
-		AddRelease(gTotalRunnableThreads, 1);
-
-		if (core != NULL) {
-			core->IncrementTotalThreadCount();
-			if (priority >= B_DISPLAY_PRIORITY)
-				core->IncrementHighPriorityThreadCount();
+	if (!wasReady) {
+		if (!IsIdle()) {
+			AddRelease(gTotalRunnableThreads, 1);
+			if (core != NULL) {
+				core->IncrementTotalThreadCount();
+				if (priority >= B_DISPLAY_PRIORITY) {
+					core->IncrementHighPriorityThreadCount();
+					fIsHighPriorityContributed = true;
+				}
+			}
 		}
+
+		fReady = true;
+		fThread->state = B_THREAD_READY;
 	}
 
-	fReady = true;
-	fThread->state = B_THREAD_READY;
-
 	ASSERT(!fEnqueued);
+	SetEnqueued(cpu);
 
 	ThreadData* top = cpu->PeekThread();
 	wasRunQueueEmpty = (top == NULL || top->IsIdle());

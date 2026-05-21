@@ -778,13 +778,14 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 		int64 newWeight = threadData->GetWeight();
 
 		if (thread->state == B_THREAD_RUNNING) {
-			ASSERT(threadData->Core() != NULL);
+			CoreEntry* core = threadData->Core();
+			ASSERT(core != NULL);
 
 			ASSERT(thread->cpu != NULL);
 			CPUEntry* cpu = &gCPUEntries[thread->cpu->cpu_num];
 
 			if (!gCPU[cpu->ID()].disabled) {
-				CoreCPUHeapLocker _(threadData->Core());
+				CoreCPUHeapLocker _(core);
 				cpu->UpdatePriority(priority);
 
 				if (!wasRealTime && !isRealTime)
@@ -793,6 +794,7 @@ int32 scheduler_set_thread_priority(Thread* thread, int32 priority) {
 					cpu->AddWeight(-oldWeight);
 				else if (wasRealTime && !isRealTime)
 					cpu->AddWeight(newWeight);
+
 			}
 		}
 
