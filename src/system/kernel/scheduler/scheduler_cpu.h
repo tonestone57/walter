@@ -188,6 +188,9 @@ private:
 	uint32 fRescheduleCount;
 	uint32 fInteractionUpdateCounter;
 
+	struct rcu_callback* fPendingCallbacks;
+	spinlock fRCUCallbackLock;
+
 	int64 fTotalWeight __attribute__((aligned(8)));
 
 	int32 fReschedulePending __attribute__((aligned(8)));
