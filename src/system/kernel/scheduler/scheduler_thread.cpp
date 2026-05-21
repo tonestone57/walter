@@ -823,6 +823,20 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 				core->RemoveLoad(fNeededLoad, true, now);
 			targetCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, true, now);
 		}
+
+		if (!IsIdle()) {
+			int32 priority = GetEffectivePriority();
+			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+			if (core != NULL) {
+				core->DecrementTotalThreadCount();
+				if (priority >= B_DISPLAY_PRIORITY)
+					core->DecrementHighPriorityThreadCount();
+			}
+
+			targetCore->IncrementTotalThreadCount();
+			if (priority >= B_DISPLAY_PRIORITY)
+				targetCore->IncrementHighPriorityThreadCount();
+		}
 	}
 
 	atomic_pointer_set<CoreEntry>(&fCore, targetCore);

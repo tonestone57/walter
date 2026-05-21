@@ -154,6 +154,11 @@ public:
 
 	SCHEDULER_INLINE bool IsEnqueued() const { return fEnqueued; }
 	SCHEDULER_INLINE bool IsReady() const { return fReady; }
+	SCHEDULER_INLINE void SetEnqueued(CPUEntry* cpu) {
+		fEnqueued = true;
+		fEnqueuedInCPURunQueue = true;
+		atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
+	}
 	SCHEDULER_INLINE void SetDequeued() {
 		fEnqueued = false;
 		fEnqueuedInCPURunQueue = false;
@@ -309,9 +314,17 @@ inline void ThreadData::_UpdatePriorityBoost(bigtime_t now) {
 			cpu->Remove(this);
 			cpu->PushBack(this, newPriority);
 
-			fEnqueued = true;
-			fEnqueuedInCPURunQueue = true;
-			atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
+			// Note: adjust high-priority count for the core.
+			CoreEntry* core = cpu->Core();
+			if (core != NULL) {
+				if (oldPriority < B_DISPLAY_PRIORITY &&
+					newPriority >= B_DISPLAY_PRIORITY) {
+					core->IncrementHighPriorityThreadCount();
+				} else if (oldPriority >= B_DISPLAY_PRIORITY &&
+						   newPriority < B_DISPLAY_PRIORITY) {
+					core->DecrementHighPriorityThreadCount();
+				}
+			}
 		}
 	}
 }
@@ -464,6 +477,14 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 				memory_read_barrier();
 			}
 		}
+
+		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
+			const_cast<CoreEntry* volatile*>(&fCore));
+		if (snap != NULL) {
+			snap->DecrementTotalThreadCount();
+			if (GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+				snap->DecrementHighPriorityThreadCount();
+		}
 	}
 
 	if (!HasQuantumEnded(false, false, now)) {
@@ -505,6 +526,14 @@ inline void ThreadData::Dies(bigtime_t now) {
 				memory_read_barrier();
 			}
 		}
+
+		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
+			const_cast<CoreEntry* volatile*>(&fCore));
+		if (snap != NULL) {
+			snap->DecrementTotalThreadCount();
+			if (GetEffectivePriority() >= B_DISPLAY_PRIORITY)
+				snap->DecrementHighPriorityThreadCount();
+		}
 	}
 
 	if (gTrackCoreLoad) {
@@ -533,10 +562,6 @@ inline void ThreadData::PutBack(bigtime_t now) {
 
 	CPURunQueueLocker _(cpu);
 	ASSERT(!fEnqueued);
-	fEnqueued = true;
-	fEnqueuedInCPURunQueue = true;
-	atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
-
 	cpu->PushFront(this, priority);
 }
 
@@ -609,16 +634,20 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
 		_UpdateDeadline(now);
 	}
 
-	if (!wasReady && !IsIdle())
+	if (!wasReady && !IsIdle()) {
 		AddRelease(gTotalRunnableThreads, 1);
+
+		if (core != NULL) {
+			core->IncrementTotalThreadCount();
+			if (priority >= B_DISPLAY_PRIORITY)
+				core->IncrementHighPriorityThreadCount();
+		}
+	}
 
 	fReady = true;
 	fThread->state = B_THREAD_READY;
 
 	ASSERT(!fEnqueued);
-	fEnqueued = true;
-	fEnqueuedInCPURunQueue = true;
-	atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
 
 	ThreadData* top = cpu->PeekThread();
 	wasRunQueueEmpty = (top == NULL || top->IsIdle());
@@ -677,14 +706,24 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 	bigtime_t ceiling =
 		(svt > B_INT64_MAX - kLookahead) ? B_INT64_MAX : svt + kLookahead;
 
+	// Note: 32-bit Torn Read Guard.
+	// On 32-bit platforms, LoadAcquire64 might not be natively atomic.
+	// Although scheduler_common.h provides a wrapper, we use the CAS
+	// result itself as the authoritative source of the current value to
+	// ensure the update loop never operates on a torn snapshot.
 	bigtime_t vRuntime = (bigtime_t)LoadAcquire64(fThread->virtual_runtime);
-	while (fThread->virtual_runtime < ceiling) {
+	while (vRuntime < ceiling) {
 		bigtime_t next = (vRuntime < ceiling - delta) ? vRuntime + delta : ceiling;
 
 		bigtime_t old = (bigtime_t)TestAndSet64(fThread->virtual_runtime, (int64)next,
 												(int64)vRuntime);
 		if (old == vRuntime)
 			break;
+
+		// Note: snapshot consistency.
+		// If TestAndSet64 fails, it returns the *actual* current value.
+		// On 32-bit targets, if the first LoadAcquire64 was torn, this
+		// assignment from 'old' corrects it for the next iteration.
 		vRuntime = old;
 	}
 }

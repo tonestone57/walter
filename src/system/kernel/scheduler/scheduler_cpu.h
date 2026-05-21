@@ -764,7 +764,6 @@ inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 
 	SetCPUIDle(gIdleMask, cpu->ID());
 
-	DecrementTotalThreadCount();
 	// Note: on weakly-ordered architectures, without an explicit
 	// barrier between atomic-add(fIdleCPUCount) and atomic-get(fCPUCount),
 	// the CPU could observe fCPUCount before fIdleCPUCount increment is
@@ -784,9 +783,8 @@ inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 
 	ASSERT(LoadAcquire(fIdleCPUCount) > 0);
 
-	IncrementTotalThreadCount();
-	// Note: read fCPUCount AFTER IncrementTotalThreadCount and
-	// insert a read barrier. A concurrent AddCPU increments fCPUCount then
+	// Note: read fCPUCount and insert a read barrier.
+	// A concurrent AddCPU increments fCPUCount then
 	// fIdleCPUCount; by inserting the barrier we ensure we see the latest
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();

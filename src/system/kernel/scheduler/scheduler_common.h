@@ -34,7 +34,7 @@ namespace Scheduler {
 template <typename T>
 inline int32 LoadAcquire(const T volatile& value) {
 	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	int32 v = atomic_get((int32 volatile*)&value);
+	int32 v = atomic_get((int32*)&value);
 	memory_read_barrier();
 	return v;
 }
@@ -43,14 +43,14 @@ template <typename T>
 inline void StoreRelease(T volatile& value, int32 v) {
 	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
 	memory_write_barrier();
-	atomic_set((int32 volatile*)&value, v);
+	atomic_set((int32*)&value, v);
 }
 
 template <typename T>
 inline int32 AddAcquireRelease(T volatile& value, int32 v) {
 	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
 	memory_write_barrier();
-	int32 old = atomic_add((int32 volatile*)&value, v);
+	int32 old = atomic_add((int32*)&value, v);
 	memory_read_barrier();
 	return old;
 }
@@ -59,33 +59,32 @@ template <typename T>
 inline void AddRelease(T volatile& value, int32 v) {
 	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
 	memory_write_barrier();
-	atomic_add((int32 volatile*)&value, v);
+	atomic_add((int32*)&value, v);
 }
 
 template <typename T>
 inline int32 TestAndSet(T volatile& value, int32 newValue,
 						int32 expectedValue) {
 	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	return atomic_test_and_set((int32 volatile*)&value, newValue,
-		expectedValue);
+	return atomic_test_and_set((int32*)&value, newValue, expectedValue);
 }
 
 template <typename T>
 inline int32 GetAndSet(T volatile& value, int32 newValue) {
 	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	return atomic_get_and_set((int32 volatile*)&value, newValue);
+	return atomic_get_and_set((int32*)&value, newValue);
 }
 
 template <typename T>
 inline int32 OrAtomic(T volatile& value, int32 orValue) {
 	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	return atomic_or((int32 volatile*)&value, orValue);
+	return atomic_or((int32*)&value, orValue);
 }
 
 template <typename T>
 inline int32 AndAtomic(T volatile& value, int32 andValue) {
 	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	return atomic_and((int32 volatile*)&value, andValue);
+	return atomic_and((int32*)&value, andValue);
 }
 
 // 64-bit variants
@@ -93,7 +92,7 @@ inline int32 AndAtomic(T volatile& value, int32 andValue) {
 template <typename T>
 inline int64 LoadAcquire64(const T volatile& value) {
 	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	int64 v = atomic_get64((int64 volatile*)&value);
+	int64 v = atomic_get64((int64*)&value);
 	memory_read_barrier();
 	return v;
 }
@@ -102,22 +101,14 @@ template <typename T>
 inline void StoreRelease64(T volatile& value, int64 v) {
 	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
 	memory_write_barrier();
-	atomic_set64((int64 volatile*)&value, v);
+	atomic_set64((int64*)&value, v);
 }
 
 template <typename T>
 inline int64 AddAcquireRelease64(T volatile& value, int64 v) {
 	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
 	memory_write_barrier();
-	int64 old = atomic_get64((int64 volatile*)&value);
-	while (true) {
-		int64 next = old + v;
-		int64 actual = atomic_test_and_set64((int64 volatile*)&value, next,
-			old);
-		if (actual == old)
-			break;
-		old = actual;
-	}
+	int64 old = atomic_add64((int64*)&value, v);
 	memory_read_barrier();
 	return old;
 }
@@ -126,27 +117,26 @@ template <typename T>
 inline void AddRelease64(T volatile& value, int64 v) {
 	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
 	memory_write_barrier();
-	atomic_add64((int64 volatile*)&value, v);
+	atomic_add64((int64*)&value, v);
 }
 
 template <typename T>
 inline int64 TestAndSet64(T volatile& value, int64 newValue,
 						  int64 expectedValue) {
 	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	return atomic_test_and_set64((int64 volatile*)&value, newValue,
-		expectedValue);
+	return atomic_test_and_set64((int64*)&value, newValue, expectedValue);
 }
 
 template <typename T>
 inline int64 OrAtomic64(T volatile& value, int64 orValue) {
 	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	return atomic_or64((int64 volatile*)&value, orValue);
+	return atomic_or64((int64*)&value, orValue);
 }
 
 template <typename T>
 inline int64 AndAtomic64(T volatile& value, int64 andValue) {
 	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	return atomic_and64((int64 volatile*)&value, andValue);
+	return atomic_and64((int64*)&value, andValue);
 }
 
 }  // namespace Scheduler

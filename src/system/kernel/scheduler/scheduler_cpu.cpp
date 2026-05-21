@@ -459,37 +459,29 @@ void CPUEntry::Stop() {
 
 void CPUEntry::PushFront(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
+
+	thread->SetEnqueued(this);
 	fRunQueue.PushFront(thread, priority, SystemVirtualTime());
 	IncrementThreadCount();
 
 	thread->fEnqueuedPriority = priority;
 
-	if (!thread->IsIdle()) {
-		CoreEntry* core = Core();
-		core->IncrementTotalThreadCount();
-		if (priority >= B_DISPLAY_PRIORITY)
-			core->IncrementHighPriorityThreadCount();
-		if (!thread->IsRealTime())
-			AddWeight(thread->GetWeight());
-	}
+	if (!thread->IsIdle() && !thread->IsRealTime())
+		AddWeight(thread->GetWeight());
 }
 
 
 void CPUEntry::PushBack(ThreadData* thread, int32 priority) {
 	SCHEDULER_ENTER_FUNCTION();
+
+	thread->SetEnqueued(this);
 	fRunQueue.PushBack(thread, priority, SystemVirtualTime());
 	IncrementThreadCount();
 
 	thread->fEnqueuedPriority = priority;
 
-	if (!thread->IsIdle()) {
-		CoreEntry* core = Core();
-		core->IncrementTotalThreadCount();
-		if (priority >= B_DISPLAY_PRIORITY)
-			core->IncrementHighPriorityThreadCount();
-		if (!thread->IsRealTime())
-			AddWeight(thread->GetWeight());
-	}
+	if (!thread->IsIdle() && !thread->IsRealTime())
+		AddWeight(thread->GetWeight());
 }
 
 
@@ -497,22 +489,12 @@ void CPUEntry::Remove(ThreadData* thread) {
 	SCHEDULER_ENTER_FUNCTION();
 	ASSERT(thread->IsEnqueued());
 
-	// (defensive): capture the priority the thread was enqueued with to
-	// ensure symmetric counter updates.
-	int32 priority = thread->fEnqueuedPriority;
-
 	thread->SetDequeued();
 	fRunQueue.Remove(thread);
 	DecrementThreadCount();
 
-	if (!thread->IsIdle()) {
-		CoreEntry* core = Core();
-		core->DecrementTotalThreadCount();
-		if (priority >= B_DISPLAY_PRIORITY)
-			core->DecrementHighPriorityThreadCount();
-		if (!thread->IsRealTime())
-			AddWeight(-thread->GetWeight());
-	}
+	if (!thread->IsIdle() && !thread->IsRealTime())
+		AddWeight(-thread->GetWeight());
 }
 
 ThreadData* CPUEntry::PeekThread() const {
@@ -697,11 +679,6 @@ ThreadData* CPUEntry::ChooseNextThread(ThreadData* oldThread, bool putAtBack,
 	// Case B: nextThread (either local or stolen) is best.
 	if (nextThreadIsFloating) {
 		if (nextThread->fStolen) {
-			// ACCOUNTING: fStolen threads didn't increment our core's
-			// counters in the steal action; we do it now.
-			// Note: only increment fTotalThreadCount here.
-			// fHighPriorityThreadCount only counts waiting threads.
-			Core()->IncrementTotalThreadCount();
 			nextThread->fStolen = false;
 		}
 		return nextThread;

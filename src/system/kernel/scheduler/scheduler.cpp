@@ -1008,7 +1008,6 @@ static void reschedule(int32 nextState) {
 		if (!oldThreadData->IsIdle()) {
 			putOldThreadAtBack = true;
 			oldThreadData->UnassignCore(true);
-			core->DecrementTotalThreadCount();
 			// Note: track activity for the last quantum before disable.
 			cpu->UpdateActiveTime(oldThreadData, now);
 
