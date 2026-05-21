@@ -43,9 +43,9 @@ void ThreadData::_InitBase() {
 	fEnqueuedInCPURunQueue = false;
 	fReady = false;
 	fQuickStartCredit = false;
+	fIsHighPriorityContributed = false;
 
 	fHomePackage = -1;
-	fEnqueuedPriority = -1;
 
 	fEffectivePriority = GetPriority();
 	StoreRelease64(fBaseQuantum,
@@ -500,9 +500,19 @@ bigtime_t ThreadData::_ComputeQuantumForCore(CoreEntry* core,
 void ThreadData::UnassignCore(bool running) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	ASSERT(atomic_pointer_get<CoreEntry>(&fCore) != NULL);
-	if (running || fThread->state == B_THREAD_READY)
+	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	ASSERT(core != NULL);
+	if (running || fThread->state == B_THREAD_READY) {
+		if (fReady && !IsIdle()) {
+			AddRelease(gTotalRunnableThreads, -1);
+			core->DecrementTotalThreadCount();
+			if (fIsHighPriorityContributed) {
+				core->DecrementHighPriorityThreadCount();
+				fIsHighPriorityContributed = false;
+			}
+		}
 		fReady = false;
+	}
 	if (!fReady)
 		atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
 }
@@ -688,6 +698,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 	else if (IsRealTime())
 		fEffectivePriority = GetPriority();
 	else {
+		int32 oldPriority = fEffectivePriority;
 		// Map Virtual Deadline to Dynamic Priority (Urgency).
 		// Urgency = MaxDynamic - (Deadline - SVT) / 5ms
 		// If Deadline is SVT (or passed), Urgency is Max.
@@ -758,10 +769,26 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 			urgency = (bigtime_t)B_INT32_MAX;
 
 		fEffectivePriority = (int32)urgency;
+
+		if (fReady) {
+			CoreEntry* core = Core();
+			if (core != NULL) {
+				if (!fIsHighPriorityContributed &&
+					fEffectivePriority >= B_DISPLAY_PRIORITY) {
+					core->IncrementHighPriorityThreadCount();
+					fIsHighPriorityContributed = true;
+				} else if (fIsHighPriorityContributed &&
+						   fEffectivePriority < B_DISPLAY_PRIORITY) {
+					core->DecrementHighPriorityThreadCount();
+					fIsHighPriorityContributed = false;
+				}
+			}
+		}
 	}
 
 	StoreRelease64(fBaseQuantum,
-		(int64)LoadAcquire64(sQuantumLengths[GetEffectivePriority()]));
+		(int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
+				THREAD_MAX_SET_PRIORITY)]));
 }
 
 /* static */ bigtime_t ThreadData::_ScaleQuantum(bigtime_t maxQuantum,
@@ -822,6 +849,24 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 			if (core != NULL)
 				core->RemoveLoad(fNeededLoad, true, now);
 			targetCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, true, now);
+		}
+
+		if (!IsIdle()) {
+			int32 priority = GetEffectivePriority();
+			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+			if (core != NULL) {
+				core->DecrementTotalThreadCount();
+				if (fIsHighPriorityContributed) {
+					core->DecrementHighPriorityThreadCount();
+					fIsHighPriorityContributed = false;
+				}
+			}
+
+			targetCore->IncrementTotalThreadCount();
+			if (priority >= B_DISPLAY_PRIORITY) {
+				targetCore->IncrementHighPriorityThreadCount();
+				fIsHighPriorityContributed = true;
+			}
 		}
 	}
 
