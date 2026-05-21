@@ -73,7 +73,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	if (useMask && Scheduler::IsAllEnabledMask(mask))
 		useMask = false;
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CPUEntry* cpu = CPUEntry::Get(smp_get_current_cpu());
 	CoreEntry* previousCore = threadData->PreviousCore();
 
 	// has_cache_expired() calls PreviousCore()->GetActiveTime().  It is
@@ -214,7 +214,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			bestScore = -1;
 			bool tryRandom = gPackageCount > kRandomSearchThreshold;
 			if (tryRandom && !useMask) {
-				search_global_random(MinimumLoadAction(
+				search_global_random(cpu, MinimumLoadAction(
 					cpu, NULL, core, bestScore, preferredType));
 			} else if (useMask) {
 				CheckMaskedPackagesMinimumLoad(cpu, mask, core, bestScore,
@@ -276,7 +276,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			bool tryRandomStd = gPackageCount > kRandomSearchThreshold;
 
 			if (tryRandomStd && !useMask) {
-				search_global_random(MinimumLoadAction(
+				search_global_random(cpu, MinimumLoadAction(
 					cpu, NULL, core, stdBestScore, CORE_TYPE_STANDARD));
 			} else if (useMask) {
 				CheckMaskedPackagesMinimumLoad(cpu, mask, core, stdBestScore,
@@ -437,7 +437,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			search_local_node(node, globalMinLoadAction);
 
 			// Phase 3: Global Random
-			search_global_random(globalMinLoadAction);
+			search_global_random(cpu, globalMinLoadAction);
 
 		} else if (useMask) {
 			CheckMaskedPackagesMinimumLoad(cpu, mask, bestCore, bestLoad);
@@ -488,7 +488,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 					if (cpuID >= cpuCount)
 						continue;
 
-					core = CPUEntry::GetCPU(cpuID)->Core();
+					core = CPUEntry::Get(cpuID)->Core();
 					if (core != NULL)
 						break;
 				}
@@ -543,7 +543,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 	if (threadData->IsRealTime())
 		return threadData->Core();
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CPUEntry* cpu = CPUEntry::Get(smp_get_current_cpu());
 	CoreEntry* core = threadData->Core();
 
 	// Get the least loaded core.
@@ -565,7 +565,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 		search_local_node(node, rebalanceMinLoadAction);
 
 		// Phase 3: Global Random
-		search_global_random(rebalanceMinLoadAction);
+		search_global_random(cpu, rebalanceMinLoadAction);
 
 	} else if (useMask) {
 		CheckMaskedPackagesMinimumLoad(cpu, mask, other, bestLoad);
@@ -770,7 +770,7 @@ static void rebalance_irqs(bool idle) {
 	// Use random sampling if possible
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-	CPUEntry* cpuEntryForIRQ = CPUEntry::GetCPU(cpu->cpu_num);
+	CPUEntry* cpuEntryForIRQ = CPUEntry::Get(cpu->cpu_num);
 
 	if (tryRandom) {
 		// Phase 2: Local Node
@@ -783,7 +783,7 @@ static void rebalance_irqs(bool idle) {
 		}
 
 		// Phase 3: Global Random
-		search_global_random(irqMinLoadAction);
+		search_global_random(cpu, irqMinLoadAction);
 	}
 
 	// Use empty mask (NULL), as we don't care about affinity here
@@ -827,7 +827,7 @@ static void rebalance_irqs(bool idle) {
 	if (otherLoad + kLoadDifference >= coreLoad)
 		return;
 
-	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
+	CPUEntry* cpuEntry = CPUEntry::Get(cpu->cpu_num);
 	cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);

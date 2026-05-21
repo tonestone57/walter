@@ -70,6 +70,7 @@ uint64 gIdleMask __attribute__((aligned(8))) = 0;
 int64 gRCUGeneration __attribute__((aligned(8))) = 1;
 spinlock gSchedulerUpdateLock = B_SPINLOCK_INITIALIZER;
 
+
 static object_cache* sRCUCallbackCache = NULL;
 
 void scheduler_synchronize() {
@@ -85,7 +86,7 @@ void scheduler_synchronize() {
 	// Update current CPU generation to match, so future synchronizations
 	// don't wait for us unnecessarily, and so that we don't deadlock if another
 	// CPU is also waiting for us in scheduler_synchronize().
-	StoreRelease64(CPUEntry::GetCPU(thisCPU)->fRCULastGeneration,
+	StoreRelease64(CPUEntry::Get(thisCPU)->fRCULastGeneration,
 				 targetGen);
 
 	// Broadcast an ICI to all other enabled CPUs to force them into a quiescent
@@ -102,7 +103,7 @@ void scheduler_synchronize() {
 		if (i == thisCPU || gCPU[i].disabled)
 			continue;
 
-		CPUEntry* cpu = CPUEntry::GetCPU(i);
+		CPUEntry* cpu = CPUEntry::Get(i);
 		while (LoadAcquire64(cpu->fRCULastGeneration) < targetGen) {
 			if (gCPU[i].disabled)
 				break;
@@ -111,14 +112,12 @@ void scheduler_synchronize() {
 	}
 }
 
-
 void scheduler_call_rcu(void (*callback)(void*), void* arg) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	struct rcu_callback* entry = (struct rcu_callback*)object_cache_alloc(
 		sRCUCallbackCache, CACHE_DONT_WAIT_FOR_MEMORY);
 	if (entry == NULL) {
-		// Fallback to synchronous if allocation fails
 		scheduler_synchronize();
 		callback(arg);
 		return;
@@ -126,16 +125,13 @@ void scheduler_call_rcu(void (*callback)(void*), void* arg) {
 
 	entry->callback = callback;
 	entry->arg = arg;
-
-	// Increment generation and set target
 	entry->targetGen = AddAcquireRelease64(gRCUGeneration, 1) + 1;
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CPUEntry* cpu = CPUEntry::Get(smp_get_current_cpu());
 	InterruptsSpinLocker locker(cpu->fRCUCallbackLock);
 	entry->next = cpu->fPendingCallbacks;
 	cpu->fPendingCallbacks = entry;
 }
-
 
 static void scheduler_process_rcu_callbacks(void* /*arg*/) {
 	struct rcu_callback* readyList = NULL;
@@ -145,20 +141,15 @@ static void scheduler_process_rcu_callbacks(void* /*arg*/) {
 	for (int32 i = 0; i < cpuCount; i++) {
 		if (gCPU[i].disabled)
 			continue;
-		int64 gen = LoadAcquire64(CPUEntry::GetCPU(i)->fRCULastGeneration);
+		int64 gen = LoadAcquire64(CPUEntry::Get(i)->fRCULastGeneration);
 		if (gen < minGen)
 			minGen = gen;
 	}
 
-	// Corrected De-centralized RCU processing:
-	// While the processing DPC runs on one CPU, it must iterate over all CPUs
-	// and drain their ready callbacks to avoid resource leaks. Since each
-	// CPUEntry has its own lock, this remains highly scalable.
 	for (int32 i = 0; i < cpuCount; i++) {
 		if (gCPU[i].disabled)
 			continue;
-
-		CPUEntry* cpu = CPUEntry::GetCPU(i);
+		CPUEntry* cpu = CPUEntry::Get(i);
 		InterruptsSpinLocker locker(cpu->fRCUCallbackLock);
 		struct rcu_callback** curr = &cpu->fPendingCallbacks;
 		while (*curr != NULL) {
@@ -180,22 +171,17 @@ static void scheduler_process_rcu_callbacks(void* /*arg*/) {
 		object_cache_free(sRCUCallbackCache, entry, 0);
 	}
 }
-
-
 static timer sInteractionTimer;
-
-// Encapsulate global interaction state in a single cache-aligned structure
-// to prevent false sharing between CPUs during frequent updates.
-struct CACHE_LINE_ALIGN InteractivityState {
-	int64 lastInteractionTime;
+struct InteractivityState {
+	bigtime_t lastInteractionTime;
 	int32 dpcPending;
 	int32 timerArmed;
 	int32 pendingDPCTarget;
-};
+} CACHE_LINE_ALIGN;
 
-static struct InteractivityState sInteractivityState = {
-	0, 0, 0, 0
-};
+static struct InteractivityState sInteractionState;
+
+// --- Safe snapshot for load balancing decisions ---
 
 
 static const int kLoadBalanceThreshold = 2;
@@ -212,28 +198,28 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 		// Note: we can skip the big scheduler lock (and the expensive RCU
 		// synchronization in its destructor) if the deadline bucket size
 		// is already at the requested target.
-		int64 targetResolution = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
+		int64 targetResolution = (int64)LoadAcquire(sInteractionState.pendingDPCTarget);
 		if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
 			InterruptsBigSchedulerLocker locker;
 			// Re-check target resolution after lock acquisition as it may
 			// have changed.
-			targetResolution = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
+			targetResolution = (int64)LoadAcquire(sInteractionState.pendingDPCTarget);
 			if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
 				StoreRelease64(gDeadlineBucketSize, targetResolution);
 				UpdateDeadlineScalingScalable();
 			}
 		}
 
-		// Atomically clear sDPCPending and re-check sPendingDPCTarget.
+		// Atomically clear sInteractionState.dpcPending and re-check sInteractionState.pendingDPCTarget.
 		// If a new request arrived while we were processing the last one
 		// or synchronizing, we loop back to process it.  This ensures no
 		// requests are lost in the window between the loop start and the
-		// sDPCPending clear.
-		StoreRelease(sInteractivityState.dpcPending, 0);
-		if ((int64)LoadAcquire(sInteractivityState.pendingDPCTarget) == targetResolution)
+		// sInteractionState.dpcPending clear.
+		StoreRelease(sInteractionState.dpcPending, 0);
+		if ((int64)LoadAcquire(sInteractionState.pendingDPCTarget) == targetResolution)
 			break;
 
-		if (GetAndSet(sInteractivityState.dpcPending, 1) != 0) {
+		if (GetAndSet(sInteractionState.dpcPending, 1) != 0) {
 			// Another CPU already queued a new DPC; we are done.
 			break;
 		}
@@ -242,40 +228,40 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 
 
 static status_t interaction_timer_hook(struct timer* timer) {
-	// Note: the timer callback must clear sTimerArmed BEFORE
+	// Note: the timer callback must clear sInteractionState.timerArmed BEFORE
 	// attempting to queue the DPC, not after. The previous code cleared
-	// sTimerArmed after the DPCQueue::Add call. In the window between Add
-	// returning and sTimerArmed being cleared, another CPU executing
-	// scheduler_update_interaction_state could see sTimerArmed==1, skip
+	// sInteractionState.timerArmed after the DPCQueue::Add call. In the window between Add
+	// returning and sInteractionState.timerArmed being cleared, another CPU executing
+	// scheduler_update_interaction_state could see sInteractionState.timerArmed==1, skip
 	// arming, and then the callback clears it - leaving no armed timer and
 	// no pending DPC for the next interaction cycle.
 	//
-	// By clearing sTimerArmed first we allow re-arming immediately if needed,
-	// and the DPC guard (sDPCPending) prevents duplicate DPC enqueueing.
-	StoreRelease(sInteractivityState.timerArmed, 0);
+	// By clearing sInteractionState.timerArmed first we allow re-arming immediately if needed,
+	// and the DPC guard (sInteractionState.dpcPending) prevents duplicate DPC enqueueing.
+	StoreRelease(sInteractionState.timerArmed, 0);
 
-	StoreRelease(sInteractivityState.pendingDPCTarget, 5000000);
-	if (GetAndSet(sInteractivityState.dpcPending, 1) == 0) {
-		int64 target = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
+	StoreRelease(sInteractionState.pendingDPCTarget, 5000000);
+	if (GetAndSet(sInteractionState.dpcPending, 1) == 0) {
+		int64 target = (int64)LoadAcquire(sInteractionState.pendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
 			B_OK) {
-			StoreRelease(sInteractivityState.dpcPending, 0);
-			StoreRelease(sInteractivityState.pendingDPCTarget, 0);
-			// DPC queue full; sTimerArmed already cleared above so the
+			StoreRelease(sInteractionState.dpcPending, 0);
+			StoreRelease(sInteractionState.pendingDPCTarget, 0);
+			// DPC queue full; sInteractionState.timerArmed already cleared above so the
 			// next interaction event can re-arm the timer.
 		}
-		// On success: DPC is in flight; sDPCPending cleared by DPC handler.
+		// On success: DPC is in flight; sInteractionState.dpcPending cleared by DPC handler.
 	}
-	// If sDPCPending was already 1: a DPC is already queued, which will
-	// service sPendingDPCTarget. sTimerArmed already cleared above.
+	// If sInteractionState.dpcPending was already 1: a DPC is already queued, which will
+	// service sInteractionState.pendingDPCTarget. sInteractionState.timerArmed already cleared above.
 
 	return B_HANDLED_INTERRUPT;
 }
 
 
 void scheduler_update_interaction_state(bigtime_t now) {
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CPUEntry* cpu = CPUEntry::Get(smp_get_current_cpu());
 
 	// Periodically trigger RCU callback processing. This avoids doing it
 	// on every context switch or interrupt.
@@ -291,7 +277,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 		// fInteractionUpdateCounter is a
 		// plain uint32 incremented without atomics.  This is safe because:
 		// (a) it is a per-CPU field - only the current CPU accesses it here
-		//     (cpu == GetCPU(smp_get_current_cpu())), and
+		//     (cpu == CPUEntry::Get(smp_get_current_cpu())), and
 		// (b) it is purely a throttle counter; a torn or missed increment
 		//     merely shifts the phase of the 32-call window, which is
 		//     harmless.  No code change required.
@@ -307,7 +293,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	if (now == 0)
 		now = system_time();
 
-	bigtime_t lastTime = (bigtime_t)LoadAcquire64(sInteractivityState.lastInteractionTime);
+	bigtime_t lastTime = (bigtime_t)LoadAcquire64(sInteractionState.lastInteractionTime);
 	// Note: Scheduler::MinimalQuantum() reads sCurrentMode->minimal_quantum
 	// in two separate memory accesses (pointer load + field read). On 32-bit
 	// targets, a concurrent mode switch can change sCurrentMode between these,
@@ -320,13 +306,13 @@ void scheduler_update_interaction_state(bigtime_t now) {
 							  : 1200;  // fallback: 1.2ms minimal quantum
 
 	while (now - lastTime >= threshold) {
-		if ((bigtime_t)TestAndSet64(sInteractivityState.lastInteractionTime, (int64)now,
+		if ((bigtime_t)TestAndSet64(sInteractionState.lastInteractionTime, (int64)now,
 				(int64)lastTime) == lastTime) {
 			lastTime = now;
 			break;
 		}
 
-		lastTime = (bigtime_t)LoadAcquire64(sInteractivityState.lastInteractionTime);
+		lastTime = (bigtime_t)LoadAcquire64(sInteractionState.lastInteractionTime);
 		if (now - lastTime < threshold)
 			return;
 	}
@@ -334,7 +320,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	if (currentBucketSize == 1000000) {
 		// Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
-		if (GetAndSet(sInteractivityState.timerArmed, 1) == 0) {
+		if (GetAndSet(sInteractionState.timerArmed, 1) == 0) {
 			add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 					  B_ONE_SHOT_RELATIVE_TIMER);
 		}
@@ -345,36 +331,36 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// We must not hold scheduler locks here!
 	// scheduler_update_interaction_state is called from Enqueue, which HOLDS
 	// scheduler locks.
-	// Note: (scale-up path): if DPCQueue::Add fails, clear sTimerArmed
+	// Note: (scale-up path): if DPCQueue::Add fails, clear sInteractionState.timerArmed
 	// so that future interactions can still arm the timer.  The previous code
-	// set sTimerArmed=1 unconditionally after potentially failing DPC addition,
+	// set sInteractionState.timerArmed=1 unconditionally after potentially failing DPC addition,
 	// permanently blocking future timer arming.
-	// Note: removed the atomic-set(&sDPCPending, 0) that preceded the
-	// atomic-get-and-set below.  Clearing sDPCPending unconditionally before
+	// Note: removed the atomic-set(&sInteractionState.dpcPending, 0) that preceded the
+	// atomic-get-and-set below.  Clearing sInteractionState.dpcPending unconditionally before
 	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
 	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
-	StoreRelease(sInteractivityState.pendingDPCTarget, 1000000);
-	if (GetAndSet(sInteractivityState.dpcPending, 1) == 0) {
-		int64 target = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
+	StoreRelease(sInteractionState.pendingDPCTarget, 1000000);
+	if (GetAndSet(sInteractionState.dpcPending, 1) == 0) {
+		int64 target = (int64)LoadAcquire(sInteractionState.pendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
 			B_OK) {
-			StoreRelease(sInteractivityState.dpcPending, 0);
-			StoreRelease(sInteractivityState.pendingDPCTarget, 0);
-			// Note: when DPC queue is full, ensure sTimerArmed is
+			StoreRelease(sInteractionState.dpcPending, 0);
+			StoreRelease(sInteractionState.pendingDPCTarget, 0);
+			// Note: when DPC queue is full, ensure sInteractionState.timerArmed is
 			// also cleared so the next interaction event can re-arm the timer.
-			// Without this, sTimerArmed stays 0 (it was never set in this
+			// Without this, sInteractionState.timerArmed stays 0 (it was never set in this
 			// path) but the timer is not armed, so gDeadlineBucketSize stays
 			// at the wrong resolution until the next DPC queue drain.
-			// sTimerArmed is set below; if Add() fails we must NOT set it.
+			// sInteractionState.timerArmed is set below; if Add() fails we must NOT set it.
 			return;
 		}
 	}
 
 	// Only arm the timer if the DPC was successfully queued above.
-	// Note: sTimerArmed must not be set if Add() failed, since we
+	// Note: sInteractionState.timerArmed must not be set if Add() failed, since we
 	// returned early above in that case and never reach this line.
-	if (GetAndSet(sInteractivityState.timerArmed, 1) == 0) {
+	if (GetAndSet(sInteractionState.timerArmed, 1) == 0) {
 		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 				  B_ONE_SHOT_RELATIVE_TIMER);
 	}
@@ -558,7 +544,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 	CoreEntry* targetCore = NULL;
 	if (thread->pinned_to_cpu > 0) {
 		int32 pinnedCPU = thread->pinned_to_cpu - 1;
-		targetCPU = CPUEntry::GetCPU(pinnedCPU);
+		targetCPU = CPUEntry::Get(pinnedCPU);
 		if (gCPU[targetCPU->ID()].disabled)
 			targetCPU = NULL;
 	} else if (gSingleCore) {
@@ -618,7 +604,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 			}
 
 			if (enqueueAttempts == kMaxRetries) {
-				targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
+				targetCPU = CPUEntry::Get(smp_get_current_cpu());
 				targetCore = targetCPU->Core();
 				if (targetCore == NULL || gCPU[targetCPU->ID()].disabled) {
 					if (threadData->IsReady() && !threadData->IsIdle())
@@ -915,7 +901,7 @@ static void reschedule(int32 nextState) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	int32 thisCPU = smp_get_current_cpu();
-	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);
+	CPUEntry* cpu = CPUEntry::Get(thisCPU);
 
 	// RCU Quiescent State: Report current generation.
 	// Since reschedule() runs with interrupts disabled, it forms a

@@ -29,13 +29,6 @@
 
 namespace Scheduler {
 
-struct rcu_callback {
-	void (*callback)(void*);
-	void* arg;
-	int64 targetGen;
-	struct rcu_callback* next;
-};
-
 // Type-safe atomic wrappers to eliminate messy casts and ensure 32/64-bit safety.
 
 template <typename T>
@@ -414,6 +407,13 @@ extern uint64 gIdleMask __attribute__((aligned(8)));
 extern int64 gRCUGeneration __attribute__((aligned(8)));
 extern spinlock gSchedulerUpdateLock;
 
+struct rcu_callback {
+	void (*callback)(void*);
+	void* arg;
+	int64 targetGen;
+	struct rcu_callback* next;
+};
+
 void scheduler_synchronize();
 void scheduler_call_rcu(void (*callback)(void*), void* arg);
 
@@ -462,16 +462,14 @@ struct SchedulerSnapshot {
 	uint64 idleMask __attribute__((aligned(8)));
 };
 
-inline SchedulerSnapshot MakeSchedulerSnapshot(const int32& total,
-											   const uint64& idleMask) {
-	SchedulerSnapshot s;
-	s.totalRunnable = LoadAcquire(total);
-	s.idleMask = (uint64)LoadAcquire64(idleMask);
-	return s;
-}
-
+// --- Safe snapshot for load balancing decisions ---
 inline SchedulerSnapshot TakeSnapshot() {
-	return MakeSchedulerSnapshot(gTotalRunnableThreads, gIdleMask);
+	extern int32 gTotalRunnableThreads;
+	extern uint64 gIdleMask;
+	SchedulerSnapshot s;
+	s.totalRunnable = LoadAcquire(gTotalRunnableThreads);
+	s.idleMask = (uint64)LoadAcquire64(gIdleMask);
+	return s;
 }
 
 inline bool ShouldMigrate(int sourceLoad, int targetLoad, int threshold) {

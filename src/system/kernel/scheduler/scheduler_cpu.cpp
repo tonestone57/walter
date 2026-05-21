@@ -335,14 +335,15 @@ CPUEntry::CPUEntry()
 	  fRescheduleCount(0),
 	  fCoreLocalIndex(0),
 	  fInteractionUpdateCounter(0),
+^I  fPendingCallbacks(NULL),
+^I  fRCUCallbackLock(B_SPINLOCK_INITIALIZER),
 
 	  fTotalWeight(0),
 	  fReschedulePending(0),
 	  fLastLocalPackageIndex(0),
 	  fLastReschedule(0) {
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
-	fPendingCallbacks = NULL;
-	B_INITIALIZE_SPINLOCK(&fRCUCallbackLock);
+^IB_INITIALIZE_SPINLOCK(&fRCUCallbackLock);
 }
 
 
@@ -944,7 +945,7 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 			enabled.SetWord(i, gCPUEnabled.Bits(i));
 		}
 
-		search_local_node(
+		search_local_node(this,
 			node, LocalNodeStealAction(this, package, &stolen, enabled, now));
 	}
 
@@ -967,7 +968,7 @@ ThreadData* CPUEntry::_TryStealWorkNUMA(bigtime_t now) {
 		enabled.SetWord(i, gCPUEnabled.Bits(i));
 	}
 
-	search_numa_random(node->NUMAID(), node->NodeIndex(),
+	search_numa_random(this, node->NUMAID(), node->NodeIndex(),
 					   NUMARandomStealAction(this, package, &stolen, enabled,
 											 now));
 	return stolen;
@@ -985,7 +986,7 @@ ThreadData* CPUEntry::_TryStealWorkGlobal(bigtime_t now) {
 		enabled.SetWord(i, gCPUEnabled.Bits(i));
 	}
 
-	search_global_random(
+	search_global_random(this,
 		GlobalRandomStealAction(this, package, &stolen, enabled, now));
 	return stolen;
 }
@@ -1052,7 +1053,7 @@ void CPUEntry::_RequestPerformanceLevel(ThreadData* threadData, bigtime_t now) {
 /* static */ int32 CPUEntry::_UpdateLoadEvent(timer* /* unused */) {
 	bigtime_t now = system_time();
 	CoreEntry::GetCore(smp_get_current_cpu())->ChangeLoad(0, now);
-	CPUEntry::GetCPU(smp_get_current_cpu())->fUpdateLoadEvent = false;
+	CPUEntry::Get(smp_get_current_cpu())->fUpdateLoadEvent = false;
 	return B_HANDLED_INTERRUPT;
 }
 
@@ -1264,7 +1265,7 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 		while (bits != 0) {
 			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
 			int cpuID = i * 32 + bit;
-			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
+			CPUEntry* cpu = CPUEntry::Get(cpuID);
 			bigtime_t vrt = cpu->GetMinVirtualRuntime();
 			if (vrt > 0 && (!found || vrt < minVRuntime)) {
 				minVRuntime = vrt;
@@ -1943,7 +1944,7 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 		while (bits != 0) {
 			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
 			int cpuID = i * 32 + bit;
-			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
+			CPUEntry* cpu = CPUEntry::Get(cpuID);
 			DumpCPURunQueue(cpu);
 			bits &= ~(1U << bit);
 		}

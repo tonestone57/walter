@@ -226,7 +226,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 		if (tryRandom) {
-			search_global_random(ECoreSmallTaskAction(cpu, eCore, eBestScore));
+			search_global_random(cpu, ECoreSmallTaskAction(cpu, eCore, eBestScore));
 		}
 
 		if (eCore == NULL) {
@@ -300,7 +300,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 
 	bool tryRandom = gPackageCount > kRandomSearchThreshold;
 	if (tryRandom) {
-		search_global_random(SmallTaskAction(cpu, core, bestScore));
+		search_global_random(cpu, SmallTaskAction(cpu, core, bestScore));
 	}
 
 	// Fallback to full scan if random sampling failed to find a candidate
@@ -486,7 +486,7 @@ static void check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 			if (cpuID >= cpuCount)
 				continue;
 
-			CoreEntry* cpuCore = CPUEntry::GetCPU(cpuID)->Core();
+			CoreEntry* cpuCore = CPUEntry::Get(cpuID)->Core();
 			if (cpuCore != NULL) {
 				PackageEntry* package = cpuCore->Package();
 				if (package != NULL && package != lastPackage) {
@@ -507,7 +507,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	if (now == 0)
 		now = system_time();
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CPUEntry* cpu = CPUEntry::Get(smp_get_current_cpu());
 	CoreEntry* core = NULL;
 
 	bool useMask = !mask.IsEmpty();
@@ -535,7 +535,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
 		if (tryRandom && !useMask) {
-			search_global_random(PackagePackingAction(
+			search_global_random(cpu, PackagePackingAction(
 				cpu, NULL, core, bestScore, foundNonOverloaded, preferredType));
 		} else if (useMask) {
 			check_masked_packages_packing(cpu, mask, core, bestScore,
@@ -575,7 +575,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			bool tryRandomStd = gPackageCount > kRandomSearchThreshold;
 
 			if (tryRandomStd && !useMask) {
-				search_global_random(PackagePackingAction(
+				search_global_random(cpu, PackagePackingAction(
 					cpu, NULL, core, stdBestScore, foundNonOverloadedStd,
 					CORE_TYPE_STANDARD));
 			} else if (useMask) {
@@ -643,7 +643,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			search_local_node(node, minLoadAction);
 
 			// Phase 3: Global Random
-			search_global_random(minLoadAction);
+			search_global_random(cpu, minLoadAction);
 
 		} else if (useMask) {
 			CheckMaskedPackagesMinimumLoad(cpu, mask, bestCore, bestScore);
@@ -708,7 +708,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 					if (cpuID >= cpuCount)
 						continue;
 
-					core = CPUEntry::GetCPU(cpuID)->Core();
+					core = CPUEntry::Get(cpuID)->Core();
 					if (core != NULL)
 						break;
 				}
@@ -748,7 +748,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 	if (threadData->IsRealTime())
 		return threadData->Core();
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CPUEntry* cpu = CPUEntry::Get(smp_get_current_cpu());
 	const bool useMask = !mask.IsEmpty();
 
 	// Returning NULL from rebalance signals "force full search" to
@@ -817,7 +817,7 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 			search_local_node(node, rebalanceAction);
 
 			// Phase 3: Global Random
-			search_global_random(rebalanceAction);
+			search_global_random(cpu, rebalanceAction);
 
 		} else if (useMask) {
 			check_masked_packages_packing(cpu, mask, other, bestScore,
@@ -1029,7 +1029,7 @@ static void rebalance_irqs(bool idle) {
 		// Use random sampling if possible
 		bool tryRandom = gPackageCount > kRandomSearchThreshold;
 
-		CPUEntry* cpuEntryForIRQ = CPUEntry::GetCPU(cpu->cpu_num);
+		CPUEntry* cpuEntryForIRQ = CPUEntry::Get(cpu->cpu_num);
 
 		if (tryRandom) {
 			// Phase 2: Local Node
@@ -1049,7 +1049,7 @@ static void rebalance_irqs(bool idle) {
 			}
 
 			// Phase 3: Global Random
-			search_global_random(irqMinLoadAction);
+			search_global_random(cpu, irqMinLoadAction);
 		}
 
 		if (other == NULL) {
@@ -1087,7 +1087,7 @@ static void rebalance_irqs(bool idle) {
 	if (!pack && other->GetScore() + kLoadDifference >= currentCore->GetScore())
 		return;
 
-	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
+	CPUEntry* cpuEntry = CPUEntry::Get(cpu->cpu_num);
 	cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);

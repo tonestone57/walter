@@ -14,8 +14,8 @@
 
 namespace Scheduler {
 
-template <typename Action>
-static void search_local_node(SchedulerNode* node, Action action) {
+
+template <typename Action> static void search_local_node(CPUEntry* cpu, SchedulerNode* node, Action action) {
 	if (node == NULL)
 		return;
 
@@ -25,7 +25,6 @@ static void search_local_node(SchedulerNode* node, Action action) {
 	if (nodeBaseIndex >= gPackageCount || packagesInNode <= 0)
 		return;
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	// For small nodes (<=8 packages), use a Rotational Linear Scan.  Starting
 	// from the last searched position improves coverage and reduces collisions
@@ -145,13 +144,12 @@ static void search_local_node(SchedulerNode* node, Action action) {
 	}
 }
 
-template <typename Action>
-static void search_numa_random(int32 numaID, int32 excludeNode, Action action) {
+
+template <typename Action> static void search_numa_random(CPUEntry* cpu, int32 numaID, int32 excludeNode, Action action) {
 	const int32 nodeCount = gNodeCount;
 	if (nodeCount <= 0)
 		return;
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	int32 samplesToTake = min_c(gRandomSamples, nodeCount);
 	int32 samplesTaken = 0;
 	int32 attempts = 0;
@@ -177,18 +175,23 @@ static void search_numa_random(int32 numaID, int32 excludeNode, Action action) {
 	}
 }
 
-template <typename Action>
-static void search_global_random(Action action) {
-	// Note: snapshot counts once at the start of the function to ensure
-	// consistency during hot-plug events.
-	const int32 packageCount = gPackageCount;
-	const int32 nodeCount = gNodeCount;
 
+template <typename Action> static void search_global_random(CPUEntry* cpu, Action action) {
+	// Note: snapshot gPackageCount once at the start of the function.
+	// This ensures consistency if a hot-plug event changes the global count
+	const int32 packageCount = gPackageCount;
+
+	// Note: guard packageCount == 0 before computing samplesToTake
+	// and entering the while loop. min_c(gRandomSamples, 0) == 0 so the
+	// loop would not execute, but the ASSERT and wordsNeeded computation
+	// below could misbehave with packageCount == 0.
 	if (packageCount <= 0)
 		return;
 
 	// Note: kStackBitmaskSize covers 4096 packages (512 bytes on the
-	// stack).  init() enforces gPackageCount <= 4096.
+	// stack).  init() enforces gPackageCount <= 4096.  Assert that the runtime
+	// value never exceeds our compile-time allocation so an accidental removal
+	// of the init() cap does not silently cause out-of-bounds writes.
 	ASSERT(packageCount <= 4096);
 
 	int32 samplesToTake = min_c(gRandomSamples, packageCount);
@@ -196,28 +199,17 @@ static void search_global_random(Action action) {
 	int32 attempts = 0;
 	const int32 kMaxAttempts = samplesToTake * 8;
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 
 	// Bitmask for tracking visited packages to avoid collisions.
 	// For systems with <= 64 packages, use a single uint64 bitmask (fast path).
+	// the fast-path shift `1ULL << i` where
+	// i is in [0, packageCount-1] with packageCount <= 64 means i is in
+	// [0, 63].  Shifting a 64-bit literal by 63 is defined behavior.
+	// No overflow is possible.  No code change required.
 	if (packageCount <= 64) {
 		uint64 visitedBits = 0;
 		while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-			int32 i;
-			if (nodeCount > 1) {
-				// Hierarchical Sampling: Select a random node, then a random
-				// package within that node. This ensures all NUMA domains are
-				// equally likely to be probed, improving distribution.
-				int32 n = (int32)(((uint64)cpu->GetRandom() * nodeCount) >> 32);
-				SchedulerNode* node = &gSchedulerNodes[n];
-				int32 pkgsInNode = node->PackageCount();
-				if (pkgsInNode <= 0) continue;
-				i = node->PackageStartIndex() + (int32)(((uint64)cpu->GetRandom() * pkgsInNode) >> 32);
-			} else {
-				i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
-			}
-
-			if (i < 0 || i >= packageCount) continue;
+			int32 i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
 
 			if ((visitedBits & (1ULL << i)) != 0)
 				continue;
@@ -230,27 +222,30 @@ static void search_global_random(Action action) {
 		return;
 	}
 
+	// the previous kStackBitmaskSize of 1024 meant that packages
+	// in the range [1024, 4096) fell into a coarse stripe-based fallback
+	// that visited at most 1 package per 64-package band, severely
+	// under-sampling large systems.  gPackageCount is capped at 4096, so a
+	// 512-byte (4096-bit) bitmask covers the entire valid range without any
+	// stripe approximation.  512 bytes is acceptable on a kernel stack that
+	// is usually 16 KB.
 	const int32 kStackBitmaskSize = 4096;
 	uint64 visitedBits[kStackBitmaskSize / 64];
 
+	// Note: use snapshotted packageCount.
+	// zero only the words needed for packageCount instead of
+	// always zeroing all 512 bytes (64 uint64s).  For a 65-package system
+	// this reduces unnecessary cache-line writes from 512 bytes to 16 bytes.
 	int32 wordsNeeded =
 		min_c((packageCount + 63) / 64, (int32)(kStackBitmaskSize / 64));
 	memset(visitedBits, 0, (size_t)wordsNeeded * sizeof(uint64));
 
 	while (samplesTaken < samplesToTake && attempts++ < kMaxAttempts) {
-		int32 i;
-		if (nodeCount > 1) {
-			int32 n = (int32)(((uint64)cpu->GetRandom() * nodeCount) >> 32);
-			SchedulerNode* node = &gSchedulerNodes[n];
-			int32 pkgsInNode = node->PackageCount();
-			if (pkgsInNode <= 0) continue;
-			i = node->PackageStartIndex() + (int32)(((uint64)cpu->GetRandom() * pkgsInNode) >> 32);
-		} else {
-			i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
-		}
+		int32 i = (int32)(((uint64)cpu->GetRandom() * packageCount) >> 32);
 
-		if (i < 0 || i >= packageCount) continue;
-
+		// With kStackBitmaskSize == 4096 and gPackageCount <= 4096 every
+		// valid index i fits inside the bitmask.  The out-of-range branch
+		// is retained as a safety net in case the cap ever changes.
 		int32 word = i / 64;
 		int32 bit = i % 64;
 
@@ -259,6 +254,8 @@ static void search_global_random(Action action) {
 				continue;
 			visitedBits[word] |= (1ULL << bit);
 		}
+		// For indices >= kStackBitmaskSize (unreachable today) allow the
+		// probe without deduplication; at worst we visit a package twice.
 		samplesTaken++;
 
 		if (action(&gPackageEntries[i]))
@@ -340,7 +337,7 @@ static inline void CheckMaskedPackagesMinimumLoad(
 			if (cpuID >= cpuCount)
 				continue;
 
-			CPUEntry* cpuEntry = CPUEntry::GetCPU(cpuID);
+			CPUEntry* cpuEntry = CPUEntry::Get(cpuID);
 			if (cpuEntry == NULL)
 				continue;
 			CoreEntry* cpuCore = cpuEntry->Core();

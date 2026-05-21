@@ -274,7 +274,7 @@ inline CoreEntry* ThreadData::PreviousCore() const {
 	if (fThread->previous_cpu == NULL)
 		return NULL;
 
-	CoreEntry* core = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num)->Core();
+	CoreEntry* core = CPUEntry::Get(fThread->previous_cpu->cpu_num)->Core();
 	if (core == NULL || core->CPUCount() <= 0)
 		return NULL;
 
@@ -557,7 +557,7 @@ inline void ThreadData::PutBack(bigtime_t now) {
 	_ComputeEffectivePriority(now);
 	int32 priority = GetEffectivePriority();
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CPUEntry* cpu = CPUEntry::Get(smp_get_current_cpu());
 
 	if (CheckCapacity(cpu) != B_OK) {
 		panic("scheduler: capacity exceeded in PutBack for thread %" B_PRId32,

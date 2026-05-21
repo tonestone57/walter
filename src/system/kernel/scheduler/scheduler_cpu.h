@@ -155,7 +155,7 @@ public:
 	}
 	void ClearReschedulePending() { StoreRelease(fReschedulePending, 0); }
 
-	static inline CPUEntry* GetCPU(int32 cpu);
+	static inline CPUEntry* Get(int32 cpu);
 
 private:
 	void _RequestPerformanceLevel(ThreadData* threadData, bigtime_t now = 0);
@@ -187,9 +187,8 @@ private:
 
 	uint32 fRescheduleCount;
 	uint32 fInteractionUpdateCounter;
-
-	struct rcu_callback* fPendingCallbacks;
-	spinlock fRCUCallbackLock;
+^Istruct rcu_callback* fPendingCallbacks;
+^Ispinlock fRCUCallbackLock;
 
 	int64 fTotalWeight __attribute__((aligned(8)));
 
@@ -503,7 +502,7 @@ inline bigtime_t CPUEntry::PreemptionThreshold() const {
 	return core->PreemptionThreshold();
 }
 
-/* static */ inline CPUEntry* CPUEntry::GetCPU(int32 cpu) {
+/* static */ inline CPUEntry* CPUEntry::Get(int32 cpu) {
 	return &gCPUEntries[cpu];
 }
 
@@ -825,7 +824,7 @@ inline CoreEntry* PackageEntry::GetCore(int32 index) const {
 	PackageEntry* package = NULL;
 	int32 bestIdleCount = -1;
 
-	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	CPUEntry* cpu = CPUEntry::Get(smp_get_current_cpu());
 
 	if (gPackageCount > kRandomSearchThreshold) {
 		// (clarification): CoreCPULocker and CoreRunQueueLocker in

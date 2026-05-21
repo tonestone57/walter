@@ -95,7 +95,7 @@ inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 	if (fThread->previous_cpu != NULL && !fThread->previous_cpu->disabled &&
 		(!useMask || mask.GetBit(fThread->previous_cpu->cpu_num))) {
 		CPUEntry* previousCPU =
-			CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
+			CPUEntry::Get(fThread->previous_cpu->cpu_num);
 		if (previousCPU->Core() == core &&
 			CPUPriorityHeap::GetKey(previousCPU) <= threadPriority) {
 			// Optimization: Prioritize the previous CPU if it is in the same
@@ -280,7 +280,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 			if (targetCore == NULL) {
 				// Last-resort: fall back to the current CPU's core, which is
 				// always valid while this CPU is running.
-				targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
+				targetCPU = CPUEntry::Get(smp_get_current_cpu());
 				targetCore = targetCPU->Core();
 				if (targetCore == NULL) {
 					// Truly degenerate: current CPU has no core (hot-unplug
@@ -320,7 +320,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 	}
 
 	// Final fallback: current CPU
-	targetCPU = CPUEntry::GetCPU(smp_get_current_cpu());
+	targetCPU = CPUEntry::Get(smp_get_current_cpu());
 	targetCore = targetCPU->Core();
 	// During hot-unplug the current CPU's core can have CPUCount==0.
 	// If so, walk to the first enabled CPU rather than returning a dead core.
@@ -332,7 +332,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 				// be assigned to CPU 0 during hot-unplug, violating affinity.
 				if (!mask.IsEmpty() && !mask.GetBit(i))
 					continue;
-				targetCPU = CPUEntry::GetCPU(i);
+				targetCPU = CPUEntry::Get(i);
 				targetCore = targetCPU->Core();
 				if (targetCore != NULL && targetCore->CPUCount() > 0)
 					break;
