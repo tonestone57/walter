@@ -406,7 +406,7 @@ struct RunQueueScanner {
 		// Scan EEVDF FairShare threads (fli_index bins)
 		native_cpu_mask_t flBitmap = runQueue->GetFirstLevelBitmap();
 		while (flBitmap != 0) {
-			int fli = scheduler_ctz(flBitmap);
+			int fli = scheduler_flsnative(flBitmap) - 1;
 			// To ensure interactivity boosting for all FairShare threads,
 			// we iterate through the heads of non-empty bins.
 			native_cpu_mask_t slBitmap = runQueue->GetSecondLevelBitmap(fli);

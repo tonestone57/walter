@@ -15,17 +15,6 @@
 
 #include "scheduler_profiler.h"
 
-// For BMQ EEVDF mapping
-#if SCHEDULER_MASK_IS_64_BIT
-static const int32 kPrimaryBins = 64;
-static const int32 kSecondaryBins = 64;
-static const int32 kSecondaryBinsShift = 6;
-#else
-static const int32 kPrimaryBins = 32;
-static const int32 kSecondaryBins = 32;
-static const int32 kSecondaryBinsShift = 5;
-#endif
-
 template <typename Element>
 class RunQueueStandardGetLink {
 public:
@@ -36,6 +25,43 @@ public:
 };
 
 namespace Scheduler {
+
+// For BMQ EEVDF mapping
+static const int32 kPrimaryBins = 16;
+static const int32 kSecondaryBins = 32;
+static const int32 kSecondaryBinsShift = 5;
+static const int32 kRTSubsystemSignal = 15;
+
+/*
+ * Haiku OS non-realtime priority mapping table for a 16x32 BMQ-EEVDF matrix.
+ * Maps priority values 0-99 to matrix rows 0-15.
+ * Real-time threads (100+) bypass this matrix.
+ */
+static const uint8 kPriorityToRowMap[100] = {
+/* 0 - 9 */   0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+/* 10 - 19 */ 2, 2, 2, 2, 2, 3, 3, 3, 4, 4,
+/* 20 - 29 */ 5, 6, 6, 7, 7, 8, 8, 8, 9, 9,
+/* 30 - 39 */ 10, 11, 11, 11, 11, 12, 12, 12, 12, 12,
+/* 40 - 49 */ 13, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+/* 50 - 59 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+/* 60 - 69 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+/* 70 - 79 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+/* 80 - 89 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+/* 90 - 99 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15
+};
+
+inline uint8 GetSchedulerMatrixRow(int32 priority) {
+	// Safety clamp for invalid inputs
+	if (unlikely(priority < 0)) return 0;
+
+	// Real-Time subsystem escape hatch
+	if (unlikely(priority >= 100)) {
+		return kRTSubsystemSignal;
+	}
+
+	// Direct, single-cycle O(1) cache-friendly lookup
+	return kPriorityToRowMap[priority];
+}
 
 template <typename Element>
 struct RunQueueTraits {
@@ -124,8 +150,8 @@ public:
 
 	class ConstIterator {
 	public:
-		ConstIterator() : fQueue(NULL), fFLI(0), fSLI(0), fRT(0), fCurrent(NULL) {}
-		ConstIterator(const RunQueue* queue) : fQueue(queue), fFLI(0), fSLI(0), fRT(0), fCurrent(NULL)
+		ConstIterator() : fQueue(NULL), fFLI(kPrimaryBins - 1), fSLI(0), fRT(20), fCurrent(NULL) {}
+		ConstIterator(const RunQueue* queue) : fQueue(queue), fFLI(kPrimaryBins - 1), fSLI(0), fRT(20), fCurrent(NULL)
 		{
 			_Advance();
 		}
@@ -143,10 +169,10 @@ public:
 			if (fQueue == NULL) return;
 
 			if (fCurrent != NULL) {
-				if (fRT < 21) {
+				if (fRT >= 0) {
 					fCurrent = fQueue->fRealTimeQueues[fRT].GetNext(fCurrent);
 					if (fCurrent != NULL) return;
-					fRT++;
+					fRT--;
 				} else {
 					fCurrent = fQueue->fQueues[fFLI][fSLI].GetNext(fCurrent);
 					if (fCurrent != NULL) return;
@@ -154,7 +180,7 @@ public:
 					fSLI++;
 					if (fSLI >= kSecondaryBins) {
 						fSLI = 0;
-						fFLI++;
+						fFLI--;
 					}
 					_AdvanceBin();
 					return;
@@ -162,10 +188,10 @@ public:
 			}
 
 			// Find next non-empty RT queue
-			while (fRT < 21) {
+			while (fRT >= 0) {
 				fCurrent = fQueue->fRealTimeQueues[fRT].Head();
 				if (fCurrent != NULL) return;
-				fRT++;
+				fRT--;
 			}
 
 			// Find next non-empty EEVDF bin
@@ -174,14 +200,14 @@ public:
 
 		void _AdvanceBin()
 		{
-			while (fFLI < kPrimaryBins) {
+			while (fFLI >= 0) {
 				while (fSLI < kSecondaryBins) {
 					fCurrent = fQueue->fQueues[fFLI][fSLI].Head();
 					if (fCurrent != NULL) return;
 					fSLI++;
 				}
 				fSLI = 0;
-				fFLI++;
+				fFLI--;
 			}
 			fCurrent = NULL;
 		}
@@ -196,11 +222,11 @@ public:
 	Element* GetHead(unsigned int priority) const;
 
 private:
-	void _GetIndices(bigtime_t deadline, int32& fli, int32& sli) const;
+	void _GetIndices(bigtime_t deadline, int32 priority, int32& fli, int32& sli) const;
 
 	native_cpu_mask_t fFirstLevelBitmap;
-	native_cpu_mask_t fSecondLevelBitmap[kPrimaryBins];
-	DoublyLinkedList<Element, GetLink> fQueues[kPrimaryBins][kSecondaryBins];
+	native_cpu_mask_t fSecondLevelBitmap[kPrimaryBins] __attribute__((aligned(64)));
+	DoublyLinkedList<Element, GetLink> fQueues[kPrimaryBins][kSecondaryBins] __attribute__((aligned(64)));
 
 	uint32 fRealTimeBitmap;
 	DoublyLinkedList<Element, GetLink> fRealTimeQueues[21];
@@ -233,32 +259,24 @@ void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt)
 }
 
 RUN_QUEUE_TEMPLATE_LIST
-void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32& fli, int32& sli) const
+void RUN_QUEUE_CLASS_NAME::_GetIndices(bigtime_t deadline, int32 priority, int32& fli, int32& sli) const
 {
+	fli = (int32)GetSchedulerMatrixRow(priority);
+
 	// Haiku bigtime_t is in microseconds.
 	bigtime_t delta = deadline - fSystemVirtualTime;
 	if (delta <= 0) {
-		fli = 0;
 		sli = 0;
 		return;
 	}
 
-	// Find the highest power of 2 using Count Leading Zeros instruction
-#if SCHEDULER_MASK_IS_64_BIT
-	native_cpu_mask_t dnative = (native_cpu_mask_t)delta;
-#else
-	native_cpu_mask_t dnative = (native_cpu_mask_t)min_c((bigtime_t)0xFFFFFFFF, delta);
-#endif
-	fli = scheduler_flsnative(dnative) - 1;
-	if (fli >= kPrimaryBins) fli = kPrimaryBins - 1;
-	if (fli < 0) fli = 0;
+	// Map deadline delta to secondary bins using gDeadlineBucketSize.
+	int64 bucketSize = LoadAcquire64(gDeadlineBucketSize);
+	if (bucketSize <= 0) bucketSize = 5000000;
 
-	// Linearly divide the space between 2^fli and 2^(fli+1)
-	if (fli < kSecondaryBinsShift)
-		sli = (dnative - ((native_cpu_mask_t)1 << fli)) << (kSecondaryBinsShift - fli);
-	else
-		sli = (dnative - ((native_cpu_mask_t)1 << fli)) >> (fli - kSecondaryBinsShift);
-	sli &= (kSecondaryBins - 1);
+	sli = (int32)(delta / bucketSize);
+	if (sli >= kSecondaryBins) sli = kSecondaryBins - 1;
+	if (sli < 0) sli = 0;
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -281,7 +299,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 		thread->sli_index = index;
 	} else {
 		int32 fli, sli;
-		_GetIndices(thread->virtual_deadline, fli, sli);
+		_GetIndices(thread->virtual_deadline, (int32)priority, fli, sli);
 		thread->fli_index = fli;
 		thread->sli_index = sli;
 
@@ -313,7 +331,7 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 		thread->sli_index = index;
 	} else {
 		int32 fli, sli;
-		_GetIndices(thread->virtual_deadline, fli, sli);
+		_GetIndices(thread->virtual_deadline, (int32)priority, fli, sli);
 		thread->fli_index = fli;
 		thread->sli_index = sli;
 
@@ -363,7 +381,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 	native_cpu_mask_t flBitmap = GetFirstLevelBitmap();
 	if (flBitmap == 0) return NULL;
 
-	int32 fli = scheduler_ctz(flBitmap);
+	int32 fli = scheduler_flsnative(flBitmap) - 1;
 	if (fli < 0) return NULL;
 
 	native_cpu_mask_t slBitmap = GetSecondLevelBitmap(fli);
@@ -402,7 +420,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 	// Check EEVDF matrix
 	native_cpu_mask_t flBitmap = GetFirstLevelBitmap();
 	while (flBitmap != 0) {
-		int32 fli = scheduler_ctz(flBitmap);
+		int32 fli = scheduler_flsnative(flBitmap) - 1;
 		if (fli < 0) break;
 		native_cpu_mask_t slBitmap = GetSecondLevelBitmap(fli);
 		while (slBitmap != 0) {

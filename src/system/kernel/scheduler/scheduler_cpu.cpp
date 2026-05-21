@@ -731,7 +731,7 @@ ThreadData* CPUEntry::StealThreadLockless(int32& stolenPriority, int32 thiefCPU)
 	// Lock-Free Bit-Stealing Phase 2: FairShare (EEVDF) bins
 	native_cpu_mask_t fliBitmap = fRunQueue.GetFirstLevelBitmap();
 	while (fliBitmap != 0) {
-		int32 fli = scheduler_ctz(fliBitmap);
+		int32 fli = scheduler_flsnative(fliBitmap) - 1;
 		if (fli < 0) break;
 
 		native_cpu_mask_t sliBitmap = fRunQueue.GetSecondLevelBitmap(fli);
