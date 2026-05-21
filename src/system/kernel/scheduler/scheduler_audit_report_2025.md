@@ -27,6 +27,12 @@
 - **Counter Consistency**: Verified and corrected various atomic counter updates (e.g., `fThreadCount`, `gTotalRunnableThreads`) to ensure symmetric increments/decrements and avoid leaks.
 - **IRQ Draining**: Refined the IRQ draining logic in `CPUEntry::Stop` with a 1000-iteration safety bound and progress verification to prevent infinite loops.
 
-## 5. Maintenance & Style
+## 5. Scalability & Cache Efficiency (Phase 2 Audit)
+- **De-centralized RCU Management**: Moved RCU callback queues and spinlocks from global scope into the `CPUEntry` class. This eliminates a primary point of global contention during thread lifecycle events and interaction state updates on systems with high core counts.
+- **Global Interaction State Alignment**: Grouped `sLastInteractionTime`, `sDPCPending`, `sTimerArmed`, and `sPendingDPCTarget` into a `struct InteractivityState` explicitly aligned to 64 bytes (`CACHE_LINE_ALIGN`). This eliminates false sharing (cache invalidation loops) between CPUs frequently updating these counters.
+- **Hierarchical Work-Stealing Sampling**: Refactored `search_global_random` to utilize a Node -> Package sampling strategy. By first selecting a random `SchedulerNode` before probing a `PackageEntry`, the distribution of stealing probes is significantly improved on large NUMA systems, favoring better coverage of all memory domains.
+- **TakeSnapshot Consolidation**: Moved the `TakeSnapshot` helper into `scheduler_common.h` as an inline function, eliminating redundant re-definitions and improving the consistency of load-balancing snapshots across translation units.
+
+## 6. Maintenance & Style
 - **Technical Commentary**: Updated "Issue XX" documentation and technical commentary to maintain historical context and explain complex synchronization patterns.
 - **Style Conformance**: Normalized indentation (tabs) and vertical whitespace (double-newlines between functions) according to Haiku kernel standards.

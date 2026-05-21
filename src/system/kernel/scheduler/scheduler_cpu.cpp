@@ -341,6 +341,8 @@ CPUEntry::CPUEntry()
 	  fLastLocalPackageIndex(0),
 	  fLastReschedule(0) {
 	B_INITIALIZE_SPINLOCK(&fQueueLock);
+	fPendingCallbacks = NULL;
+	B_INITIALIZE_SPINLOCK(&fRCUCallbackLock);
 }
 
 

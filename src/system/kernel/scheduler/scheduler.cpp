@@ -70,15 +70,6 @@ uint64 gIdleMask __attribute__((aligned(8))) = 0;
 int64 gRCUGeneration __attribute__((aligned(8))) = 1;
 spinlock gSchedulerUpdateLock = B_SPINLOCK_INITIALIZER;
 
-struct rcu_callback {
-	void (*callback)(void*);
-	void* arg;
-	int64 targetGen;
-	struct rcu_callback* next;
-};
-
-static struct rcu_callback* sPendingCallbacks = NULL;
-static spinlock sRCUCallbackLock = B_SPINLOCK_INITIALIZER;
 static object_cache* sRCUCallbackCache = NULL;
 
 void scheduler_synchronize() {
@@ -139,9 +130,10 @@ void scheduler_call_rcu(void (*callback)(void*), void* arg) {
 	// Increment generation and set target
 	entry->targetGen = AddAcquireRelease64(gRCUGeneration, 1) + 1;
 
-	InterruptsSpinLocker locker(sRCUCallbackLock);
-	entry->next = sPendingCallbacks;
-	sPendingCallbacks = entry;
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
+	InterruptsSpinLocker locker(cpu->fRCUCallbackLock);
+	entry->next = cpu->fPendingCallbacks;
+	cpu->fPendingCallbacks = entry;
 }
 
 
@@ -158,9 +150,10 @@ static void scheduler_process_rcu_callbacks(void* /*arg*/) {
 			minGen = gen;
 	}
 
+	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	{
-		InterruptsSpinLocker locker(sRCUCallbackLock);
-		struct rcu_callback** curr = &sPendingCallbacks;
+		InterruptsSpinLocker locker(cpu->fRCUCallbackLock);
+		struct rcu_callback** curr = &cpu->fPendingCallbacks;
 		while (*curr != NULL) {
 			if ((*curr)->targetGen <= minGen) {
 				struct rcu_callback* ready = *curr;
@@ -183,21 +176,19 @@ static void scheduler_process_rcu_callbacks(void* /*arg*/) {
 
 
 static timer sInteractionTimer;
-static int64 sLastInteractionTime __attribute__((aligned(8)));
-static int32 sDPCPending __attribute__((aligned(8))) = 0;
-// Atomic guard for sInteractionTimer arming.
-// timer_is_active() followed by add_timer() is not atomic: two CPUs can both
-// observe the timer as inactive and call add_timer() concurrently, corrupting
-// the shared timer_entry.  This flag serialises the arm with a compare-and-set
-// so exactly one CPU wins the race.  The flag is cleared by the timer callback
-// before it fires the DPC, allowing future re-arming.
-static int32 sTimerArmed __attribute__((aligned(8))) = 0;
-static int32 sPendingDPCTarget __attribute__((aligned(8))) = 0;	 // 1000 or 5000
 
-// --- Safe snapshot for load balancing decisions ---
-static SchedulerSnapshot TakeSnapshot() {
-	return MakeSchedulerSnapshot(gTotalRunnableThreads, gIdleMask);
-}
+// Encapsulate global interaction state in a single cache-aligned structure
+// to prevent false sharing between CPUs during frequent updates.
+struct CACHE_LINE_ALIGN InteractivityState {
+	int64 lastInteractionTime;
+	int32 dpcPending;
+	int32 timerArmed;
+	int32 pendingDPCTarget;
+};
+
+static struct InteractivityState sInteractivityState = {
+	0, 0, 0, 0
+};
 
 
 static const int kLoadBalanceThreshold = 2;
@@ -214,12 +205,12 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 		// Note: we can skip the big scheduler lock (and the expensive RCU
 		// synchronization in its destructor) if the deadline bucket size
 		// is already at the requested target.
-		int64 targetResolution = (int64)LoadAcquire(sPendingDPCTarget);
+		int64 targetResolution = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
 		if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
 			InterruptsBigSchedulerLocker locker;
 			// Re-check target resolution after lock acquisition as it may
 			// have changed.
-			targetResolution = (int64)LoadAcquire(sPendingDPCTarget);
+			targetResolution = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
 			if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
 				StoreRelease64(gDeadlineBucketSize, targetResolution);
 				UpdateDeadlineScalingScalable();
@@ -231,11 +222,11 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 		// or synchronizing, we loop back to process it.  This ensures no
 		// requests are lost in the window between the loop start and the
 		// sDPCPending clear.
-		StoreRelease(sDPCPending, 0);
-		if ((int64)LoadAcquire(sPendingDPCTarget) == targetResolution)
+		StoreRelease(sInteractivityState.dpcPending, 0);
+		if ((int64)LoadAcquire(sInteractivityState.pendingDPCTarget) == targetResolution)
 			break;
 
-		if (GetAndSet(sDPCPending, 1) != 0) {
+		if (GetAndSet(sInteractivityState.dpcPending, 1) != 0) {
 			// Another CPU already queued a new DPC; we are done.
 			break;
 		}
@@ -254,16 +245,16 @@ static status_t interaction_timer_hook(struct timer* timer) {
 	//
 	// By clearing sTimerArmed first we allow re-arming immediately if needed,
 	// and the DPC guard (sDPCPending) prevents duplicate DPC enqueueing.
-	StoreRelease(sTimerArmed, 0);
+	StoreRelease(sInteractivityState.timerArmed, 0);
 
-	StoreRelease(sPendingDPCTarget, 5000000);
-	if (GetAndSet(sDPCPending, 1) == 0) {
-		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
+	StoreRelease(sInteractivityState.pendingDPCTarget, 5000000);
+	if (GetAndSet(sInteractivityState.dpcPending, 1) == 0) {
+		int64 target = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
 			B_OK) {
-			StoreRelease(sDPCPending, 0);
-			StoreRelease(sPendingDPCTarget, 0);
+			StoreRelease(sInteractivityState.dpcPending, 0);
+			StoreRelease(sInteractivityState.pendingDPCTarget, 0);
 			// DPC queue full; sTimerArmed already cleared above so the
 			// next interaction event can re-arm the timer.
 		}
@@ -309,7 +300,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	if (now == 0)
 		now = system_time();
 
-	bigtime_t lastTime = (bigtime_t)LoadAcquire64(sLastInteractionTime);
+	bigtime_t lastTime = (bigtime_t)LoadAcquire64(sInteractivityState.lastInteractionTime);
 	// Note: Scheduler::MinimalQuantum() reads sCurrentMode->minimal_quantum
 	// in two separate memory accesses (pointer load + field read). On 32-bit
 	// targets, a concurrent mode switch can change sCurrentMode between these,
@@ -322,13 +313,13 @@ void scheduler_update_interaction_state(bigtime_t now) {
 							  : 1200;  // fallback: 1.2ms minimal quantum
 
 	while (now - lastTime >= threshold) {
-		if ((bigtime_t)TestAndSet64(sLastInteractionTime, (int64)now,
+		if ((bigtime_t)TestAndSet64(sInteractivityState.lastInteractionTime, (int64)now,
 				(int64)lastTime) == lastTime) {
 			lastTime = now;
 			break;
 		}
 
-		lastTime = (bigtime_t)LoadAcquire64(sLastInteractionTime);
+		lastTime = (bigtime_t)LoadAcquire64(sInteractivityState.lastInteractionTime);
 		if (now - lastTime < threshold)
 			return;
 	}
@@ -336,7 +327,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	if (currentBucketSize == 1000000) {
 		// Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
-		if (GetAndSet(sTimerArmed, 1) == 0) {
+		if (GetAndSet(sInteractivityState.timerArmed, 1) == 0) {
 			add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 					  B_ONE_SHOT_RELATIVE_TIMER);
 		}
@@ -355,14 +346,14 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// atomic-get-and-set below.  Clearing sDPCPending unconditionally before
 	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
 	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
-	StoreRelease(sPendingDPCTarget, 1000000);
-	if (GetAndSet(sDPCPending, 1) == 0) {
-		int64 target = (int64)LoadAcquire(sPendingDPCTarget);
+	StoreRelease(sInteractivityState.pendingDPCTarget, 1000000);
+	if (GetAndSet(sInteractivityState.dpcPending, 1) == 0) {
+		int64 target = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
 			B_OK) {
-			StoreRelease(sDPCPending, 0);
-			StoreRelease(sPendingDPCTarget, 0);
+			StoreRelease(sInteractivityState.dpcPending, 0);
+			StoreRelease(sInteractivityState.pendingDPCTarget, 0);
 			// Note: when DPC queue is full, ensure sTimerArmed is
 			// also cleared so the next interaction event can re-arm the timer.
 			// Without this, sTimerArmed stays 0 (it was never set in this
@@ -376,7 +367,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// Only arm the timer if the DPC was successfully queued above.
 	// Note: sTimerArmed must not be set if Add() failed, since we
 	// returned early above in that case and never reach this line.
-	if (GetAndSet(sTimerArmed, 1) == 0) {
+	if (GetAndSet(sInteractivityState.timerArmed, 1) == 0) {
 		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 				  B_ONE_SHOT_RELATIVE_TIMER);
 	}
