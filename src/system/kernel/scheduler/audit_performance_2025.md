@@ -1,28 +1,30 @@
 # Haiku Scheduler Performance Bottlenecks & Optimization Plan (2025)
 
-## 1. Identified Performance Bottlenecks
+## 1. Core Scalability Features (Implemented)
+
+*   **Idle-Only Stealing:** Cores only rebalance when work is exhausted, preserving throughput for busy cores.
+*   **Lock-Free Bit-Stealing:** Uses atomic bitmask manipulation to reduce spinlock contention during work-stealing.
+*   **Topology Awareness:** Tiered stealing (LLC -> NUMA -> Global) with lag-threshold gating to preserve cache warmth.
+
+## 2. Identified Performance Bottlenecks (Pending)
 
 ### A. Global `gTotalRunnableThreads` Contention
-The global atomic counter for all runnable threads in the system is a primary bottleneck on high core-count systems due to frequent cache-line invalidations during thread state transitions.
+Global atomic counter for all runnable threads causes high cache-line contention on large systems.
 
 ### B. Fixed 64-CPU Scalability Limit
-The use of 64-bit integers for `gIdleMask` and `gIdleNodeMask` prevents Haiku from scaling to systems with more than 64 logical processors.
+`gIdleMask` and `gIdleNodeMask` (uint64) prevent scaling beyond 64 logical processors or NUMA nodes.
 
 ### C. Context Switch Overhead from Listeners Lock
-The `gSchedulerListenersLock` is a global spinlock acquired on every scheduler event, introducing serialization even when profiling or tracing is not in use.
+`gSchedulerListenersLock` (global spinlock) is acquired on every scheduler event.
 
 ### D. Run-Queue Lock Contention during Work-Stealing
-Multiple CPUs attempting to steal from the same target CPU can lead to spinlock contention on the victim's `fQueueLock`.
+Multiple concurrent steal attempts can still contend on a single victim's `fQueueLock`.
 
 ---
 
-## 2. Task List for Solution Implementation
+## 3. Task List for Solution Implementation
 
 - [ ] **Task 1: De-centralize Runnable Thread Counters**
-  - Implement per-CPU runnable counts to eliminate global atomic contention.
-- [ ] **Task 2: Scalable Idle Tracking**
-  - Migrate `gIdleMask` and `gIdleNodeMask` to `CPUSet` to support >64 CPUs.
-- [ ] **Task 3: Lock-Free Scheduler Listeners**
-  - Refactor listener notifications to use RCU-safe traversal, removing global lock overhead from the context switch path.
-- [ ] **Task 4: Non-Blocking Work-Stealing**
-  - Optimize the stealing algorithm to favor "Try-Lock" and fast fallback over spinning on contended run-queues.
+- [ ] **Task 2: Scalable Idle Tracking (Migrate to `CPUSet`)**
+- [ ] **Task 3: Lock-Free Scheduler Listeners (RCU)**
+- [ ] **Task 4: Non-Blocking Work-Stealing Refinement**
