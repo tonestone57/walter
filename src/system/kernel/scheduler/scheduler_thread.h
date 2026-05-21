@@ -53,9 +53,9 @@ public:
 			uint32 w;
 			int retry = 0;
 			do {
-				w = gCPUEnabled.Bits(i);
+				w = gCPUEnabled.Bits()[i];
 				memory_read_barrier();
-				if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
+				if (w == gCPUEnabled.Bits()[i] || ++retry >= 3)
 					break;
 				cpu_pause();
 			} while (true);
@@ -453,23 +453,11 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 		now = system_time();
 
 	if (!IsIdle()) {
-		if (IsEnqueued()) {
-			CPUEntry* cpu = EnqueuedCPU();
-			if (cpu != NULL)
+		CPUEntry* cpu = EnqueuedCPU();
+		if (cpu != NULL) {
+			if (IsEnqueued())
 				cpu->Remove(this);
-		}
-
-		int32 prev = AddAcquireRelease(*const_cast<int32 volatile*>(&gTotalRunnableThreads), -1);
-		if (prev <= 0) {
-			int32 cur = LoadAcquire(gTotalRunnableThreads);
-			for (int32 i = 0; i < 100 && cur < 0; i++) {
-				int32 was = cur;
-				if (TestAndSet(*const_cast<int32 volatile*>(&gTotalRunnableThreads), 0, (int32)(was)) == was) {
-					break;
-				}
-				cur = LoadAcquire(gTotalRunnableThreads);
-				memory_read_barrier();
-			}
+			cpu->DecrementRunnableCount();
 		}
 
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
@@ -510,23 +498,11 @@ inline void ThreadData::Dies(bigtime_t now) {
 		now = system_time();
 
 	if (!IsIdle()) {
-		if (IsEnqueued()) {
-			CPUEntry* cpu = EnqueuedCPU();
-			if (cpu != NULL)
+		CPUEntry* cpu = EnqueuedCPU();
+		if (cpu != NULL) {
+			if (IsEnqueued())
 				cpu->Remove(this);
-		}
-
-		int32 prev = AddAcquireRelease(*const_cast<int32 volatile*>(&gTotalRunnableThreads), -1);
-		if (prev <= 0) {
-			int32 cur = LoadAcquire(gTotalRunnableThreads);
-			for (int32 i = 0; i < 100 && cur < 0; i++) {
-				int32 was = cur;
-				if (TestAndSet(*const_cast<int32 volatile*>(&gTotalRunnableThreads), 0, (int32)(was)) == was) {
-					break;
-				}
-				cur = LoadAcquire(gTotalRunnableThreads);
-				memory_read_barrier();
-			}
+			cpu->DecrementRunnableCount();
 		}
 
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
@@ -571,7 +547,7 @@ inline void ThreadData::PutBack(bigtime_t now) {
 		fThread->state = B_THREAD_READY;
 
 		if (!IsIdle()) {
-			AddRelease(gTotalRunnableThreads, 1);
+			cpu->IncrementRunnableCount();
 			CoreEntry* core = cpu->Core();
 			if (core != NULL) {
 				core->IncrementTotalThreadCount();
@@ -657,7 +633,7 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
 
 	if (!wasReady) {
 		if (!IsIdle()) {
-			AddRelease(gTotalRunnableThreads, 1);
+			cpu->IncrementRunnableCount();
 			if (core != NULL) {
 				core->IncrementTotalThreadCount();
 				if (priority >= B_DISPLAY_PRIORITY) {

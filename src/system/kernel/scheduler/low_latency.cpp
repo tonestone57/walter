@@ -147,10 +147,10 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			// systems.
 			SchedulerNode* node = package->Node();
 			if (node != NULL) {
-				uint64 idlePackageMask = node->IdlePackageMask();
+				native_cpu_mask_t idlePackageMask = node->IdlePackageMask();
 				while (idlePackageMask != 0) {
-					int32 packageIndex = scheduler_ffs64(idlePackageMask) - 1;
-					idlePackageMask &= ~(1ULL << packageIndex);
+					int32 packageIndex = scheduler_flsnative(idlePackageMask) - 1;
+					idlePackageMask &= ~((native_cpu_mask_t)1 << packageIndex);
 
 					int32 globalPackageIndex =
 						node->PackageStartIndex() + packageIndex;
@@ -171,8 +171,6 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	CoreEntry* core = NULL;
 
 	// Thread Coloring: Search for a core of the preferred type first
-	uint64 idleNodeMask = LoadAcquire64(gIdleNodeMask);
-
 	if (preferMax || preferMin) {
 		CoreType preferredType = preferMax ? gMaxCoreType : gMinCoreType;
 		int32 bestScore = -1;
@@ -180,19 +178,23 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 										preferredType);
 
 		// Try to find an idle core of the preferred type
-		uint64 typeIdleNodeMask = idleNodeMask;
-		while (typeIdleNodeMask != 0) {
-			int32 nodeIndex = scheduler_ffs64(typeIdleNodeMask) - 1;
-			typeIdleNodeMask &= ~(1ULL << nodeIndex);
-			if (nodeIndex < 0 || nodeIndex >= gNodeCount)
-				continue;
+		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+		for (int32 i = 0; i < kWords; i++) {
+			uint32 bits = gIdleNodeMask.Bits()[i];
+			while (bits != 0) {
+				int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
+				bits &= ~(1U << bit);
+				int32 nodeIndex = i * 32 + bit;
 
-			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
-			uint64 idlePackageMask = node->IdlePackageMask();
+				if (nodeIndex >= gNodeCount)
+					continue;
+
+				SchedulerNode* node = &gSchedulerNodes[nodeIndex];
+				native_cpu_mask_t idlePackageMask = node->IdlePackageMask();
 
 			while (idlePackageMask != 0) {
-				int32 packageIndex = scheduler_ffs64(idlePackageMask) - 1;
-				idlePackageMask &= ~(1ULL << packageIndex);
+				int32 packageIndex = scheduler_flsnative(idlePackageMask) - 1;
+				idlePackageMask &= ~((native_cpu_mask_t)1 << packageIndex);
 
 				int32 globalPackageIndex =
 					node->PackageStartIndex() + packageIndex;
@@ -355,21 +357,28 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	// wake new package/core - skipped when thread coloring or home-package
 	// search already found a suitable core.
 	int scannedCount = 0;
-	while (!skipIdleScan && idleNodeMask != 0) {
-		if (++scannedCount > kMaxCPUsToScan)
-			break;
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int32 i = 0; !skipIdleScan && i < kWords; i++) {
+		uint32 bits = gIdleNodeMask.Bits()[i];
+		while (bits != 0) {
+			if (++scannedCount > kMaxCPUsToScan) {
+				skipIdleScan = true;
+				break;
+			}
 
-		int32 nodeIndex = scheduler_ffs64(idleNodeMask) - 1;
-		idleNodeMask &= ~(1ULL << nodeIndex);
-		if (nodeIndex < 0 || nodeIndex >= gNodeCount)
-			continue;
+			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
+			bits &= ~(1U << bit);
+			int32 nodeIndex = i * 32 + bit;
 
-		SchedulerNode* node = &gSchedulerNodes[nodeIndex];
-		uint64 idlePackageMask = node->IdlePackageMask();
+			if (nodeIndex >= gNodeCount)
+				continue;
+
+			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
+		native_cpu_mask_t idlePackageMask = node->IdlePackageMask();
 
 		while (idlePackageMask != 0) {
-			int32 packageIndex = scheduler_ffs64(idlePackageMask) - 1;
-			idlePackageMask &= ~(1ULL << packageIndex);
+			int32 packageIndex = scheduler_flsnative(idlePackageMask) - 1;
+			idlePackageMask &= ~((native_cpu_mask_t)1 << packageIndex);
 
 			int32 globalPackageIndex = node->PackageStartIndex() + packageIndex;
 			// Safety check for bounds, though masks shouldn't be set if out of
@@ -479,7 +488,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 			const int32 cpuCount = smp_get_num_cpus();
 			for (int32 i = 0; i < kCPUSetArraySize; i++) {
-				uint32 bits = mask.Bits(i);
+				uint32 bits = mask.Bits()[i];
 				while (bits != 0) {
 					int bit = scheduler_ctz((native_cpu_mask_t)bits);
 					bits &= ~(1U << bit);

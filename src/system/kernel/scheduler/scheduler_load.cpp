@@ -46,14 +46,14 @@ int SmoothLoad(int oldLoad, int newLoad) {
 }  // namespace Scheduler
 
 static void _LoadavgUpdate(void* data, int iteration) {
-	// Note: gTotalRunnableThreads is an instantaneous snapshot taken once
+	// Note: threadCount is an instantaneous snapshot taken once
 	// every 1 second.  Load spikes that begin and end within the 1-second
 	// window are invisible to the EMA.  This is an inherent limitation of the
 	// FreeBSD-derived algorithm (which also uses a 1-second tick), not a bug.
 	// If sub-second load visibility is required in the future, the daemon
 	// period must be reduced and sCExp recalibrated accordingly.
-	// Optimization: Use global atomic counter instead of O(N) core scan.
-	int32 threadCount = atomic_get((int32 volatile*)&gTotalRunnableThreads);
+	// Optimization: Use decentralized aggregate instead of global atomic.
+	int32 threadCount = scheduler_get_total_runnable_threads();
 	if (threadCount < 0)
 		threadCount = 0;
 

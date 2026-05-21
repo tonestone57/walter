@@ -504,7 +504,7 @@ void ThreadData::UnassignCore(bool running) {
 	ASSERT(core != NULL);
 	if (running || fThread->state == B_THREAD_READY) {
 		if (fReady && !IsIdle()) {
-			AddRelease(gTotalRunnableThreads, -1);
+			CPUEntry::GetCPU(smp_get_current_cpu())->DecrementRunnableCount();
 			core->DecrementTotalThreadCount();
 			if (fIsHighPriorityContributed) {
 				core->DecrementHighPriorityThreadCount();

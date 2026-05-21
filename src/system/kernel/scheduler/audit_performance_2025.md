@@ -1,30 +1,24 @@
 # Haiku Scheduler Performance Bottlenecks & Optimization Plan (2025)
 
-## 1. Core Scalability Features (Implemented)
+## 1. Core Scalability Features (Phase 3 Implemented)
 
-*   **Idle-Only Stealing:** Cores only rebalance when work is exhausted, preserving throughput for busy cores.
-*   **Lock-Free Bit-Stealing:** Uses atomic bitmask manipulation to reduce spinlock contention during work-stealing.
-*   **Topology Awareness:** Tiered stealing (LLC -> NUMA -> Global) with lag-threshold gating to preserve cache warmth.
+*   **Scalable Idle Tracking:** Migrated to `CPUSet` to support systems with >64 logical processors.
+*   **Scalable Runnable Tracking:** Replaced global atomic counter with decentralized per-CPU counts.
+*   **Idle-Only Stealing:** Busy cores are never interrupted for rebalancing; throughput is maximized.
+*   **Topology Awareness:** LLC and NUMA-aware work-stealing preserves data locality and cache warmth.
 
-## 2. Identified Performance Bottlenecks (Pending)
+## 2. Identified Performance Bottlenecks (Phase 4 Pending)
 
-### A. Global `gTotalRunnableThreads` Contention
-Global atomic counter for all runnable threads causes high cache-line contention on large systems.
+### A. Static Work-Stealing Thresholds
+Current lag thresholds (1ms/2ms/5ms) are hard-coded. On high-bandwidth or extremely low-latency interconnects, these might be too conservative.
 
-### B. Fixed 64-CPU Scalability Limit
-`gIdleMask` and `gIdleNodeMask` (uint64) prevent scaling beyond 64 logical processors or NUMA nodes.
-
-### C. Context Switch Overhead from Listeners Lock
-`gSchedulerListenersLock` (global spinlock) is acquired on every scheduler event.
-
-### D. Run-Queue Lock Contention during Work-Stealing
-Multiple concurrent steal attempts can still contend on a single victim's `fQueueLock`.
+### B. Heterogeneous Load Balancing overhead
+Modern P/E core architectures require more frequent but low-overhead load updates to stay within the "efficiency sweet spot."
 
 ---
 
-## 3. Task List for Solution Implementation
+## 3. Phase 4 Task List
 
-- [ ] **Task 1: De-centralize Runnable Thread Counters**
-- [ ] **Task 2: Scalable Idle Tracking (Migrate to `CPUSet`)**
-- [ ] **Task 3: Lock-Free Scheduler Listeners (RCU)**
-- [ ] **Task 4: Non-Blocking Work-Stealing Refinement**
+- [ ] **Task 1: Dynamic Interconnect-Aware Thresholds**
+- [ ] **Task 2: Hardware-Guided EAS (Energy-Aware Scheduling)**
+- [ ] **Task 3: Per-CPU DPC Queue Auditing**

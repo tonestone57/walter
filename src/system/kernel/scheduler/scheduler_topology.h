@@ -328,7 +328,7 @@ static inline void CheckMaskedPackagesMinimumLoad(
 		memset(extendedVisited, 0, sizeof(extendedVisited));
 
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
-		uint32 bits = mask.Bits(i);
+		uint32 bits = mask.Bits()[i];
 		if (bits == 0)
 			continue;
 

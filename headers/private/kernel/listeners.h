@@ -34,7 +34,6 @@ struct SchedulerListener : DoublyLinkedListLinkImpl<SchedulerListener> {
 
 typedef DoublyLinkedList<SchedulerListener> SchedulerListenerList;
 extern SchedulerListenerList gSchedulerListeners;
-extern rw_spinlock gSchedulerListenersLock;
 
 
 template<typename Parameter1>
