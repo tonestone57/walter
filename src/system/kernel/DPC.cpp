@@ -25,6 +25,7 @@ static DPCQueue sRealTimePriorityQueue;
 
 static DPCQueue sCPUNormalPriorityQueues[SMP_MAX_CPUS];
 static DPCQueue sCPUHighPriorityQueues[SMP_MAX_CPUS];
+static DPCQueue sCPURealTimePriorityQueues[SMP_MAX_CPUS];
 
 
 // #pragma mark - FunctionDPCCallback
@@ -125,7 +126,10 @@ DPCQueue::CPUQueue(int32 cpu, int priority)
 	if (priority <= NORMAL_PRIORITY)
 		return &sCPUNormalPriorityQueues[cpu];
 
-	return &sCPUHighPriorityQueues[cpu];
+	if (priority <= HIGH_PRIORITY)
+		return &sCPUHighPriorityQueues[cpu];
+
+	return &sCPURealTimePriorityQueues[cpu];
 }
 
 
@@ -371,6 +375,7 @@ dpc_init()
 	for (int32 i = 0; i < cpuCount; i++) {
 		new(&sCPUNormalPriorityQueues[i]) DPCQueue;
 		new(&sCPUHighPriorityQueues[i]) DPCQueue;
+		new(&sCPURealTimePriorityQueues[i]) DPCQueue;
 
 		char name[64];
 		snprintf(name, sizeof(name), "dpc/%" B_PRId32 ": normal", i);
@@ -383,6 +388,13 @@ dpc_init()
 		if (sCPUHighPriorityQueues[i].Init(name, HIGH_PRIORITY,
 				DEFAULT_QUEUE_SLOT_COUNT, i) != B_OK) {
 			panic("Failed to create per-CPU high DPC queue %" B_PRId32 "!", i);
+		}
+
+		snprintf(name, sizeof(name), "dpc/%" B_PRId32 ": real-time", i);
+		if (sCPURealTimePriorityQueues[i].Init(name, REAL_TIME_PRIORITY,
+				DEFAULT_QUEUE_SLOT_COUNT, i) != B_OK) {
+			panic("Failed to create per-CPU real-time DPC queue %" B_PRId32 "!",
+				i);
 		}
 	}
 }
