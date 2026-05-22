@@ -1146,7 +1146,7 @@ void scheduler_on_thread_init(Thread* thread) {
 		int32 cpuID = AddAcquireRelease(sIdleThreadsID, 1);
 
 		thread->previous_cpu = &gCPU[cpuID];
-		thread->pinned_to_cpu = 1;
+		thread->pinned_to_cpu = cpuID + 1;
 
 		thread->scheduler_data->Init(CoreEntry::GetCore(cpuID));
 	} else

@@ -7,6 +7,7 @@
 #include <DPC.h>
 
 #include <smp.h>
+#include <stdio.h>
 #include <thread.h>
 #include <util/AutoLock.h>
 
@@ -24,6 +25,7 @@ static DPCQueue sRealTimePriorityQueue;
 
 static DPCQueue sCPUNormalPriorityQueues[SMP_MAX_CPUS];
 static DPCQueue sCPUHighPriorityQueues[SMP_MAX_CPUS];
+static DPCQueue sCPURealTimePriorityQueues[SMP_MAX_CPUS];
 
 
 // #pragma mark - FunctionDPCCallback
@@ -124,7 +126,10 @@ DPCQueue::CPUQueue(int32 cpu, int priority)
 	if (priority <= NORMAL_PRIORITY)
 		return &sCPUNormalPriorityQueues[cpu];
 
-	return &sCPUHighPriorityQueues[cpu];
+	if (priority <= HIGH_PRIORITY)
+		return &sCPUHighPriorityQueues[cpu];
+
+	return &sCPURealTimePriorityQueues[cpu];
 }
 
 
@@ -298,7 +303,7 @@ DPCQueue::_Thread()
 		if (smp_get_current_cpu() != fCPU)
 			thread_yield();
 
-		thread_pin_to_current_cpu(thread);
+		thread->pinned_to_cpu = fCPU + 1;
 	}
 
 	while (true) {
@@ -349,6 +354,10 @@ void
 dpc_init()
 {
 	// create the default queues
+	new(&sNormalPriorityQueue) DPCQueue;
+	new(&sHighPriorityQueue) DPCQueue;
+	new(&sRealTimePriorityQueue) DPCQueue;
+
 	if (sNormalPriorityQueue.Init("dpc: normal priority", NORMAL_PRIORITY,
 			DEFAULT_QUEUE_SLOT_COUNT) != B_OK
 		|| sHighPriorityQueue.Init("dpc: high priority", HIGH_PRIORITY,
@@ -364,6 +373,10 @@ dpc_init()
 		cpuCount = SMP_MAX_CPUS;
 
 	for (int32 i = 0; i < cpuCount; i++) {
+		new(&sCPUNormalPriorityQueues[i]) DPCQueue;
+		new(&sCPUHighPriorityQueues[i]) DPCQueue;
+		new(&sCPURealTimePriorityQueues[i]) DPCQueue;
+
 		char name[64];
 		snprintf(name, sizeof(name), "dpc/%" B_PRId32 ": normal", i);
 		if (sCPUNormalPriorityQueues[i].Init(name, NORMAL_PRIORITY,
@@ -375,6 +388,13 @@ dpc_init()
 		if (sCPUHighPriorityQueues[i].Init(name, HIGH_PRIORITY,
 				DEFAULT_QUEUE_SLOT_COUNT, i) != B_OK) {
 			panic("Failed to create per-CPU high DPC queue %" B_PRId32 "!", i);
+		}
+
+		snprintf(name, sizeof(name), "dpc/%" B_PRId32 ": real-time", i);
+		if (sCPURealTimePriorityQueues[i].Init(name, REAL_TIME_PRIORITY,
+				DEFAULT_QUEUE_SLOT_COUNT, i) != B_OK) {
+			panic("Failed to create per-CPU real-time DPC queue %" B_PRId32 "!",
+				i);
 		}
 	}
 }
