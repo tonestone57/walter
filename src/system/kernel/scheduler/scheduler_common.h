@@ -460,7 +460,11 @@ inline SchedulerSnapshot MakeSchedulerSnapshot(int32 total,
 											   const CPUSet& idleMask) {
 	SchedulerSnapshot s;
 	s.totalRunnable = total;
-	s.idleMask = idleMask;
+
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int32 i = 0; i < kWords; i++) {
+		s.idleMask.SetWord(i, (uint32)LoadAcquire(*(int32 volatile*)&idleMask.Bits(i)));
+	}
 	return s;
 }
 
