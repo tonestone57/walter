@@ -942,7 +942,7 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 		CPUSet enabled;
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 		for (int32 i = 0; i < kWords; i++) {
-			enabled.SetWord(i, gCPUEnabled.Bits()[i]);
+			enabled.SetWord(i, gCPUEnabled.Bits(i));
 		}
 
 		search_local_node(
@@ -965,8 +965,7 @@ ThreadData* CPUEntry::_TryStealWorkNUMA(bigtime_t now) {
 	CPUSet enabled;
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	for (int32 i = 0; i < kWords; i++) {
-		enabled.SetWord(i, gCPUEnabled.Bits()[i]);
-		enabled.SetWord(i, gCPUEnabled.Bits()[i]);
+		enabled.SetWord(i, gCPUEnabled.Bits(i));
 	}
 
 	search_numa_random(node->NUMAID(), node->NodeIndex(),
@@ -984,7 +983,7 @@ ThreadData* CPUEntry::_TryStealWorkGlobal(bigtime_t now) {
 	CPUSet enabled;
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	for (int32 i = 0; i < kWords; i++) {
-		enabled.SetWord(i, gCPUEnabled.Bits()[i]);
+		enabled.SetWord(i, gCPUEnabled.Bits(i));
 	}
 
 	search_global_random(
@@ -1262,8 +1261,7 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	for (int i = 0; i < kWords; i++) {
-		uint32 bits = fCPUSet.Bits()[i];
-		uint32 bits = fCPUSet.Bits()[i];
+		uint32 bits = fCPUSet.Bits(i);
 		while (bits != 0) {
 			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
 			int cpuID = i * 32 + bit;
@@ -1292,7 +1290,7 @@ CPUEntry* CoreEntry::PeekMinimumLoadCPU() {
 		// Each word covers 32 CPU IDs; stop at first non-zero word.
 		const int kWords = (SMP_MAX_CPUS + 31) / 32;
 		for (int i = 0; i < kWords; i++) {
-			uint32 bits = fCPUSet.Bits()[i];
+			uint32 bits = fCPUSet.Bits(i);
 			if (bits == 0)
 				continue;
 			int cpu = i * 32 + scheduler_ctz((native_cpu_mask_t)bits);
@@ -1942,7 +1940,7 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 /* static */ void DebugDumper::DumpCoreRunQueue(CoreEntry* core) {
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	for (int i = 0; i < kWords; i++) {
-		uint32 bits = core->CPUMask().Bits()[i];
+		uint32 bits = core->CPUMask().Bits(i);
 		while (bits != 0) {
 			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
 			int cpuID = i * 32 + bit;
@@ -2039,7 +2037,7 @@ static int dump_idle_cores(int /* argc */, char** /* argv */) {
 	bool anyIdle = false;
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	for (int32 i = 0; i < kWords; i++) {
-		if (gIdleNodeMask.Bits()[i] != 0) {
+		if (gIdleNodeMask.Bits(i) != 0) {
 			anyIdle = true;
 			break;
 		}
@@ -2049,7 +2047,7 @@ static int dump_idle_cores(int /* argc */, char** /* argv */) {
 		kprintf("node package cores\n");
 
 		for (int32 i = 0; i < kWords; i++) {
-			uint32 bits = gIdleNodeMask.Bits()[i];
+			uint32 bits = gIdleNodeMask.Bits(i);
 			while (bits != 0) {
 				int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
 				bits &= ~(1U << bit);

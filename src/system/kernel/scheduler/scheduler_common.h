@@ -544,7 +544,7 @@ public:
 	static inline bool IsAllEnabledMask(const CPUSet& mask) {
 		const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 		for (int32 i = 0; i < kCPUSetArraySize; i++) {
-			if (mask.Bits()[i] != gCPUEnabled.Bits()[i])
+			if (mask.Bits(i) != gCPUEnabled.Bits(i))
 				return false;
 		}
 		return true;

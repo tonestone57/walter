@@ -378,7 +378,7 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 		int scannedCount = 0;
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 		for (int32 i = 0; i < kWords; i++) {
-			uint32 bits = gIdleNodeMask.Bits()[i];
+			uint32 bits = gIdleNodeMask.Bits(i);
 			while (bits != 0) {
 				if (++scannedCount > kMaxCPUsToScan)
 					return NULL;
@@ -478,7 +478,7 @@ static void check_masked_packages_packing(CPUEntry* cpu, const CPUSet& mask,
 	PackageEntry* lastPackage = NULL;
 
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
-		uint32 bits = mask.Bits()[i];
+		uint32 bits = mask.Bits(i);
 		if (bits == 0)
 			continue;
 
@@ -703,7 +703,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 			const int32 cpuCount = smp_get_num_cpus();
 			for (int32 i = 0; i < kCPUSetArraySize; i++) {
-				uint32 bits = mask.Bits()[i];
+				uint32 bits = mask.Bits(i);
 				while (bits != 0) {
 					int bit = scheduler_ctz((native_cpu_mask_t)bits);
 					bits &= ~(1U << bit);

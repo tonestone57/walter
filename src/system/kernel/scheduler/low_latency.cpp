@@ -180,7 +180,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		// Try to find an idle core of the preferred type
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 		for (int32 i = 0; i < kWords; i++) {
-			uint32 bits = gIdleNodeMask.Bits()[i];
+			uint32 bits = gIdleNodeMask.Bits(i);
 			while (bits != 0) {
 				int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
 				bits &= ~(1U << bit);
@@ -359,7 +359,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	int scannedCount = 0;
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	for (int32 i = 0; !skipIdleScan && i < kWords; i++) {
-		uint32 bits = gIdleNodeMask.Bits()[i];
+		uint32 bits = gIdleNodeMask.Bits(i);
 		while (bits != 0) {
 			if (++scannedCount > kMaxCPUsToScan) {
 				skipIdleScan = true;
@@ -488,7 +488,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			const int32 kCPUSetArraySize = (SMP_MAX_CPUS + 31) / 32;
 			const int32 cpuCount = smp_get_num_cpus();
 			for (int32 i = 0; i < kCPUSetArraySize; i++) {
-				uint32 bits = mask.Bits()[i];
+				uint32 bits = mask.Bits(i);
 				while (bits != 0) {
 					int bit = scheduler_ctz((native_cpu_mask_t)bits);
 					bits &= ~(1U << bit);

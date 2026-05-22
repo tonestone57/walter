@@ -53,9 +53,9 @@ public:
 			uint32 w;
 			int retry = 0;
 			do {
-				w = gCPUEnabled.Bits()[i];
+				w = gCPUEnabled.Bits(i);
 				memory_read_barrier();
-				if (w == gCPUEnabled.Bits()[i] || ++retry >= 3)
+				if (w == gCPUEnabled.Bits(i) || ++retry >= 3)
 					break;
 				cpu_pause();
 			} while (true);
