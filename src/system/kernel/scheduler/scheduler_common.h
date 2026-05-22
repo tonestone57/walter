@@ -279,9 +279,9 @@ const bigtime_t kForegroundVRuntimeOffset = 5000000;
 
 const bigtime_t kMaxLagFloor = 200000;
 
-const int64 kL3LagThreshold = 1000000;
-const int64 kNUMANodeLagThreshold = 2000000;
-const int64 kGlobalLagThreshold = 5000000;
+extern int64 gL3LagThreshold;
+extern int64 gNUMANodeLagThreshold;
+extern int64 gGlobalLagThreshold;
 
 struct ThreadDataVRuntimeCompare {
 	template <typename ThreadData>
