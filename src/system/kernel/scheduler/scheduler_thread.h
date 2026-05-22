@@ -636,7 +636,11 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
 		int64 weight = GetWeight();
 		if (weight <= 0)
 			weight = 1;
-		bigtime_t vLagFloor = (kMaxLagFloor * 1000000LL) / weight;
+
+		// Heterogeneous scaling: adjust the sleep-compensation floor by core capacity.
+		uint32 score_factor = (core != NULL) ? core->ScoreFactor() : (1 << 16);
+		bigtime_t scaledLagFloor = (kMaxLagFloor * score_factor) >> 16;
+		bigtime_t vLagFloor = (scaledLagFloor * 1000000LL) / weight;
 
 		if (vrt < svt - vLagFloor)
 			StoreRelease64(fThread->virtual_runtime, (int64)(svt - vLagFloor));
