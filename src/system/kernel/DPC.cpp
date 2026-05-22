@@ -118,7 +118,7 @@ DPCQueue::DefaultQueue(int priority)
 /*static*/ DPCQueue*
 DPCQueue::CPUQueue(int32 cpu, int priority)
 {
-	if (cpu < 0 || cpu >= smp_get_num_cpus())
+	if (cpu < 0 || cpu >= smp_get_num_cpus() || cpu >= SMP_MAX_CPUS)
 		return DefaultQueue(priority);
 
 	if (priority <= NORMAL_PRIORITY)
@@ -290,6 +290,14 @@ DPCQueue::_Thread()
 {
 	if (fCPU != -1) {
 		Thread* thread = thread_get_current_thread();
+
+		// Set affinity to the target CPU and yield to migrate if necessary.
+		thread->cpumask.ClearAll();
+		thread->cpumask.SetBit(fCPU);
+
+		if (smp_get_current_cpu() != fCPU)
+			thread_yield();
+
 		thread_pin_to_current_cpu(thread);
 	}
 
