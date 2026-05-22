@@ -13,9 +13,9 @@ In `ThreadData::Continues` (`scheduler_thread.h`), the check for `fReady` is per
 *   **Mitigation:** Already mitigated in existing source via `dprintf` instead of a hard `ASSERT`.
 
 ### 1.3 gTotalRunnableThreads Race
-The global counter `gTotalRunnableThreads` is updated via `AddAcquireRelease`, but under extreme contention, it can transiently enter a negative state.
-*   **Impact:** Inaccurate load averaging for the global system.
-*   **Mitigation:** Already mitigated in existing source via a manual correction block in the `enqueue` retry loop in `scheduler.cpp`.
+The global counter `gTotalRunnableThreads` is updated via `AddAcquireRelease`, but under extreme contention, it can transiently enter a negative state and suffers from high cache-line contention on many-core systems.
+*   **Impact:** Inaccurate load averaging and poor scalability.
+*   **Status:** **Resolved**. Replaced the global atomic counter with decentralized per-CPU `fRunnableCount` tracking. Symmetric accounting is maintained via `ThreadData::fAssignedCPU`.
 
 ### 1.4 fCore Snapshot in GoesAway
 `ThreadData::GoesAway` previously performed multiple dereferences of `fCore`. Since `fCore` can be set to NULL by a concurrent `MigrateTo` (called from another CPU), this was a race leading to potential NULL dereferences.
@@ -59,8 +59,8 @@ In `ThreadData::ComputeQuantum` (`scheduler_thread.cpp`), `fCore` is snapshotted
 ## 4. Portability & Coding Standards
 
 ### 4.1 64-bit Alignment Requirements
-Atomic operations on 64-bit variables (`fVirtualRuntime`, `gIdleMask`, etc.) require 8-byte alignment on many 32-bit platforms to ensure atomicity.
-*   **Observation:** The subsystem correctly uses `__attribute__((aligned(8)))` for these variables, but any new 64-bit state must strictly follow this pattern.
+Atomic operations on 64-bit variables (`fVirtualRuntime`, etc.) require 8-byte alignment on many 32-bit platforms to ensure atomicity.
+*   **Observation:** The subsystem correctly uses `__attribute__((aligned(8)))` for these variables, but any new 64-bit state must strictly follow this pattern. Fixed 64-bit `gIdleMask` was migrated to `CPUSet` to support >64 CPUs.
 
 ### 4.2 Pointer Type Safety in Atomics
 Standard Haiku `atomic_*` functions often expect `int32*` or `int64*`. The scheduler's use of template wrappers with `reinterpret_cast<int32 volatile*>` is necessary for GCC 13 but bypasses some of the compiler's natural type checking.
