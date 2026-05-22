@@ -6,6 +6,8 @@
 
 #include <DPC.h>
 
+#include <smp.h>
+#include <thread.h>
 #include <util/AutoLock.h>
 
 
@@ -19,6 +21,9 @@
 static DPCQueue sNormalPriorityQueue;
 static DPCQueue sHighPriorityQueue;
 static DPCQueue sRealTimePriorityQueue;
+
+static DPCQueue sCPUNormalPriorityQueues[SMP_MAX_CPUS];
+static DPCQueue sCPUHighPriorityQueues[SMP_MAX_CPUS];
 
 
 // #pragma mark - FunctionDPCCallback
@@ -70,6 +75,7 @@ DPCCallback::~DPCCallback()
 DPCQueue::DPCQueue()
 	:
 	fThreadID(-1),
+	fCPU(-1),
 	fCallbackInProgress(NULL),
 	fCallbackDoneCondition(NULL)
 {
@@ -109,9 +115,24 @@ DPCQueue::DefaultQueue(int priority)
 }
 
 
-status_t
-DPCQueue::Init(const char* name, int32 priority, uint32 reservedSlots)
+/*static*/ DPCQueue*
+DPCQueue::CPUQueue(int32 cpu, int priority)
 {
+	if (cpu < 0 || cpu >= smp_get_num_cpus() || cpu >= SMP_MAX_CPUS)
+		return DefaultQueue(priority);
+
+	if (priority <= NORMAL_PRIORITY)
+		return &sCPUNormalPriorityQueues[cpu];
+
+	return &sCPUHighPriorityQueues[cpu];
+}
+
+
+status_t
+DPCQueue::Init(const char* name, int32 priority, uint32 reservedSlots, int32 cpu)
+{
+	fCPU = cpu;
+
 	// create function callbacks
 	for (uint32 i = 0; i < reservedSlots; i++) {
 		FunctionDPCCallback* callback
@@ -267,6 +288,19 @@ DPCQueue::_ThreadEntry(void* data)
 status_t
 DPCQueue::_Thread()
 {
+	if (fCPU != -1) {
+		Thread* thread = thread_get_current_thread();
+
+		// Set affinity to the target CPU and yield to migrate if necessary.
+		thread->cpumask.ClearAll();
+		thread->cpumask.SetBit(fCPU);
+
+		if (smp_get_current_cpu() != fCPU)
+			thread_yield();
+
+		thread_pin_to_current_cpu(thread);
+	}
+
 	while (true) {
 		InterruptsSpinLocker locker(fLock);
 
@@ -315,10 +349,6 @@ void
 dpc_init()
 {
 	// create the default queues
-	new(&sNormalPriorityQueue) DPCQueue;
-	new(&sHighPriorityQueue) DPCQueue;
-	new(&sRealTimePriorityQueue) DPCQueue;
-
 	if (sNormalPriorityQueue.Init("dpc: normal priority", NORMAL_PRIORITY,
 			DEFAULT_QUEUE_SLOT_COUNT) != B_OK
 		|| sHighPriorityQueue.Init("dpc: high priority", HIGH_PRIORITY,
@@ -326,5 +356,25 @@ dpc_init()
 		|| sRealTimePriorityQueue.Init("dpc: real-time priority",
 			REAL_TIME_PRIORITY, DEFAULT_QUEUE_SLOT_COUNT) != B_OK) {
 		panic("Failed to create default DPC queues!");
+	}
+
+	// create the per-CPU queues
+	int32 cpuCount = smp_get_num_cpus();
+	if (cpuCount > SMP_MAX_CPUS)
+		cpuCount = SMP_MAX_CPUS;
+
+	for (int32 i = 0; i < cpuCount; i++) {
+		char name[64];
+		snprintf(name, sizeof(name), "dpc/%" B_PRId32 ": normal", i);
+		if (sCPUNormalPriorityQueues[i].Init(name, NORMAL_PRIORITY,
+				DEFAULT_QUEUE_SLOT_COUNT, i) != B_OK) {
+			panic("Failed to create per-CPU normal DPC queue %" B_PRId32 "!", i);
+		}
+
+		snprintf(name, sizeof(name), "dpc/%" B_PRId32 ": high", i);
+		if (sCPUHighPriorityQueues[i].Init(name, HIGH_PRIORITY,
+				DEFAULT_QUEUE_SLOT_COUNT, i) != B_OK) {
+			panic("Failed to create per-CPU high DPC queue %" B_PRId32 "!", i);
+		}
 	}
 }

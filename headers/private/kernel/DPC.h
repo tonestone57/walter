@@ -57,9 +57,10 @@ public:
 								~DPCQueue();
 
 	static	DPCQueue*			DefaultQueue(int priority);
+	static	DPCQueue*			CPUQueue(int32 cpu, int priority);
 
 			status_t			Init(const char* name, int32 priority,
-									uint32 reservedSlots);
+									uint32 reservedSlots, int32 cpu = -1);
 			void				Close(bool cancelPending);
 
 			status_t			Add(DPCCallback* callback);
@@ -86,6 +87,7 @@ private:
 private:
 			spinlock			fLock;
 			thread_id			fThreadID;
+			int32				fCPU;
 			CallbackList		fCallbacks;
 			CallbackList		fUnusedFunctionCallbacks;
 			ConditionVariable	fPendingCallbacksCondition;

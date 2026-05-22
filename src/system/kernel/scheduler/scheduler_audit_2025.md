@@ -63,12 +63,13 @@
 - **Solution**: Implement Hardware-Guided EAS (Energy-Aware Scheduling).
 
 ### D. DPC Queue Scaling
-- **Problem**: Potential serialization in global DPC processing.
-- **Solution**: Perform a per-CPU DPC queue auditing and optimization.
+- **Status**: **Resolved**.
+- **Problem**: Global DPC queues (`sNormalPriorityQueue`, etc.) caused serialization and cache-line bouncing on many-core systems.
+- **Solution**: Implemented per-CPU DPC queues. Each CPU now maintains its own set of DPC threads pinned to that CPU. The scheduler utilizes `DPCQueue::CPUQueue` to dispatch RCU callback processing and IRQ rebalancing to specific CPUs, ensuring strict cache locality and eliminating global lock contention in the DPC subsystem.
 
 ## 4. Phase 4 Roadmap Task List
 
 - [x] **Task 1: Implement RCU-safe Scheduler Listeners**
 - [ ] **Task 2: Dynamic Interconnect-Aware Thresholds**
 - [ ] **Task 3: Hardware-Guided EAS (Energy-Aware Scheduling)**
-- [ ] **Task 4: Per-CPU DPC Queue Auditing & Optimization**
+- [x] **Task 4: Per-CPU DPC Queue Auditing & Optimization**
