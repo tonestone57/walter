@@ -99,6 +99,20 @@ public:
 		return (uint32)LoadAcquire(fRealTimeBitmap);
 	}
 
+	inline native_cpu_mask_t GetBitmapWord(int index) const
+	{
+		return cpu_mask_get_atomic(&fBitmap[index]);
+	}
+
+	inline bool IsBitmapEmpty() const
+	{
+		for (int i = 0; i < kNumWords; i++) {
+			if (cpu_mask_get_atomic(&fBitmap[i]) != 0)
+				return false;
+		}
+		return true;
+	}
+
 	inline bool TestAndClearRTAtomic(int index)
 	{
 		uint32 bit = 1U << index;
@@ -283,7 +297,10 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 		thread->sli_index = index;
 	} else {
 		int32 lane = _GetLane(thread->virtual_deadline, (int32)priority);
-		thread->fli_index = lane; // We reuse fli_index to store flat lane
+		// We reuse fli_index to store the flat lane index.
+		// For Real-Time threads, fli_index is -1 and sli_index holds the RT queue index.
+		// For EEVDF threads, fli_index holds the flat lane (0-511).
+		thread->fli_index = lane;
 
 		fQueues[lane].Add(element);
 
