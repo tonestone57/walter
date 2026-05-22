@@ -636,11 +636,12 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 
 			// Phase 2: Local Node
 			SchedulerNode* node = NULL;
-			if (previousCore != NULL)
+			if (previousCore != NULL && previousCore->Package() != NULL)
 				node = previousCore->Package()->Node();
 			else if (threadData->HomePackage() >= 0 &&
 					 threadData->HomePackage() < gPackageCount) {
-				node = gPackageEntries[threadData->HomePackage()].Node();
+				PackageEntry* homePkg = &gPackageEntries[threadData->HomePackage()];
+				node = homePkg->Node();
 			}
 
 			MinimumLoadAction minLoadAction(cpu, NULL, bestCore, bestScore);

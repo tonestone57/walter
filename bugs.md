@@ -74,3 +74,24 @@ Inconsistent spelling of technical terms (e.g., "behaviour" vs "behavior") and c
 ### 4.4 Shift Domain Safety
 Bitwise calculations for core ownership modular logic in `UpdatePriorityBoostScalable` could trigger undefined behavior if shift domains exceeded the bit width of `native_cpu_mask_t`.
 *   **Status:** **Resolved**. Explicit clamps and branch guards added to ensure valid shift domains on all supported architectures.
+
+### 4.5 CPUSet Snapshots in GetCPUMask
+`ThreadData::GetCPUMask` performs a non-atomic iteration over `gCPUEnabled` words. While it contains a retry loop for each word, it does not guarantee a consistent snapshot across all words, nor is it synchronized with changes to `fThread->cpumask`.
+*   **Impact:** Potential for inconsistent affinity masks on systems with many CPUs.
+*   **Observation:** The impact is likely minimal as affinity changes are infrequent, but it represents a theoretical race.
+
+## 5. Performance Bottlenecks
+
+### 5.1 O(N) Complexity in scheduler_get_total_runnable_threads
+The migration to decentralized runnable thread accounting introduced $O(N)$ complexity (where $N$ is the number of CPUs) for global thread count queries.
+*   **Impact:** Performance degradation on massive-core systems (e.g., 256+ cores) when taking scheduler snapshots or calculating load averages.
+*   **Recommendation:** Use a hierarchical aggregation tree or a semi-accurate global counter for high-core-count systems.
+
+### 5.2 Core Load Update Contention in Power Saving Mode
+In `power_saving.cpp`, `choose_small_task_core` and `rebalance` both access `sSmallTaskCore` which is an array indexed by Node ID. However, multiple CPUs within the same node may contend for the same `sSmallTaskCore[nodeID]` entry, and the bounded CAS loop may lead to repeated failures under high churn.
+*   **Impact:** Increased scheduling latency during small-task consolidation.
+
+### 5.3 Idle Core Accounting Race
+In `CoreEntry::CPUWakesUp` and `CoreEntry::CPUGoesIdle`, the relationship between `fIdleCPUCount` and `fCPUCount` is checked without a lock. In `AddCPU` and `RemoveCPU`, these counters are updated in a specific order, but a concurrent `CPUWakesUp` can observe an inconsistent state where `fIdleCPUCount` has been incremented but `fCPUCount` has not yet been updated, or vice-versa.
+*   **Impact:** Potential for missed `CoreWakesUp` or `CoreGoesIdle` calls, leading to stale idle masks in `PackageEntry` and `SchedulerNode`.
+*   **Observation:** This can cause the scheduler to believe a core is idle when it is active, or vice-versa, leading to suboptimal load balancing or wasted IPIs.

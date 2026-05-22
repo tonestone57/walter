@@ -440,8 +440,10 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			// has Package() == NULL; dereferencing would crash.
 			if (previousCore != NULL && previousCore->Package() != NULL)
 				node = previousCore->Package()->Node();
-			else if (homePackageID >= 0 && homePackageID < gPackageCount)
-				node = gPackageEntries[homePackageID].Node();
+			else if (homePackageID >= 0 && homePackageID < gPackageCount) {
+				PackageEntry* homePkg = &gPackageEntries[homePackageID];
+				node = homePkg->Node();
+			}
 
 			search_local_node(node, globalMinLoadAction);
 
