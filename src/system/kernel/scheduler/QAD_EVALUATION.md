@@ -33,6 +33,18 @@ This report evaluates the current Haiku scheduler (BMQ-EEVDF) against the propos
 
 **Analysis**: QAD's cellular sharding is a theoretically superior approach for supercomputing-scale clusters (thousands of cores). However, Haiku's current decentralized per-CPU runqueues and tiered stealing are highly optimized for modern high-end workstations and servers (up to 512+ cores) and currently avoid the fragmentation issues that can arise from strict cellular sharding.
 
+### E. Cache Efficiency and L1 Impact
+- **BMQ-EEVDF (Current)**:
+    - **Selection Metadata**: Spans ~136 bytes (`fFirstLevelBitmap` + 16 words of `fSecondLevelBitmap`).
+    - **Cache Footprint**: Typically spans **3 cache lines** (64-byte each).
+    - **Access Overhead**: Requires two sequential memory loads to identify the target bin (FLI then SLI).
+- **QAD (Proposed)**:
+    - **Selection Metadata**: Consists of a flat 128-bit mask (16 bytes).
+    - **Cache Footprint**: Fits entirely within **1/4 of a single cache line**.
+    - **Access Overhead**: Potentially reduced to a **single memory load** (or two if the first 64 bits are empty).
+
+**Analysis**: QAD is significantly more L1 cache-efficient than the current 16x32 matrix. The 16-byte footprint ensures that scheduling metadata is much more likely to remain "hot" in the L1 cache, reducing stalls during context switches. However, this efficiency comes at the cost of **4x lower resolution** compared to Haiku's current 512-bin structure.
+
 ## 3. Performance Summary
 
 ### Current BMQ-EEVDF Strengths:
@@ -43,8 +55,9 @@ This report evaluates the current Haiku scheduler (BMQ-EEVDF) against the propos
 
 ### Proposed QAD Strengths:
 1.  **Algorithmic Simplicity**: The branchless bit-parallel radix path is elegant and extremely fast.
-2.  **Massive Scale Ready**: Cellular sharding provides a roadmap for hardware that Haiku does not currently target (4096+ cores).
-3.  **Unified Path**: The goal of a single, branchless execution path for all core counts is ideal for instruction throughput.
+2.  **L1 Cache Efficiency**: The 16-byte bitmask footprint is exceptionally dense, fitting selection metadata into a fraction of a single cache line.
+3.  **Massive Scale Ready**: Cellular sharding provides a roadmap for hardware that Haiku does not currently target (4096+ cores).
+4.  **Unified Path**: The goal of a single, branchless execution path for all core counts is ideal for instruction throughput.
 
 ## 4. Conclusion and Recommendation
 
@@ -53,6 +66,7 @@ This report evaluates the current Haiku scheduler (BMQ-EEVDF) against the propos
 While QAD offers interesting concepts for ultra-massive scalability, Haiku's current BMQ-EEVDF implementation is a more mature and feature-complete realization of similar principles. Specifically:
 -   **Resolution**: BMQ-EEVDF has 4x the resolution (512 bins) while maintaining the same $O(1)$ complexity.
 -   **Interactivity**: The existing interactivity score is more nuanced than the proposed QAD credits.
+-   **Cache vs. Resolution Tradeoff**: While QAD is more L1 cache-efficient, BMQ-EEVDF's 512-bin matrix provides the fine-grained deadline tracking necessary for Haiku's diverse desktop workloads. The current metadata size (~136 bytes) is a reasonable trade-off for the 4x increase in scheduling precision.
 -   **Practical Scalability**: The 2025 audit resolved the primary bottlenecks QAD aimed to address (lock contention and mask limits), making Haiku's current scheduler performant on any hardware Haiku is likely to run on.
 
 **Recommendation**: Retain the current BMQ-EEVDF scheduler. The QAD proposal confirms that Haiku's direction is correct, but many of the "improvements" suggested in QAD are already present or exceeded by the 2025 audited implementation. Future work should focus on Phase 4 Roadmap items like Hardware-Guided EAS rather than a fundamental architecture swap.
