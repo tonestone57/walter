@@ -43,6 +43,10 @@
 - **Problem**: `MakeSchedulerSnapshot` could perform "torn" reads of the idle mask on 32-bit or high-core-count systems.
 - **Solution**: Refactored to use word-by-word `LoadAcquire` scanning, providing a consistent and near-atomic view of system state for load-balancing decisions.
 
+### F. Synchronization & DPC Refinements
+- **Status**: **Resolved**.
+- **Features**: Optimized `update_quantum_lengths_dpc` with an atomic re-check loop to prevent lost resolution updates. Eliminated redundant `scheduler_synchronize` calls in the interactivity hot-path. Integrated RCU-callback processing into the periodic interactivity DPC to ensure timely cleanup without global lock contention.
+
 ## 3. Pending Performance Bottlenecks (Phase 4 Roadmap)
 
 ### A. Global Listeners Lock (`gSchedulerListenersLock`)
