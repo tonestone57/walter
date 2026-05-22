@@ -18,27 +18,23 @@
 - **Global Interaction State Alignment**: Grouped interactivity variables into a 64-byte aligned `InteractivityState` structure to eliminate false sharing.
 - **Hierarchical Work-Stealing Sampling**: Refactored `search_global_random` to utilize a Node -> Package sampling strategy for improved NUMA coverage.
 
-## 2. Phase 3 Improvements (2025 Audit - Current)
+## 2. Phase 3 Scalability Improvements (Current)
 
 ### A. De-centralized Runnable Thread Accounting
 - **Status**: **Resolved**.
 - **Problem**: Global `gTotalRunnableThreads` atomic counter caused high cache-line contention on many-core systems.
-- **Solution**: Replaced with per-CPU `fRunnableCount` tracking. Global load-balancing now uses a sum-aggregate (`scheduler_get_total_runnable_threads`).
+- **Solution**: Replaced with per-CPU `fRunnableCount` tracking. Symmetric accounting is maintained via `ThreadData::fAssignedCPU`, ensuring count integrity across context switches and migrations.
 
 ### B. Scalable CPUSet-based Idle Tracking
 - **Status**: **Resolved**.
-- **Problem**: Fixed 64-bit `uint64` masks limited scalability to 64 CPUs/nodes.
-- **Solution**: Migrated `gIdleMask` and `gIdleNodeMask` to the `CPUSet` class, supporting arbitrary bit widths and future expansion.
+- **Problem**: Fixed 64-bit `uint64` masks strictly limited scalability to 64 CPUs.
+- **Solution**: Migrated `gIdleMask` and `gIdleNodeMask` to the `CPUSet` class, removing the hard-coded ceiling and enabling support for systems with arbitrary CPU counts.
 
-### C. Idle-Only Work Stealing & Lock-Free Bit-Stealing
+### C. Refactored Mask Iteration
 - **Status**: **Resolved**.
-- **Implementation**: Verified that cores only rebalance when idle, and use atomic bit-stealing primitives to minimize spinlock contention on victim CPUs. Busy cores remain undisturbed.
+- **Implementation**: Updated all search and rebalancing loops in `low_latency.cpp` and `power_saving.cpp` to use scalable bitset iteration via `CPUSet::Bits(i)`.
 
-### D. Cache-Domain & NUMA Awareness
-- **Status**: **Resolved**.
-- **Implementation**: Tiered work-stealing (LLC -> NUMA -> Global) gated by lag thresholds (`kL3LagThreshold` = 1ms, etc.) to preserve cache warmth and data locality.
-
-## 3. Pending Performance Bottlenecks
+## 3. Pending Performance Bottlenecks (Phase 4 Roadmap)
 
 ### Global Listeners Lock (`gSchedulerListenersLock`)
 - **Status**: **Pending**.

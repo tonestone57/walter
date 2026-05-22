@@ -966,6 +966,8 @@ ThreadData* CPUEntry::_TryStealWorkNUMA(bigtime_t now) {
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	for (int32 i = 0; i < kWords; i++) {
 		enabled.SetWord(i, gCPUEnabled.Bits(i));
+	}
+
 	search_numa_random(node->NUMAID(), node->NodeIndex(),
 					   NUMARandomStealAction(this, package, &stolen, enabled,
 											 now));
@@ -1261,7 +1263,9 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	for (int i = 0; i < kWords; i++) {
 		uint32 bits = fCPUSet.Bits(i);
 		while (bits != 0) {
+			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
 			int cpuID = i * 32 + bit;
+			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
 			bigtime_t vrt = cpu->GetMinVirtualRuntime();
 			if (vrt > 0 && (!found || vrt < minVRuntime)) {
 				minVRuntime = vrt;

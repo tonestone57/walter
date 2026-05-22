@@ -436,7 +436,6 @@ static int32 sSchedulerEnabled;
 
 SchedulerListenerList gSchedulerListeners;
 rw_spinlock gSchedulerListenersLock = B_RW_SPINLOCK_INITIALIZER;
-rw_spinlock gSchedulerListenersLock = B_RW_SPINLOCK_INITIALIZER;
 
 static scheduler_mode_operations* sSchedulerModes[] = {
 	&gSchedulerLowLatencyMode,
