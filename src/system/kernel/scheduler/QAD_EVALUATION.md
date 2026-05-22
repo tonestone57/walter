@@ -45,6 +45,20 @@ This report evaluates the current Haiku scheduler (BMQ-EEVDF) against the propos
 
 **Analysis**: QAD is significantly more L1 cache-efficient than the current 16x32 matrix. The 16-byte footprint ensures that scheduling metadata is much more likely to remain "hot" in the L1 cache, reducing stalls during context switches. However, this efficiency comes at the cost of **4x lower resolution** compared to Haiku's current 512-bin structure.
 
+### F. Scaling QAD to 512 Lanes (Apples-to-Apples)
+If QAD were extended to 512 lanes to match BMQ-EEVDF's resolution, the comparison shifts:
+
+- **QAD-512**:
+    - **Selection Metadata**: 64 bytes (8x `uint64`).
+    - **Cache Footprint**: Fits into **exactly one cache line**.
+    - **Access Path**: Requires 1-8 sequential loads. However, because all 8 words reside in the same cache line, the probability of a second cache miss is near zero.
+- **BMQ-EEVDF (Current)**:
+    - **Selection Metadata**: ~136 bytes.
+    - **Cache Footprint**: Spans **3 cache lines**.
+    - **Access Path**: Always requires 2 sequential loads (FLI then SLI). If the SLI word is in a different cache line (likely), it triggers a second L1/L2 access stall.
+
+**Analysis**: At equivalent resolutions, the flat QAD-style bitmask is **technically superior** for L1 efficiency. It consolidates all selection logic into a single cache line (64 bytes) and eliminates the two-level dependent load hierarchy. While BMQ-EEVDF was a brilliant optimization for 32-bit systems with limited registers, a modern flat bitmask is more performant on 64-bit architectures.
+
 ## 3. Performance Summary
 
 ### Current BMQ-EEVDF Strengths:
