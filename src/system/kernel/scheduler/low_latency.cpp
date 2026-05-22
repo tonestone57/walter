@@ -442,8 +442,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 				node = previousCore->Package()->Node();
 			else if (homePackageID >= 0 && homePackageID < gPackageCount) {
 				PackageEntry* homePkg = &gPackageEntries[homePackageID];
-				if (homePkg != NULL)
-					node = homePkg->Node();
+				node = homePkg->Node();
 			}
 
 			search_local_node(node, globalMinLoadAction);

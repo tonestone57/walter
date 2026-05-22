@@ -641,8 +641,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 			else if (threadData->HomePackage() >= 0 &&
 					 threadData->HomePackage() < gPackageCount) {
 				PackageEntry* homePkg = &gPackageEntries[threadData->HomePackage()];
-				if (homePkg != NULL)
-					node = homePkg->Node();
+				node = homePkg->Node();
 			}
 
 			MinimumLoadAction minLoadAction(cpu, NULL, bestCore, bestScore);
