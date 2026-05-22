@@ -434,7 +434,7 @@ struct TopologyComparator {
 
 static int32 sSchedulerEnabled;
 
-SchedulerListenerList gSchedulerListeners;
+SchedulerListener* volatile gSchedulerListeners = NULL;
 rw_spinlock gSchedulerListenersLock = B_RW_SPINLOCK_INITIALIZER;
 
 static scheduler_mode_operations* sSchedulerModes[] = {
@@ -2135,14 +2135,38 @@ SchedulerListener::~SchedulerListener() {}
  */
 void scheduler_add_listener(struct SchedulerListener* listener) {
 	InterruptsWriteSpinLocker _(gSchedulerListenersLock);
-	gSchedulerListeners.Add(listener);
+
+	SchedulerListener* head = atomic_pointer_get(&gSchedulerListeners);
+	listener->fNext = head;
+	atomic_pointer_set(&gSchedulerListeners, listener);
 }
 
 /*! Remove the given scheduler listener. Thread lock must be held.
  */
 void scheduler_remove_listener(struct SchedulerListener* listener) {
 	InterruptsWriteSpinLocker _(gSchedulerListenersLock);
-	gSchedulerListeners.Remove(listener);
+
+	SchedulerListener* head = atomic_pointer_get(&gSchedulerListeners);
+	SchedulerListener* prev = NULL;
+	SchedulerListener* curr = head;
+
+	while (curr != NULL && curr != listener) {
+		prev = curr;
+		curr = atomic_pointer_get(&curr->fNext);
+	}
+
+	if (curr == NULL)
+		return;
+
+	if (prev == NULL) {
+		atomic_pointer_set(&gSchedulerListeners,
+			atomic_pointer_get(&curr->fNext));
+	} else {
+		atomic_pointer_set(&prev->fNext, atomic_pointer_get(&curr->fNext));
+	}
+
+	// Wait for any concurrent readers (NotifySchedulerListeners) to finish.
+	scheduler_synchronize();
 }
 
 // #pragma mark - Syscalls
