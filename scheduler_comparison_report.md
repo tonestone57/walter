@@ -46,4 +46,23 @@ The **Nexus Hybrid Scheduler (NHS)** represents a logical evolution of the curre
 1.  **Explicit Policy Separation**: The Sprint/Marathon split simplifies the scheduling hot-path for UI tasks.
 2.  **Lock-Free Ring Buffers**: Further future-proofing for "massive multi-core" systems.
 
-**Recommendation**: Haiku should adopt the **NHS architecture** for the next generation of the kernel. The bi-modal engine provides a cleaner abstraction for handling modern heterogeneous workloads (UI vs. Compute) and the lock-free dispatch stratum is the gold standard for many-core scalability.
+## 5. Massive Scaling Analysis (64 to 2048 Cores)
+
+As core counts increase, the overhead of synchronization and the efficiency of the dispatch mechanism become the primary performance drivers.
+
+| Core Count | Haiku BMQ-EEVDF Performance | NHS Performance | Superiority |
+|---|---|---|---|
+| **64** | **High**: The 64-bit `gIdleMask` is fully utilized. Cache contention on `gTotalRunnableThreads` begins to manifest but is manageable. | **Extreme**: Lock-free dispatch queues (DSQs) eliminate the minor spinlock overhead present in Haiku. | **NHS** |
+| **128** | **Architectural Wall**: The `uint64` masks (`gIdleMask`) overflow. Requires conversion to bitset arrays. Global atomic contention becomes a measurable bottleneck. | **Excellent**: DSQs scale linearly. The bi-modal split ensures UI threads aren't delayed by batch processing overhead. | **NHS** |
+| **256 - 512** | **Degraded**: `gSchedulerListenersLock` (RW Spinlock) and `gTotalRunnableThreads` cause significant cache-line bouncing across NUMA nodes. | **Robust**: Lock-free Stratum avoids global serialization. Adaptive work-stealing favors local NUMA neighbors first, preserving bandwidth. | **NHS** |
+| **1024 - 2048** | **Pathological**: Spinlock-based decentralized queues suffer from "IPI storms" during high-frequency wakeups. Serialized global counters throttle nearly all throughput. | **Sovereign**: Atomic ring-buffer operations (DSQs) handle hundreds of thousands of wakeups/sec without global mutexes. The system remains responsive. | **NHS** |
+
+### Summary of Scaling Advantages
+1. **Mask Scalability**: Current Haiku is hard-coded for 64-bit CPU masks. NHS's Stratum is designed for arbitrary core counts via distributed ring buffers.
+2. **Synchronization**: Haiku still relies on per-CPU spinlocks for the final "Mechanism" phase. NHS uses **Atomic Pointer Swapping**, which is truly wait-free for the fast path.
+3. **Bottleneck Elimination**: NHS eliminates the global `gTotalRunnableThreads` and `gSchedulerListenersLock` bottlenecks by design, distributing accounting into the Layered Engine.
+
+## 6. Final Conclusion & Recommendation
+The **Nexus Hybrid Scheduler (NHS)** is substantially superior to the current Haiku scheduler, particularly as systems scale beyond 64 cores. While Haiku's **BMQ-EEVDF** is an excellent modern scheduler for today's desktops, it possesses architectural "knots" (64-bit masks, global atomics, spinlock-based mechanism) that will fail at the massive scales required by 2025-2030 server and workstation hardware.
+
+**Haiku should adopt the NHS architecture.** The decoupling of Policy (Sprint/Marathon) from Mechanism (Lockless Dispatch) is the only viable path to achieving uncompromising desktop responsiveness alongside massive multi-core throughput at the 1024+ core level.
