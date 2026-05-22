@@ -1398,7 +1398,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 				if (newFLoad < 0)
 					newFLoad = 0;
 
-				int32 actualLoad = TestAndSet(fLoad, (int32)(newFLoad), (int32)(currentFLoad));
+				int32 actualLoad = TestAndSet(fLoad, (int32)newFLoad, (int32)currentFLoad);
 				if (actualLoad == currentFLoad)
 					break;
 

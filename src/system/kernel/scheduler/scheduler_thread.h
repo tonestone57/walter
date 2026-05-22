@@ -47,6 +47,9 @@ public:
 	SCHEDULER_INLINE Thread* GetThread() const { return fThread; }
 
 	SCHEDULER_INLINE CPUSet GetCPUMask() const {
+		if (fThread->cpumask.IsEmpty())
+			return fThread->cpumask;
+
 		CPUSet enabled;
 		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 		for (int32 i = 0; i < kWords; i++) {
