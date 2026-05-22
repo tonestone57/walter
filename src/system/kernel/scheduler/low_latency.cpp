@@ -839,7 +839,7 @@ static void rebalance_irqs(bool idle) {
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
 	cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 	cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
-	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
+	DPCQueue::CPUQueue(newCPU, B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC);
 }
 
 scheduler_mode_operations gSchedulerLowLatencyMode = {

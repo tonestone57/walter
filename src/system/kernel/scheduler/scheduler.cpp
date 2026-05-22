@@ -277,8 +277,8 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// on every context switch or interrupt.
 	if (cpu->fInteractionUpdateCounter % 128 == 0) {
 		if (LoadAcquire64(gRCUGeneration) > 1) {
-			// Trigger DPC to process callbacks
-			DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)
+			// Trigger DPC to process callbacks on the local CPU
+			DPCQueue::CPUQueue(cpu->ID(), B_NORMAL_PRIORITY)
 				->Add(&scheduler_process_rcu_callbacks, NULL);
 		}
 	}
