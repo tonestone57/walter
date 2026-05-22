@@ -436,6 +436,7 @@ static int32 sSchedulerEnabled;
 
 SchedulerListenerList gSchedulerListeners;
 rw_spinlock gSchedulerListenersLock = B_RW_SPINLOCK_INITIALIZER;
+rw_spinlock gSchedulerListenersLock = B_RW_SPINLOCK_INITIALIZER;
 
 static scheduler_mode_operations* sSchedulerModes[] = {
 	&gSchedulerLowLatencyMode,
@@ -1223,7 +1224,7 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 		// serialize AddCPU with the same global scheduler lock scope used by
 		// the disable/remove path to avoid races with idle-core state updates.
 		{
-			InterruptsBigSchedulerLocker bigLocker;
+			InterruptsWriteSpinLocker _(gSchedulerListenersLock);
 			CoreCPUHeapLocker heapLocker(core);
 
 			// Note: AddCPU inserts the CPU into the heap. A concurrent
@@ -1250,7 +1251,7 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 		// other CPUs cannot observe partial migration states.
 		bool sendRescheduleICI = false;
 		{
-			InterruptsBigSchedulerLocker bigLocker;
+			InterruptsWriteSpinLocker _(gSchedulerListenersLock);
 
 			gCPU[cpuID].disabled = true;
 			gCPUEnabled.ClearBitAtomic(cpuID);
