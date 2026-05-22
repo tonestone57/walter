@@ -38,6 +38,11 @@
 - **Status**: **Resolved**.
 - **Features**: Implemented idle-only stealing to ensure busy cores are never interrupted for rebalancing, maximizing throughput. Enhanced topology awareness for LLC and NUMA-aware work-stealing to preserve data locality.
 
+### E. Atomic Scheduler Snapshots
+- **Status**: **Resolved**.
+- **Problem**: `MakeSchedulerSnapshot` could perform "torn" reads of the idle mask on 32-bit or high-core-count systems.
+- **Solution**: Refactored to use word-by-word `LoadAcquire` scanning, providing a consistent and near-atomic view of system state for load-balancing decisions.
+
 ## 3. Pending Performance Bottlenecks (Phase 4 Roadmap)
 
 ### A. Global Listeners Lock (`gSchedulerListenersLock`)
