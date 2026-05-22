@@ -64,6 +64,10 @@ CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
 
 bool gHasStandardCores = false;
 
+int64 gL3LagThreshold __attribute__((aligned(8))) = 1000000;
+int64 gNUMANodeLagThreshold __attribute__((aligned(8))) = 2000000;
+int64 gGlobalLagThreshold __attribute__((aligned(8))) = 5000000;
+
 CPUSet gIdleMask;
 
 int64 gRCUGeneration __attribute__((aligned(8))) = 1;
@@ -1612,6 +1616,111 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 }
 
 
+static int64
+measure_latency_ns(int32 targetCPU)
+{
+	if (targetCPU < 0)
+		return 0;
+
+	// Use fThreadCount as a sacrificial target for atomic ops.
+	// It's 4-byte aligned and safe to read/write.
+	volatile int32* target = (int32*)&gCPUEntries[targetCPU].fThreadCount;
+	const int32 kIterations = 10000;
+
+	bigtime_t start = system_time();
+	for (int32 i = 0; i < kIterations; i++) {
+		atomic_or((int32*)target, 0);
+	}
+	bigtime_t end = system_time();
+
+	int64 totalTime = (int64)(end - start);
+	if (totalTime <= 0)
+		return 1;
+
+	return (totalTime * 1000) / kIterations;
+}
+
+
+static void
+scheduler_calibrate_interconnect()
+{
+	int32 cpuCount = smp_get_num_cpus();
+	if (cpuCount <= 1)
+		return;
+
+	int32 l3Target = -1;
+	int32 numaTarget = -1;
+	int32 globalTarget = -1;
+
+	int32 thisCPU = smp_get_current_cpu();
+	CPUEntry* cpu = &gCPUEntries[thisCPU];
+	CoreEntry* core = cpu->Core();
+	if (core == NULL)
+		return;
+	PackageEntry* package = core->Package();
+	if (package == NULL)
+		return;
+	SchedulerNode* node = package->Node();
+	if (node == NULL)
+		return;
+	int32 myNUMA = node->NUMAID();
+
+	for (int32 i = 0; i < cpuCount; i++) {
+		if (i == thisCPU)
+			continue;
+		CPUEntry* other = &gCPUEntries[i];
+		CoreEntry* otherCore = other->Core();
+		if (otherCore == NULL)
+			continue;
+		PackageEntry* otherPackage = otherCore->Package();
+		if (otherPackage == NULL)
+			continue;
+		SchedulerNode* otherNode = otherPackage->Node();
+		if (otherNode == NULL)
+			continue;
+
+		if (otherNode == node) {
+			if (otherPackage != package && l3Target == -1)
+				l3Target = i;
+		} else if (otherNode->NUMAID() == myNUMA) {
+			if (numaTarget == -1)
+				numaTarget = i;
+		} else {
+			if (globalTarget == -1)
+				globalTarget = i;
+		}
+	}
+
+	// Reference latencies in nanoseconds (typical values for scaling)
+	const int64 kL3Ref = 150;
+	const int64 kNumaRef = 400;
+	const int64 kGlobalRef = 1200;
+
+	if (l3Target != -1) {
+		int64 lat = measure_latency_ns(l3Target);
+		gL3LagThreshold = (1000000 * lat) / kL3Ref;
+	}
+	if (numaTarget != -1) {
+		int64 lat = measure_latency_ns(numaTarget);
+		gNUMANodeLagThreshold = (2000000 * lat) / kNumaRef;
+	}
+	if (globalTarget != -1) {
+		int64 lat = measure_latency_ns(globalTarget);
+		gGlobalLagThreshold = (5000000 * lat) / kGlobalRef;
+	}
+
+	// Sanity clamping to prevent absurd values on unusual hardware
+	gL3LagThreshold = max_c((int64)200000, min_c(gL3LagThreshold, (int64)5000000));
+	gNUMANodeLagThreshold = max_c(gL3LagThreshold + 100000,
+		min_c(gNUMANodeLagThreshold, (int64)10000000));
+	gGlobalLagThreshold = max_c(gNUMANodeLagThreshold + 200000,
+		min_c(gGlobalLagThreshold, (int64)20000000));
+
+	dprintf("scheduler: calibrated interconnect thresholds: L3=%lld, NUMA=%lld, Global=%lld\n",
+		gL3LagThreshold, gNUMANodeLagThreshold, gGlobalLagThreshold);
+}
+
+
 static status_t init() {
 	gIdleMask.ClearAll();
 	gIdleNodeMask.ClearAll();
@@ -2036,6 +2145,8 @@ static status_t init() {
 	dprintf("scheduler: dynamic random sampling set to %" B_PRId32
 			" (packages: %" B_PRId32 ")\n",
 			gRandomSamples, packageCount);
+
+	scheduler_calibrate_interconnect();
 
 	schedulerNodesDeleter.Detach();
 	cpuEntriesDeleter.Detach();

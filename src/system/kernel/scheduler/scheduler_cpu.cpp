@@ -81,7 +81,7 @@ struct LocalNodeStealAction {
 
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
-			if ((*stolen)->GetLag() >= kL3LagThreshold) {
+			if ((*stolen)->GetLag() >= gL3LagThreshold) {
 				// Re-verify affinity under the lock (mostly redundant but safe).
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
@@ -151,7 +151,7 @@ struct NUMARandomStealAction {
 
 		if (*stolen != NULL) {
 			// We have the victim's run-queue lock.
-			if ((*stolen)->GetLag() >= kNUMANodeLagThreshold) {
+			if ((*stolen)->GetLag() >= gNUMANodeLagThreshold) {
 				// Re-verify affinity under the lock.
 				const CPUSet& threadMask = (*stolen)->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(cpu->ID())) {
@@ -233,7 +233,7 @@ struct GlobalRandomStealAction {
 			bool crossNUMA =
 				(myNUMA != -1 && victimNUMA != -1 && myNUMA != victimNUMA);
 			int64 threshold =
-				crossNUMA ? kGlobalLagThreshold : kNUMANodeLagThreshold;
+				crossNUMA ? gGlobalLagThreshold : gNUMANodeLagThreshold;
 
 			if ((*stolen)->GetLag() >= threshold) {
 				// Task-Type Gating: Threads with high interactivity or display
@@ -916,7 +916,7 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 
 		if (stolen != NULL) {
 			bool success = false;
-			if (stolen->GetLag() >= kL3LagThreshold) {
+			if (stolen->GetLag() >= gL3LagThreshold) {
 				const CPUSet& threadMask = stolen->GetThread()->cpumask;
 				if (threadMask.IsEmpty() || threadMask.GetBit(fCPUNumber)) {
 					stolen->MigrateTo(core, now);
@@ -2000,6 +2000,17 @@ CoreEntry* PackageEntry::PeekMaximumLoadCore(CPUEntry* cpu, const CPUSet* mask,
 }
 
 
+static int
+dump_scheduler_thresholds(int /* argc */, char** /* argv */)
+{
+	kprintf("Scheduler Interconnect Lag Thresholds:\n");
+	kprintf("  L3 Lag Threshold:         %lld us\n", gL3LagThreshold);
+	kprintf("  NUMA Node Lag Threshold:  %lld us\n", gNUMANodeLagThreshold);
+	kprintf("  Global Lag Threshold:     %lld us\n", gGlobalLagThreshold);
+	return 0;
+}
+
+
 static int dump_run_queue(int /* argc */, char** /* argv */) {
 	int32 cpuCount = smp_get_num_cpus();
 
@@ -2083,6 +2094,9 @@ void Scheduler::init_debug_commands() {
 	if (sDebugCPUHeap.InitCheck() != B_OK)
 		panic("Scheduler::init_debug_commands: failed to allocate CPU heap");
 
+	add_debugger_command_etc("scheduler_thresholds", &dump_scheduler_thresholds,
+							 "List scheduler interconnect lag thresholds",
+							 "\nLists scheduler interconnect lag thresholds", 0);
 	add_debugger_command_etc("run_queue", &dump_run_queue,
 							 "List threads in run queue",
 							 "\nLists threads in run queue", 0);
