@@ -349,10 +349,6 @@ void
 dpc_init()
 {
 	// create the default queues
-	new(&sNormalPriorityQueue) DPCQueue;
-	new(&sHighPriorityQueue) DPCQueue;
-	new(&sRealTimePriorityQueue) DPCQueue;
-
 	if (sNormalPriorityQueue.Init("dpc: normal priority", NORMAL_PRIORITY,
 			DEFAULT_QUEUE_SLOT_COUNT) != B_OK
 		|| sHighPriorityQueue.Init("dpc: high priority", HIGH_PRIORITY,
@@ -368,9 +364,6 @@ dpc_init()
 		cpuCount = SMP_MAX_CPUS;
 
 	for (int32 i = 0; i < cpuCount; i++) {
-		new(&sCPUNormalPriorityQueues[i]) DPCQueue;
-		new(&sCPUHighPriorityQueues[i]) DPCQueue;
-
 		char name[64];
 		snprintf(name, sizeof(name), "dpc/%" B_PRId32 ": normal", i);
 		if (sCPUNormalPriorityQueues[i].Init(name, NORMAL_PRIORITY,
