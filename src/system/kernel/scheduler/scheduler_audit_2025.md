@@ -18,7 +18,7 @@
 - **Global Interaction State Alignment**: Grouped interactivity variables into a 64-byte aligned `InteractivityState` structure to eliminate false sharing.
 - **Hierarchical Work-Stealing Sampling**: Refactored `search_global_random` to utilize a Node -> Package sampling strategy for improved NUMA coverage.
 
-## 2. Phase 3 Scalability Improvements (Current)
+## 2. Phase 3 Scalability Improvements (Implemented)
 
 ### A. De-centralized Runnable Thread Accounting
 - **Status**: **Resolved**.
@@ -34,20 +34,31 @@
 - **Status**: **Resolved**.
 - **Implementation**: Updated all search and rebalancing loops in `low_latency.cpp` and `power_saving.cpp` to use scalable bitset iteration via `CPUSet::Bits(i)`.
 
+### D. Optimized Rebalancing Logic
+- **Status**: **Resolved**.
+- **Features**: Implemented idle-only stealing to ensure busy cores are never interrupted for rebalancing, maximizing throughput. Enhanced topology awareness for LLC and NUMA-aware work-stealing to preserve data locality.
+
 ## 3. Pending Performance Bottlenecks (Phase 4 Roadmap)
 
-### Global Listeners Lock (`gSchedulerListenersLock`)
-- **Status**: **Pending**.
+### A. Global Listeners Lock (`gSchedulerListenersLock`)
 - **Problem**: Global read-write spinlock is acquired on every scheduler event.
 - **Solution**: Implement an RCU-safe list for scheduler listeners to allow lock-free traversal in the hot path.
 
-### Static Work-Stealing Thresholds
-- **Status**: **Pending**.
-- **Problem**: Current lag thresholds (1ms/2ms/5ms) are hard-coded.
+### B. Static Work-Stealing Thresholds
+- **Problem**: Current lag thresholds (1ms/2ms/5ms) are hard-coded. On high-bandwidth or extremely low-latency interconnects, these might be too conservative.
 - **Solution**: Adjust lag thresholds dynamically based on interconnect bandwidth and latency detected at boot.
 
-## 4. Roadmap Task List
+### C. Heterogeneous Load Balancing Overhead
+- **Problem**: Modern P/E core architectures require more frequent but low-overhead load updates to stay within the "efficiency sweet spot."
+- **Solution**: Implement Hardware-Guided EAS (Energy-Aware Scheduling).
+
+### D. DPC Queue Scaling
+- **Problem**: Potential serialization in global DPC processing.
+- **Solution**: Perform a per-CPU DPC queue auditing and optimization.
+
+## 4. Phase 4 Roadmap Task List
 
 - [ ] **Task 1: Implement RCU-safe Scheduler Listeners**
 - [ ] **Task 2: Dynamic Interconnect-Aware Thresholds**
 - [ ] **Task 3: Hardware-Guided EAS (Energy-Aware Scheduling)**
+- [ ] **Task 4: Per-CPU DPC Queue Auditing & Optimization**

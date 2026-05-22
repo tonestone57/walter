@@ -461,9 +461,13 @@ inline SchedulerSnapshot MakeSchedulerSnapshot(int32 total,
 	SchedulerSnapshot s;
 	s.totalRunnable = total;
 
+	// Note: word-by-word LoadAcquire provides a near-atomic snapshot.
+	// While not perfectly consistent across all words at a single instant,
+	// it is sufficient for scheduler load-balancing hints where the state
+	// is highly transient.
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	const uint32* bits = idleMask.BitData();
 	for (int32 i = 0; i < kWords; i++) {
-		const uint32* bits = idleMask.BitData();
 		s.idleMask.SetWord(i, (uint32)LoadAcquire(*(int32 volatile*)&bits[i]));
 	}
 	return s;
