@@ -375,22 +375,26 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	if (package == NULL) {
 		// No partially idle packages. Check for any idle package using the
 		// mask.
-		uint64 idleNodeMask = LoadAcquire64(gIdleNodeMask);
 		int scannedCount = 0;
-		while (idleNodeMask != 0) {
-			if (++scannedCount > kMaxCPUsToScan)
-				break;
+		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+		for (int32 i = 0; i < kWords; i++) {
+			uint32 bits = gIdleNodeMask.Bits(i);
+			while (bits != 0) {
+				if (++scannedCount > kMaxCPUsToScan)
+					return NULL;
 
-			int32 nodeIndex = scheduler_ffs64(idleNodeMask) - 1;
-			idleNodeMask &= ~(1ULL << nodeIndex);
-			if (nodeIndex < 0 || nodeIndex >= gNodeCount)
-				continue;
+				int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
+				bits &= ~(1U << bit);
+				int32 nodeIndex = i * 32 + bit;
 
-			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
-			uint64 idlePackageMask = node->IdlePackageMask();
+				if (nodeIndex >= gNodeCount)
+					continue;
+
+				SchedulerNode* node = &gSchedulerNodes[nodeIndex];
+			native_cpu_mask_t idlePackageMask = node->IdlePackageMask();
 
 			if (idlePackageMask != 0) {
-				int32 packageIndex = scheduler_ffs64(idlePackageMask) - 1;
+				int32 packageIndex = scheduler_flsnative(idlePackageMask) - 1;
 				// fPackageStartIndex + packageIndex gives global index
 				int32 globalIndex = node->PackageStartIndex() + packageIndex;
 				// Note: added missing gPackageCount guard.

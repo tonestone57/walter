@@ -401,8 +401,8 @@ extern int32 gRandomSamples;
 extern const bigtime_t kMinMeasurementWindow __attribute__((aligned(8)));
 extern const int kLoadClampMax;
 
-extern int32 gTotalRunnableThreads;
-extern uint64 gIdleMask __attribute__((aligned(8)));
+extern int32 scheduler_get_total_runnable_threads();
+extern CPUSet gIdleMask;
 
 extern int64 gRCUGeneration __attribute__((aligned(8)));
 extern spinlock gSchedulerUpdateLock;
@@ -439,39 +439,42 @@ inline void AssertThreadQueued(Thread* thread) {
 	SCHED_ASSERT(thread->inRunQueue);
 }
 
-inline void SetCPUIDle(uint64 volatile& mask, int cpu) {
-	if ((unsigned)cpu >= 64)
-		return;
-	OrAtomic64(mask, (int64)((uint64)1 << cpu));
+inline void SetCPUIDle(CPUSet& mask, int cpu) {
+	mask.SetBitAtomic(cpu);
 }
 
-inline void ClearCPUIDle(uint64 volatile& mask, int cpu) {
-	if ((unsigned)cpu >= 64)
-		return;
-	AndAtomic64(mask, (int64)~((uint64)1 << cpu));
+inline void ClearCPUIDle(CPUSet& mask, int cpu) {
+	mask.ClearBitAtomic(cpu);
 }
 
-inline bool IsCPUIDle(const uint64 volatile& mask, int cpu) {
-	if ((unsigned)cpu >= 64)
-		return false;
-	return (LoadAcquire64(mask) & ((uint64)1 << cpu)) != 0;
+inline bool IsCPUIDle(const CPUSet& mask, int cpu) {
+	return mask.GetBit(cpu);
 }
 
 struct SchedulerSnapshot {
 	int32 totalRunnable;
-	uint64 idleMask __attribute__((aligned(8)));
+	CPUSet idleMask;
 };
 
-inline SchedulerSnapshot MakeSchedulerSnapshot(const int32& total,
-											   const uint64& idleMask) {
+inline SchedulerSnapshot MakeSchedulerSnapshot(int32 total,
+											   const CPUSet& idleMask) {
 	SchedulerSnapshot s;
-	s.totalRunnable = LoadAcquire(total);
-	s.idleMask = (uint64)LoadAcquire64(idleMask);
+	s.totalRunnable = total;
+
+	// Note: word-by-word LoadAcquire provides a near-atomic snapshot.
+	// While not perfectly consistent across all words at a single instant,
+	// it is sufficient for scheduler load-balancing hints where the state
+	// is highly transient.
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	const uint32* bits = idleMask.BitData();
+	for (int32 i = 0; i < kWords; i++) {
+		s.idleMask.SetWord(i, (uint32)LoadAcquire(*(int32 volatile*)&bits[i]));
+	}
 	return s;
 }
 
 inline SchedulerSnapshot TakeSnapshot() {
-	return MakeSchedulerSnapshot(gTotalRunnableThreads, gIdleMask);
+	return MakeSchedulerSnapshot(scheduler_get_total_runnable_threads(), gIdleMask);
 }
 
 inline bool ShouldMigrate(int sourceLoad, int targetLoad, int threshold) {

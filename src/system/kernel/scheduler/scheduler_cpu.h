@@ -141,6 +141,9 @@ public:
 
 	inline int32 ThreadCount() const { return LoadAcquire(fThreadCount); }
 
+	inline int32 RunnableCount() const { return LoadAcquire(fRunnableCount); }
+	inline void IncrementRunnableCount() { AddRelease(fRunnableCount, 1); }
+	inline void DecrementRunnableCount() { AddRelease(fRunnableCount, -1); }
 
 	inline int64 TotalWeight() const {
 		return LoadAcquire64(fTotalWeight);
@@ -190,6 +193,8 @@ private:
 
 	struct rcu_callback* fPendingCallbacks;
 	spinlock fRCUCallbackLock;
+
+	int32 fRunnableCount __attribute__((aligned(8)));
 
 	int64 fTotalWeight __attribute__((aligned(8)));
 
@@ -465,7 +470,7 @@ extern PackageEntry* gPackageEntries;
 extern int32 gPackageCount;
 
 extern SchedulerNode* gSchedulerNodes;
-extern uint64 gIdleNodeMask __attribute__((aligned(8)));
+extern CPUSet gIdleNodeMask;
 extern int32 gNodeCount;
 
 inline void CPUEntry::LockRunQueue() {
@@ -673,9 +678,8 @@ inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 	native_cpu_mask_t oldMask = cpu_mask_or_atomic(
 		&fIdlePackageMask, (native_cpu_mask_t)1 << package->NodeIndex());
 
-	if (oldMask == 0 && fNodeID < 64) {
-		OrAtomic64(gIdleNodeMask,
-			(int64)((uint64)1 << fNodeID));
+	if (oldMask == 0) {
+		gIdleNodeMask.SetBitAtomic(fNodeID);
 	}
 }
 
@@ -698,54 +702,14 @@ inline void SchedulerNode::PackageWakesUp(PackageEntry* package) {
 	// (mask is now zero).
 	if ((oldMask & clearBit) != 0 &&
 		(oldMask & ~clearBit) == (native_cpu_mask_t)0) {
-		if (fNodeID < 64) {	 // Note: node limit
-			// Note: a plain re-read + atomic_and64 is still racy.
-			// Between the re-read returning 0 and the atomic_and64, a
-			// concurrent PackageGoesIdle can set a bit in fIdlePackageMask
-			// AND set our node bit in gIdleNodeMask.  The atomic_and64 then
-			// clears the node bit, permanently losing the idle notification.
-			//
-			// Fix: use a CAS loop that re-checks fIdlePackageMask atomically
-			// with the gIdleNodeMask update.  If fIdlePackageMask is no longer
-			// zero when we re-read it, a concurrent PackageGoesIdle has fired
-			// and will (or has already) re-set the node bit - we must not
-			// clear it.
-			const uint64 nodeBit = 1ULL << fNodeID;
-			uint64 nodeMask __attribute__((aligned(8)));
-			// Note: add iteration bound to prevent livelock when
-			// packages continuously oscillate between idle/active states.
-			// After kMaxWakeupRetries CAS failures we give up; the next
-			// PackageGoesIdle call will re-set the bit if needed.
-			const int kMaxWakeupRetries = 64;
-			int wakeupRetries = 0;
-			while (true) {
-				nodeMask = LoadAcquire64(gIdleNodeMask);
-				if (!(nodeMask & nodeBit))
-					break;	// already cleared by a concurrent PackageWakesUp
-
-				if (cpu_mask_get_atomic(&fIdlePackageMask) !=
-					(native_cpu_mask_t)0) {
-					// A package in this node went idle concurrently; the node
-					// bit must remain set.
-					break;
-				}
-
-				if (TestAndSet64(gIdleNodeMask,
-						(int64)(nodeMask & ~nodeBit), (int64)nodeMask) == (int64)nodeMask) {
-					// Successfully cleared. Re-check for safety to catch the
-					// race where a package went idle between our last check
-					// and the CAS.
-					if (cpu_mask_get_atomic(&fIdlePackageMask) !=
-						(native_cpu_mask_t)0) {
-						OrAtomic64(gIdleNodeMask,
-							(int64)(uint64)nodeBit);
-					}
-					break;
-				}
-
-				if (++wakeupRetries >= kMaxWakeupRetries)
-					break;
-			}
+		// Note: Use CPUSet::ClearBitAtomic which is scalable beyond 64 nodes.
+		// To handle the race condition safely, we only clear if fIdlePackageMask
+		// is still zero.
+		if (cpu_mask_get_atomic(&fIdlePackageMask) == (native_cpu_mask_t)0) {
+			gIdleNodeMask.ClearBitAtomic(fNodeID);
+			// Double-check to catch the race
+			if (cpu_mask_get_atomic(&fIdlePackageMask) != (native_cpu_mask_t)0)
+				gIdleNodeMask.SetBitAtomic(fNodeID);
 		}
 	}
 }

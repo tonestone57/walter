@@ -244,6 +244,7 @@ private:
 
 	CoreEntry* fCore __attribute__((aligned(8)));
 	CPUEntry* fEnqueuedCPU __attribute__((aligned(8)));
+	CPUEntry* fAssignedCPU __attribute__((aligned(8)));
 };
 
 class ThreadProcessing {
@@ -459,17 +460,9 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 				cpu->Remove(this);
 		}
 
-		int32 prev = AddAcquireRelease(*const_cast<int32 volatile*>(&gTotalRunnableThreads), -1);
-		if (prev <= 0) {
-			int32 cur = LoadAcquire(gTotalRunnableThreads);
-			for (int32 i = 0; i < 100 && cur < 0; i++) {
-				int32 was = cur;
-				if (TestAndSet(*const_cast<int32 volatile*>(&gTotalRunnableThreads), 0, (int32)(was)) == was) {
-					break;
-				}
-				cur = LoadAcquire(gTotalRunnableThreads);
-				memory_read_barrier();
-			}
+		if (fAssignedCPU != NULL) {
+			fAssignedCPU->DecrementRunnableCount();
+			fAssignedCPU = NULL;
 		}
 
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
@@ -516,17 +509,9 @@ inline void ThreadData::Dies(bigtime_t now) {
 				cpu->Remove(this);
 		}
 
-		int32 prev = AddAcquireRelease(*const_cast<int32 volatile*>(&gTotalRunnableThreads), -1);
-		if (prev <= 0) {
-			int32 cur = LoadAcquire(gTotalRunnableThreads);
-			for (int32 i = 0; i < 100 && cur < 0; i++) {
-				int32 was = cur;
-				if (TestAndSet(*const_cast<int32 volatile*>(&gTotalRunnableThreads), 0, (int32)(was)) == was) {
-					break;
-				}
-				cur = LoadAcquire(gTotalRunnableThreads);
-				memory_read_barrier();
-			}
+		if (fAssignedCPU != NULL) {
+			fAssignedCPU->DecrementRunnableCount();
+			fAssignedCPU = NULL;
 		}
 
 		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
@@ -571,7 +556,8 @@ inline void ThreadData::PutBack(bigtime_t now) {
 		fThread->state = B_THREAD_READY;
 
 		if (!IsIdle()) {
-			AddRelease(gTotalRunnableThreads, 1);
+			cpu->IncrementRunnableCount();
+			fAssignedCPU = cpu;
 			CoreEntry* core = cpu->Core();
 			if (core != NULL) {
 				core->IncrementTotalThreadCount();
@@ -657,7 +643,8 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
 
 	if (!wasReady) {
 		if (!IsIdle()) {
-			AddRelease(gTotalRunnableThreads, 1);
+			cpu->IncrementRunnableCount();
+			fAssignedCPU = cpu;
 			if (core != NULL) {
 				core->IncrementTotalThreadCount();
 				if (priority >= B_DISPLAY_PRIORITY) {
@@ -669,6 +656,16 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
 
 		fReady = true;
 		fThread->state = B_THREAD_READY;
+	}
+
+	if (fReady && fAssignedCPU != cpu) {
+		// Migration
+		if (!IsIdle()) {
+			if (fAssignedCPU != NULL)
+				fAssignedCPU->DecrementRunnableCount();
+			cpu->IncrementRunnableCount();
+		}
+		fAssignedCPU = cpu;
 	}
 
 	ASSERT(!fEnqueued);

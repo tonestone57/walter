@@ -31,7 +31,7 @@ PackageEntry* gPackageEntries;
 int32 gPackageCount;
 
 SchedulerNode* gSchedulerNodes;
-uint64 gIdleNodeMask __attribute__((aligned(8))) = 0;
+CPUSet gIdleNodeMask;
 int32 gNodeCount;
 
 struct LocalNodeStealAction {
@@ -326,6 +326,7 @@ void IRQRebalanceDPC::DoDPC(DPCQueue* queue) {
 
 CPUEntry::CPUEntry()
 	: fThreadCount(0),
+	  fRunnableCount(0),
 	  fLoad(0),
 	  fPerformanceScale(kDefaultCapacity),
 	  fMeasureActiveTime(0),
@@ -2032,21 +2033,33 @@ static int dump_cpu_heap(int /* argc */, char** /* argv */) {
 
 static int dump_idle_cores(int /* argc */, char** /* argv */) {
 	kprintf("Idle packages:\n");
-	uint64 nodeMask = LoadAcquire64(gIdleNodeMask);
 
-	if (nodeMask != 0) {
+	bool anyIdle = false;
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int32 i = 0; i < kWords; i++) {
+		if (gIdleNodeMask.Bits(i) != 0) {
+			anyIdle = true;
+			break;
+		}
+	}
+
+	if (anyIdle) {
 		kprintf("node package cores\n");
 
-		while (nodeMask != 0) {
-			int32 nodeIndex = scheduler_ffs64(nodeMask) - 1;
-			nodeMask &= ~(1ULL << nodeIndex);
-			if (nodeIndex < 0 || nodeIndex >= gNodeCount)
-				continue;
+		for (int32 i = 0; i < kWords; i++) {
+			uint32 bits = gIdleNodeMask.Bits(i);
+			while (bits != 0) {
+				int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
+				bits &= ~(1U << bit);
+				int32 nodeIndex = i * 32 + bit;
 
-			uint64 packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
+				if (nodeIndex >= gNodeCount)
+					continue;
+
+			native_cpu_mask_t packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
 			while (packageMask != 0) {
-				int32 packageIndex = scheduler_ffs64(packageMask) - 1;
-				packageMask &= ~(1ULL << packageIndex);
+				int32 packageIndex = scheduler_flsnative(packageMask) - 1;
+				packageMask &= ~((native_cpu_mask_t)1 << packageIndex);
 
 				int32 globalPackageIndex =
 					gSchedulerNodes[nodeIndex].PackageStartIndex() +

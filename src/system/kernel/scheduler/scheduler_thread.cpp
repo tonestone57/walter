@@ -69,6 +69,7 @@ void ThreadData::_InitBase() {
 
 	fIsForeground = fThread->team->fIsForeground;
 	fStolen = false;
+	fAssignedCPU = NULL;
 }
 
 inline CoreEntry* ThreadData::_ChooseCore(const CPUSet& mask,
@@ -199,6 +200,7 @@ void ThreadData::Init(CoreEntry* core) {
 	fHomePackage = core->Package()->ID();
 	fReady = true;
 	fNeededLoad = 0;
+	fAssignedCPU = NULL;
 }
 
 
@@ -504,7 +506,10 @@ void ThreadData::UnassignCore(bool running) {
 	ASSERT(core != NULL);
 	if (running || fThread->state == B_THREAD_READY) {
 		if (fReady && !IsIdle()) {
-			AddRelease(gTotalRunnableThreads, -1);
+			if (fAssignedCPU != NULL) {
+				fAssignedCPU->DecrementRunnableCount();
+				fAssignedCPU = NULL;
+			}
 			core->DecrementTotalThreadCount();
 			if (fIsHighPriorityContributed) {
 				core->DecrementHighPriorityThreadCount();

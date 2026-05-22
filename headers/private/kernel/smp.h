@@ -62,6 +62,9 @@ public:
 
 	inline uint32		Bits(uint32 index) const { return fBitmap[index];}
 	inline void			SetWord(uint32 index, uint32 value) { fBitmap[index] = value; }
+
+	inline uint32*		BitData() { return fBitmap; }
+	inline const uint32* BitData() const { return fBitmap; }
 private:
 	static	const int	kArrayBits = 32;
 	static	const int	kArraySize = ROUNDUP(SMP_MAX_CPUS, kArrayBits) / kArrayBits;

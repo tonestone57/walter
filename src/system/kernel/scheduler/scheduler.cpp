@@ -64,8 +64,7 @@ CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
 
 bool gHasStandardCores = false;
 
-int32 gTotalRunnableThreads = 0;
-uint64 gIdleMask __attribute__((aligned(8))) = 0;
+CPUSet gIdleMask;
 
 int64 gRCUGeneration __attribute__((aligned(8))) = 1;
 spinlock gSchedulerUpdateLock = B_SPINLOCK_INITIALIZER;
@@ -595,17 +594,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 
 			if (++enqueueAttempts > kMaxRetries) {
 				if (threadData->IsReady() && !threadData->IsIdle()) {
-					int32 prev = AddAcquireRelease(gTotalRunnableThreads, -1);
-					if (prev <= 0) {
-						int32 cur = LoadAcquire(gTotalRunnableThreads);
-						for (int32 i = 0; i < 100 && cur < 0; i++) {
-							int32 was = cur;
-							if (TestAndSet(gTotalRunnableThreads, 0, was) == was)
-								break;
-							cur = LoadAcquire(gTotalRunnableThreads);
-							memory_read_barrier();
-						}
-					}
+					CPUEntry::GetCPU(smp_get_current_cpu())->DecrementRunnableCount();
 				}
 				return false;
 			}
@@ -615,7 +604,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 				targetCore = targetCPU->Core();
 				if (targetCore == NULL || gCPU[targetCPU->ID()].disabled) {
 					if (threadData->IsReady() && !threadData->IsIdle())
-						AddRelease(gTotalRunnableThreads, -1);
+						targetCPU->DecrementRunnableCount();
 					return false;
 				}
 			}
@@ -982,7 +971,7 @@ static void reschedule(int32 nextState) {
 			// are reordered or an early-exit is added, the dying thread
 			// could be enqueued via enqueue(oldThread, true, NULL) after
 			// Dies() has already removed its load, corrupting
-			// gTotalRunnableThreads and leading to use-after-free in the
+			// the runnable count and leading to use-after-free in the
 			// run-queue drain during thread destruction.
 			enqueueOldThread = false;
 			break;
@@ -1234,7 +1223,7 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 		// serialize AddCPU with the same global scheduler lock scope used by
 		// the disable/remove path to avoid races with idle-core state updates.
 		{
-			InterruptsBigSchedulerLocker bigLocker;
+			InterruptsWriteSpinLocker _(gSchedulerListenersLock);
 			CoreCPUHeapLocker heapLocker(core);
 
 			// Note: AddCPU inserts the CPU into the heap. A concurrent
@@ -1261,7 +1250,7 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 		// other CPUs cannot observe partial migration states.
 		bool sendRescheduleICI = false;
 		{
-			InterruptsBigSchedulerLocker bigLocker;
+			InterruptsWriteSpinLocker _(gSchedulerListenersLock);
 
 			gCPU[cpuID].disabled = true;
 			gCPUEnabled.ClearBitAtomic(cpuID);
@@ -1624,7 +1613,8 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 
 
 static status_t init() {
-	gIdleNodeMask = 0;
+	gIdleMask.ClearAll();
+	gIdleNodeMask.ClearAll();
 
 	gMinCoreType = CORE_TYPE_UNKNOWN;
 	gMaxCoreType = CORE_TYPE_UNKNOWN;
@@ -2112,6 +2102,16 @@ void scheduler_init() {
 void scheduler_enable_scheduling() {
 	// use atomic store so all CPUs observe the flag immediately.
 	StoreRelease(sSchedulerEnabled, 1);
+}
+
+
+int32 scheduler_get_total_runnable_threads() {
+	int32 total = 0;
+	int32 cpuCount = smp_get_num_cpus();
+	for (int32 i = 0; i < cpuCount; i++) {
+		total += gCPUEntries[i].RunnableCount();
+	}
+	return total;
 }
 
 
