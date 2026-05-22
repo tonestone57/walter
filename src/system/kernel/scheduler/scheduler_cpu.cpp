@@ -808,7 +808,8 @@ void CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now) {
 
 		// Pass the core's SystemVirtualTime to UpdateActivity to ensure
 		// consistency during potential migration.
-		oldThreadData->UpdateActivity(active, core->SystemVirtualTime(), now);
+		oldThreadData->UpdateActivity(active, core->SystemVirtualTime(),
+			core->ScoreFactor(), now);
 	}
 }
 

@@ -125,7 +125,7 @@ public:
 											   bigtime_t maxLatency = 0);
 
 	SCHEDULER_INLINE void UpdateActivity(bigtime_t active, bigtime_t svt,
-										 bigtime_t now = 0);
+										 uint32 score_factor, bigtime_t now = 0);
 
 	static bigtime_t sMaxLatency __attribute__((aligned(8)));
 
@@ -754,14 +754,21 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 }
 
 inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t svt,
-									   bigtime_t now) {
+									   uint32 score_factor, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (!IsRealTime() && !IsIdle()) {
 		int64 weight = GetWeight();
 		if (weight <= 0)
 			weight = 1;
-		bigtime_t delta = (active * 1000000LL) / weight;
+
+		// Scaled Lag Calculus (Handles P vs. E Core Asymmetry)
+		// 32-bit optimization: use pre-calculated fixed-point score_factor
+		// to avoid expensive 64-bit integer division in the hot path.
+		// scaled_active = (active * 1024) / capacity
+		bigtime_t scaled_active = (active * score_factor) >> 16;
+
+		bigtime_t delta = (scaled_active * 1000000LL) / weight;
 
 		UpdateVirtualRuntime(delta, svt);
 

@@ -83,4 +83,23 @@ While QAD offers interesting concepts for ultra-massive scalability, Haiku's cur
 -   **Cache vs. Resolution Tradeoff**: While QAD is more L1 cache-efficient, BMQ-EEVDF's 512-bin matrix provides the fine-grained deadline tracking necessary for Haiku's diverse desktop workloads. The current metadata size (~136 bytes) is a reasonable trade-off for the 4x increase in scheduling precision.
 -   **Practical Scalability**: The 2025 audit resolved the primary bottlenecks QAD aimed to address (lock contention and mask limits), making Haiku's current scheduler performant on any hardware Haiku is likely to run on.
 
-**Recommendation**: Retain the current BMQ-EEVDF scheduler. The QAD proposal confirms that Haiku's direction is correct, but many of the "improvements" suggested in QAD are already present or exceeded by the 2025 audited implementation. Future work should focus on Phase 4 Roadmap items like Hardware-Guided EAS rather than a fundamental architecture swap.
+**Recommendation**: Retain the current BMQ-EEVDF scheduler. The QAD proposal confirms that Haiku's direction is correct, but many of the "improvements" suggested in QAD are already present or exceeded by the 2025 audited implementation. Future work should focus on the specific optimizations identified below.
+
+## 5. Implemented Optimizations Derived from QAD
+
+The following optimizations, inspired by the QAD proposal, have been implemented to modernize the current BMQ-EEVDF scheduler:
+
+### 1. Flat 512-Lane Bitmask Migration
+The 16x32 matrix structure has been replaced with a flat **512-lane bitmask**.
+-   **L1 Cache Efficiency**: Selection metadata is now consolidated into **exactly one 64-byte cache line**. This ensures that the scheduling state remains "hot" and avoids multiple cache-line fills during context switches.
+-   **Selection Path Simplification**: Eliminated the **two-level dependent load** hierarchy (Primary -> Secondary bitmap).
+-   **Memory Footprint**: Reduced the per-CPU metadata footprint from ~136 bytes to 64 bytes (2.1x reduction).
+-   **32-bit Portability**: On 32-bit architectures, the bitmask is automatically unrolled into 16x32-bit words, ensuring single-cycle register lookups per segment.
+
+### 2. Capacity-Aware Virtual Runtime Scaling
+Adopted QAD's direct heterogeneous scaling math for virtual runtime accumulation.
+-   **Heterogeneous Fairness**: Wall-time is now explicitly scaled by the physical core's capacity rating, ensuring that threads running on Efficiency cores accumulate virtual runtime faster than those on Performance cores.
+-   **32-bit Optimization**: To avoid expensive 64-bit integer division in the context-switch hot path, the scaling uses a **fixed-point score factor**. This allows 32-bit CPUs to perform accurate performance-scaling using only multiplication and bit-shifting.
+
+## 6. Future Roadmap: Cellular Sharding
+For systems targeting the "Enterprise Supercomputer" scale (1024+ cores), Haiku should continue to evaluate QAD's **Cellular Autonomy** strategy. Splitting the system into independent 32-core scheduling cells would eliminate the $O(N)$ overhead of scanning system-wide bitsets and counters, ensuring that context switch latency remains constant even at extreme core counts.
