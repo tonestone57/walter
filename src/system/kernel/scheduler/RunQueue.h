@@ -152,8 +152,8 @@ public:
 
 	class ConstIterator {
 	public:
-		ConstIterator() : fQueue(NULL), fBand(kPrimaryBins - 1), fSLI(0), fRT(20), fCurrent(NULL) {}
-		ConstIterator(const RunQueue* queue) : fQueue(queue), fBand(kPrimaryBins - 1), fSLI(0), fRT(20), fCurrent(NULL)
+		ConstIterator() : fQueue(NULL), fLane(kNumLanes - 1), fRT(20), fCurrent(NULL) {}
+		ConstIterator(const RunQueue* queue) : fQueue(queue), fLane(kNumLanes - 1), fRT(20), fCurrent(NULL)
 		{
 			_Advance();
 		}
@@ -176,14 +176,9 @@ public:
 					if (fCurrent != NULL) return;
 					fRT--;
 				} else {
-					fCurrent = fQueue->fQueues[fBand * 32 + fSLI].GetNext(fCurrent);
+					fCurrent = fQueue->fQueues[fLane].GetNext(fCurrent);
 					if (fCurrent != NULL) return;
-
-					fSLI++;
-					if (fSLI >= 32) {
-						fSLI = 0;
-						fBand--;
-					}
+					fLane--;
 					_AdvanceLane();
 					return;
 				}
@@ -200,20 +195,16 @@ public:
 
 		void _AdvanceLane()
 		{
-			while (fBand >= 0) {
-				while (fSLI < 32) {
-					fCurrent = fQueue->fQueues[fBand * 32 + fSLI].Head();
-					if (fCurrent != NULL) return;
-					fSLI++;
-				}
-				fSLI = 0;
-				fBand--;
+			while (fLane >= 0) {
+				fCurrent = fQueue->fQueues[fLane].Head();
+				if (fCurrent != NULL) return;
+				fLane--;
 			}
 			fCurrent = NULL;
 		}
 
 		const RunQueue* fQueue;
-		int fBand, fSLI, fRT;
+		int fLane, fRT;
 		Element* fCurrent;
 	};
 
@@ -274,7 +265,13 @@ int32 RUN_QUEUE_CLASS_NAME::_GetLane(bigtime_t deadline, int32 priority) const
 		if (sli >= kSecondaryBins) sli = kSecondaryBins - 1;
 	}
 
-	return fli * 32 + sli;
+	// Branchless Inverted Mapping: ensuring higher bit indices always represent
+	// higher scheduling priority. This simplifies the hot path selection
+	// to a single word-level bit-scan.
+	// Band (fli) 15 is better than 0. Within a band, SLI 0 (earliest deadline)
+	// is better than SLI 31.
+	// Index = (fli * 32) + (31 - sli)
+	return (fli << 5) | (31 - sli);
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -374,31 +371,16 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 			return fRealTimeQueues[index].Head();
 	}
 
-	// Optimized O(1) word-by-word scan for 512 lanes.
-	// Preserves "Highest Band Wins, then Lowest Deadline (in band) Wins".
-	// idx = fli * 32 + sli.
-	for (int band = kPrimaryBins - 1; band >= 0; band--) {
-		// Calculate the range of bits for this band.
-		// Each band is exactly 32 bits (kSecondaryBins).
-		int startLane = band * 32;
-
-		// Map the 32-bit band to the flat bitmask.
-		// On 32-bit systems, a band maps exactly to one word.
-		// On 64-bit systems, two bands map to one word.
-		int wordIdx = startLane / (sizeof(native_cpu_mask_t) * 8);
-		int bitOffset = startLane % (sizeof(native_cpu_mask_t) * 8);
-
-		native_cpu_mask_t word = cpu_mask_get_atomic(&fBitmap[wordIdx]);
-		if (word == 0) continue;
-
-		// Mask the word to isolate only the 32 bits belonging to this band.
-		native_cpu_mask_t bandMask = (native_cpu_mask_t)0xFFFFFFFF << bitOffset;
-		native_cpu_mask_t isolatedBand = word & bandMask;
-
-		if (isolatedBand != 0) {
-			// Find the lowest set bit (CTZ) within this band to get the lowest deadline.
-			int bit = scheduler_ctz(isolatedBand);
-			return fQueues[wordIdx * (sizeof(native_cpu_mask_t) * 8) + bit].Head();
+	// Branchless O(1) Selection Path:
+	// Because of inverted SLI mapping (fli * 32 + (31 - sli)), the highest set
+	// bit in the 512-lane bitmap always corresponds to the best thread.
+	// We scan words from highest (priority 511) to lowest (priority 0).
+	for (int i = kNumWords - 1; i >= 0; i--) {
+		native_cpu_mask_t word = cpu_mask_get_atomic(&fBitmap[i]);
+		if (word != 0) {
+			int bit = scheduler_flsnative(word) - 1;
+			int lane = i * (sizeof(native_cpu_mask_t) * 8) + bit;
+			return fQueues[lane].Head();
 		}
 	}
 
@@ -428,23 +410,13 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 		rtBitmap &= ~(1U << index);
 	}
 
-	// Optimized O(1) band-by-band scan for template PeekBest.
-	// Scans all bands because compare(element, best) might prefer a thread
-	// in a lower priority band.
-	for (int band = kPrimaryBins - 1; band >= 0; band--) {
-		int startLane = band * 32;
-		int wordIdx = startLane / (sizeof(native_cpu_mask_t) * 8);
-		int bitOffset = startLane % (sizeof(native_cpu_mask_t) * 8);
-
-		native_cpu_mask_t word = cpu_mask_get_atomic(&fBitmap[wordIdx]);
-		if (word == 0) continue;
-
-		native_cpu_mask_t bandMask = (native_cpu_mask_t)0xFFFFFFFF << bitOffset;
-		native_cpu_mask_t isolatedBand = word & bandMask;
-
-		while (isolatedBand != 0) {
-			int bit = scheduler_ctz(isolatedBand);
-			int lane = wordIdx * (sizeof(native_cpu_mask_t) * 8) + bit;
+	// Branchless O(1) Selection Path for template PeekBest.
+	// Scans all set bits from highest to lowest priority.
+	for (int i = kNumWords - 1; i >= 0; i--) {
+		native_cpu_mask_t word = cpu_mask_get_atomic(&fBitmap[i]);
+		while (word != 0) {
+			int bit = scheduler_flsnative(word) - 1;
+			int lane = i * (sizeof(native_cpu_mask_t) * 8) + bit;
 
 			typename DoublyLinkedList<Element, GetLink>::Iterator it = const_cast<DoublyLinkedList<Element, GetLink>&>(fQueues[lane]).GetIterator();
 			while (it.HasNext()) {
@@ -454,7 +426,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 						best = element;
 				}
 			}
-			isolatedBand &= ~((native_cpu_mask_t)1 << bit);
+			word &= ~((native_cpu_mask_t)1 << bit);
 		}
 	}
 

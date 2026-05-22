@@ -397,24 +397,22 @@ struct RunQueueScanner {
 		// follow a strict preemption policy and are not subject to interactivity
 		// priority boosting.
 
-		// Scan EEVDF FairShare threads (fli_index bins)
-		native_cpu_mask_t flBitmap = runQueue->GetFirstLevelBitmap();
-		while (flBitmap != 0) {
-			int fli = scheduler_flsnative(flBitmap) - 1;
-			// To ensure interactivity boosting for all FairShare threads,
-			// we iterate through the heads of non-empty bins.
-			native_cpu_mask_t slBitmap = runQueue->GetSecondLevelBitmap(fli);
-			while (slBitmap != 0) {
-				int sli = scheduler_ctz(slBitmap);
-				ThreadData* thread = runQueue->GetSliBinHead(fli, sli);
+		// Scan EEVDF FairShare threads (flat lane bins)
+		const int kNumWords = 512 / (sizeof(native_cpu_mask_t) * 8);
+		for (int i = kNumWords - 1; i >= 0; i--) {
+			native_cpu_mask_t word = runQueue->GetBitmapWord(i);
+			while (word != 0) {
+				int bit = scheduler_flsnative(word) - 1;
+				int lane = i * (sizeof(native_cpu_mask_t) * 8) + bit;
+
+				ThreadData* thread = runQueue->GetLaneBinHead(lane);
 				if (thread != NULL) {
 					thread->_UpdatePriorityBoost(now);
 				}
 				if (++checked >= kMaxPrioritiesToCheckPerQueue)
 					return;
-				slBitmap &= ~((native_cpu_mask_t)1 << sli);
+				word &= ~((native_cpu_mask_t)1 << bit);
 			}
-			flBitmap &= ~((native_cpu_mask_t)1 << fli);
 		}
 	}
 };

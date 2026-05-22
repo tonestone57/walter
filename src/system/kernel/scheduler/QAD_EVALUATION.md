@@ -92,9 +92,9 @@ The following optimizations, inspired by the QAD proposal, have been implemented
 ### 1. Flat 512-Lane Bitmask Migration
 The 16x32 matrix structure has been replaced with a flat **512-lane bitmask**.
 -   **L1 Cache Efficiency**: Selection metadata is now consolidated into **exactly one 64-byte cache line**. This ensures that the scheduling state remains "hot" and avoids multiple cache-line fills during context switches.
--   **Selection Path Simplification**: Eliminated the **two-level dependent load** hierarchy (Primary -> Secondary bitmap).
+-   **Branchless Selection Path**: By using **inverted SLI mapping** (`lane = fli * 32 + (31 - sli)`), the scheduler ensures that higher bit indices always represent higher priority. This simplifies selection to a single word-level bit-scan (`scheduler_flsnative`), eliminating branches and dependent loads.
 -   **Memory Footprint**: Reduced the per-CPU metadata footprint from ~136 bytes to 64 bytes (2.1x reduction).
--   **32-bit Portability**: On 32-bit architectures, the bitmask is automatically unrolled into 16x32-bit words, ensuring single-cycle register lookups per segment.
+-   **32-bit Portability**: On 32-bit architectures, the bitmask is unrolled into 16x32-bit words, allowing efficient scanning using native assembly primitives without 64-bit emulation overhead.
 
 ### 2. Capacity-Aware Virtual Runtime Scaling
 Adopted QAD's direct heterogeneous scaling math for virtual runtime accumulation.
