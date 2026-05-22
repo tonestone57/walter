@@ -8,6 +8,7 @@
 
 #include <KernelExport.h>
 
+#include <util/atomic.h>
 #include <util/AutoLock.h>
 #include <util/DoublyLinkedList.h>
 
@@ -20,7 +21,7 @@ struct rw_lock;
 // scheduler listeners
 
 
-struct SchedulerListener : DoublyLinkedListLinkImpl<SchedulerListener> {
+struct SchedulerListener {
 	virtual						~SchedulerListener();
 
 	virtual	void				ThreadEnqueuedInRunQueue(
@@ -29,11 +30,12 @@ struct SchedulerListener : DoublyLinkedListLinkImpl<SchedulerListener> {
 									Thread* thread) = 0;
 	virtual	void				ThreadScheduled(Thread* oldThread,
 									Thread* newThread) = 0;
+
+			SchedulerListener* volatile fNext;
 };
 
 
-typedef DoublyLinkedList<SchedulerListener> SchedulerListenerList;
-extern SchedulerListenerList gSchedulerListeners;
+extern SchedulerListener* volatile gSchedulerListeners;
 extern rw_spinlock gSchedulerListenersLock;
 
 
@@ -42,11 +44,10 @@ inline void
 NotifySchedulerListeners(void (SchedulerListener::*hook)(Parameter1),
 	Parameter1 parameter1)
 {
-	if (!gSchedulerListeners.IsEmpty()) {
-		InterruptsReadSpinLocker locker(gSchedulerListenersLock);
-		SchedulerListenerList::Iterator it = gSchedulerListeners.GetIterator();
-		while (SchedulerListener* listener = it.Next())
-			(listener->*hook)(parameter1);
+	SchedulerListener* listener = atomic_pointer_get(&gSchedulerListeners);
+	while (listener != NULL) {
+		(listener->*hook)(parameter1);
+		listener = atomic_pointer_get(&listener->fNext);
 	}
 }
 
@@ -57,11 +58,10 @@ NotifySchedulerListeners(
 	void (SchedulerListener::*hook)(Parameter1, Parameter2),
 	Parameter1 parameter1, Parameter2 parameter2)
 {
-	if (!gSchedulerListeners.IsEmpty()) {
-		InterruptsReadSpinLocker locker(gSchedulerListenersLock);
-		SchedulerListenerList::Iterator it = gSchedulerListeners.GetIterator();
-		while (SchedulerListener* listener = it.Next())
-			(listener->*hook)(parameter1, parameter2);
+	SchedulerListener* listener = atomic_pointer_get(&gSchedulerListeners);
+	while (listener != NULL) {
+		(listener->*hook)(parameter1, parameter2);
+		listener = atomic_pointer_get(&listener->fNext);
 	}
 }
 

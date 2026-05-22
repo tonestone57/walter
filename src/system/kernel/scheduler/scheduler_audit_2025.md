@@ -41,8 +41,9 @@
 ## 3. Pending Performance Bottlenecks (Phase 4 Roadmap)
 
 ### A. Global Listeners Lock (`gSchedulerListenersLock`)
-- **Problem**: Global read-write spinlock is acquired on every scheduler event.
-- **Solution**: Implement an RCU-safe list for scheduler listeners to allow lock-free traversal in the hot path.
+- **Status**: **Resolved**.
+- **Problem**: Global read-write spinlock was acquired on every scheduler event.
+- **Solution**: Migrated scheduler listeners to an RCU-safe lock-free singly-linked list. `NotifySchedulerListeners` now performs lock-free traversal, significantly reducing contention on many-core systems.
 
 ### B. Static Work-Stealing Thresholds
 - **Problem**: Current lag thresholds (1ms/2ms/5ms) are hard-coded. On high-bandwidth or extremely low-latency interconnects, these might be too conservative.
@@ -58,7 +59,7 @@
 
 ## 4. Phase 4 Roadmap Task List
 
-- [ ] **Task 1: Implement RCU-safe Scheduler Listeners**
+- [x] **Task 1: Implement RCU-safe Scheduler Listeners**
 - [ ] **Task 2: Dynamic Interconnect-Aware Thresholds**
 - [ ] **Task 3: Hardware-Guided EAS (Energy-Aware Scheduling)**
 - [ ] **Task 4: Per-CPU DPC Queue Auditing & Optimization**
