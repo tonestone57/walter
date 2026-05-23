@@ -1359,12 +1359,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 	while (true) {
 		currentLoad = (int32)(oldCombined >> 32);
 		uint32 nextEpoch = (uint32)oldCombined + 1;
-
-		// Note: Carry-over uncollected load.
-		// If currentLoad is non-zero, it means load contributions from AddLoad
-		// occurred between the last loop iteration and this CAS.  We must
-		// carry them over to the next epoch rather than resetting to 0.
-		int64 newCombined = ((int64)currentLoad << 32) | (int64)nextEpoch;
+		int64 newCombined = (int64)nextEpoch;  // Load reset to 0
 
 		int64 actual = TestAndSet64(fCombinedLoad,
 			newCombined, oldCombined);

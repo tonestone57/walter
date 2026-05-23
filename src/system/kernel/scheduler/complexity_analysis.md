@@ -18,8 +18,13 @@ This document provides a breakdown of the time complexity for core functions wit
 
 ### `choose_core()`
 - **Complexity:** $O(1)$ to $O(N)$
-- **Best Case ($O(1)$):** Hits the "Hot-Idle" fast path or finds a suitable core through hierarchical random sampling (fixed number of probes).
-- **Average Case ($O(S)$):** Probes $S$ random packages (where $S$ is between 16 and 64, calibrated at boot).
+- **Best Case ($O(1)$):** Hits the "Hot-Idle" fast path or finds an idle core through hierarchical bitmask traversal.
+- **Hierarchical Idle Selection:** The scheduler maintains three levels of idle bitmasks:
+    1.  `gIdleNodeMask`: Nodes with at least one idle package.
+    2.  `fIdlePackageMask` (in `SchedulerNode`): Packages within a node with at least one idle core.
+    3.  `fIdleCoreMask` (in `PackageEntry`): Idle cores within a package.
+  This allows $O(1)$ selection of the first available idle core by performing a few `ctz` (count trailing zeros) operations, regardless of the total number of cores. (Note: $O(1)$ here refers to a bounded number of operations relative to the fixed hierarchy depth).
+- **Average Case ($O(S)$):** Probes $S$ random packages for load-balancing (where $S$ is between 16 and 64, calibrated at boot).
 - **Worst Case ($O(N)$):** When a specific CPU affinity mask is provided, the scheduler may perform a linear scan of the mask to find eligible packages.
 
 ### `rebalance()`
@@ -68,4 +73,4 @@ This document provides a breakdown of the time complexity for core functions wit
 | `TrackLoad` | $O(1)$ | $O(1)$ |
 | `Work Stealing` | $O(1)$ | $O(1)$ (Fixed Probes) |
 | `UpdatePriorityBoost` | $O(1)$ | $O(1)$ (Fixed budget of bins) |
-| `GetTotalRunnableThreads`| $O(N)$ | $O(N)$ (Scans per-CPU counters) |
+| `GetTotalRunnableThreads`| $O(N_{enabled})$ | $O(N)$ (Iterates enabled CPUs) |

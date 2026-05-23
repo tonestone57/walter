@@ -2216,9 +2216,19 @@ void scheduler_enable_scheduling() {
 
 int32 scheduler_get_total_runnable_threads() {
 	int32 total = 0;
-	int32 cpuCount = smp_get_num_cpus();
-	for (int32 i = 0; i < cpuCount; i++) {
-		total += gCPUEntries[i].RunnableCount();
+
+	// Optimization: Skip disabled CPUs by iterating the gCPUEnabled bitmask.
+	// On systems where many cores are parked for power-saving, this reduces
+	// the loop overhead from O(N_cpus) to O(N_enabled).
+	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
+	for (int32 i = 0; i < kWords; i++) {
+		uint32 bits = gCPUEnabled.Bits(i);
+		while (bits != 0) {
+			int bit = scheduler_ctz((native_cpu_mask_t)bits);
+			int cpuID = i * 32 + bit;
+			total += gCPUEntries[cpuID].RunnableCount();
+			bits &= ~(1U << bit);
+		}
 	}
 	return total;
 }

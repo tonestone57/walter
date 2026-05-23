@@ -67,10 +67,7 @@ struct ECoreSmallTaskAction {
 	bool operator()(PackageEntry* entry) const {
 		CoreEntry* candidate =
 			entry->PeekMaximumLoadCore(cpu, NULL, gMinCoreType);
-		// Note: Use GetLoad() for E-cores to allow packing up to 70% of their
-		// raw capacity. Using GetScore() (scaled by 1/capacity) made E-cores
-		// appear overloaded at only ~10% raw utilization.
-		if (candidate != NULL && candidate->GetLoad() < kHighLoad) {
+		if (candidate != NULL && candidate->GetScore() < kHighLoad) {
 			int32 score = candidate->GetScore();
 			if (eCore == NULL || score > eBestScore) {
 				eCore = candidate;
@@ -220,7 +217,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
 			&sSmallTaskCore[currentNodeID]);
 		if (current != NULL && current->Type() == gMinCoreType &&
-			current->GetLoad() < kHighLoad) {
+			current->GetScore() < kHighLoad) {
 			return current;
 		}
 
@@ -244,7 +241,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 					idx -= gPackageCount;
 				CoreEntry* candidate = gPackageEntries[idx].PeekMaximumLoadCore(
 					cpu, NULL, gMinCoreType);
-				if (candidate != NULL && candidate->GetLoad() < kHighLoad) {
+				if (candidate != NULL && candidate->GetScore() < kHighLoad) {
 					int32 score = candidate->GetScore();
 					if (eCore == NULL || score > eBestScore) {
 						eCore = candidate;
@@ -268,7 +265,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 				CoreEntry* currentE =
 					atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID]);
 				if (currentE != NULL && currentE->Type() == gMinCoreType &&
-				currentE->GetLoad() < kHighLoad) {
+					currentE->GetScore() < kHighLoad) {
 					return currentE;
 				}
 

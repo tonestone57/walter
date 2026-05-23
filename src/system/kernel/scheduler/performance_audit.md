@@ -5,7 +5,7 @@ This document identifies remaining performance bottlenecks and scalability chall
 ## 1. Linear CPUSet Scans ($O(N)$)
 Functions that iterate over all logical CPUs or those set in an affinity mask scale poorly on massive systems (128+ cores).
 - **`CheckMaskedPackagesMinimumLoad`**: Iterates over all set bits in the affinity mask.
-- **`scheduler_get_total_runnable_threads`**: Scans all per-CPU runnable counters.
+- **`scheduler_get_total_runnable_threads`**: Scans per-CPU runnable counters. Now optimized to only iterate enabled CPUs ($O(N_{enabled})$), but still scales linearly with system size.
 - **`CoreEntry::GetMinVirtualRuntime`**: Iterates over all CPUs in the core.
 - **`ChooseCoreAndCPU`**: The final fallback scan of all CPUs for a valid target.
 
