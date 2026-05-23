@@ -72,7 +72,7 @@ struct LocalNodeStealAction {
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
 		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
-			victim->RunQueue()->GetFirstLevelBitmap() == 0)
+			victim->RunQueue()->IsBitmapEmpty())
 			return false;
 
 		int32 stolenPriority = -1;
@@ -142,7 +142,7 @@ struct NUMARandomStealAction {
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
 		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
-			victim->RunQueue()->GetFirstLevelBitmap() == 0)
+			victim->RunQueue()->IsBitmapEmpty())
 			return false;
 
 		int32 stolenPriority = -1;
@@ -209,7 +209,7 @@ struct GlobalRandomStealAction {
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
 		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
-			victim->RunQueue()->GetFirstLevelBitmap() == 0)
+			victim->RunQueue()->IsBitmapEmpty())
 			return false;
 
 		int32 stolenPriority = -1;
@@ -732,20 +732,19 @@ ThreadData* CPUEntry::StealThreadLockless(int32& stolenPriority, int32 thiefCPU)
 	}
 
 	// Lock-Free Bit-Stealing Phase 2: FairShare (EEVDF) bins
-	native_cpu_mask_t fliBitmap = fRunQueue.GetFirstLevelBitmap();
-	while (fliBitmap != 0) {
-		int32 fli = scheduler_flsnative(fliBitmap) - 1;
-		if (fli < 0) break;
+	// Portable unrolled bit-scan for 512 flat lanes.
+	// On 64-bit: 8 words. On 32-bit: 16 words.
+	const int kNumWords = 512 / (sizeof(native_cpu_mask_t) * 8);
+	for (int i = kNumWords - 1; i >= 0; i--) {
+		native_cpu_mask_t word = fRunQueue.GetBitmapWord(i);
+		while (word != 0) {
+			int bit = scheduler_flsnative(word) - 1; // Highest bit in word
+			int lane = i * (sizeof(native_cpu_mask_t) * 8) + bit;
 
-		native_cpu_mask_t sliBitmap = fRunQueue.GetSecondLevelBitmap(fli);
-		while (sliBitmap != 0) {
-			int32 sli = scheduler_ctz(sliBitmap);
-			if (sli < 0) break;
-
-			// Atomic Steal: Attempt to claim the FairShare bin
-			if (fRunQueue.TestAndClearSliAtomic(fli, sli)) {
+			// Atomic Steal: Attempt to claim the lane
+			if (fRunQueue.TestAndClearLaneAtomic(lane)) {
 				if (TryLockRunQueue()) {
-					ThreadData* thread = fRunQueue.GetSliBinHead(fli, sli);
+					ThreadData* thread = fRunQueue.GetLaneBinHead(lane);
 
 					while (thread != NULL) {
 						const CPUSet& threadMask = thread->GetThread()->cpumask;
@@ -759,27 +758,23 @@ ThreadData* CPUEntry::StealThreadLockless(int32& stolenPriority, int32 thiefCPU)
 									thread->GetEffectivePriority();
 								Remove(thread);
 								// Restore bit if bin still contains threads.
-								if (!fRunQueue.IsSliBinEmpty(fli, sli))
-									fRunQueue.RestoreSliBitAtomic(fli, sli);
+								if (!fRunQueue.IsLaneBinEmpty(lane))
+									fRunQueue.RestoreLaneBitAtomic(lane);
 								return thread;	// LOCK HELD upon return!
 							}
 						}
-						thread = fRunQueue.GetNextSli(thread, fli, sli);
+						thread = fRunQueue.GetNextLane(thread, lane);
 					}
 
-					// Restore bit if bin still contains threads or if no thread
-					// was eligible.
-					if (!fRunQueue.IsSliBinEmpty(fli, sli))
-						fRunQueue.RestoreSliBitAtomic(fli, sli);
+					if (!fRunQueue.IsLaneBinEmpty(lane))
+						fRunQueue.RestoreLaneBitAtomic(lane);
 					UnlockRunQueue();
 				} else {
-					// Failed to acquire lock; restore bit and continue.
-					fRunQueue.RestoreSliBitAtomic(fli, sli);
+					fRunQueue.RestoreLaneBitAtomic(lane);
 				}
 			}
-			sliBitmap &= ~((native_cpu_mask_t)1 << sli);
+			word &= ~((native_cpu_mask_t)1 << bit);
 		}
-		fliBitmap &= ~((native_cpu_mask_t)1 << fli);
 	}
 
 	return NULL;
@@ -804,11 +799,14 @@ void CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now) {
 		AddRelease64(fMeasureActiveTime, (int64)(active));
 
 		CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
-		core->IncreaseActiveTime(active);
+		if (core != NULL) {
+			core->IncreaseActiveTime(active);
 
-		// Pass the core's SystemVirtualTime to UpdateActivity to ensure
-		// consistency during potential migration.
-		oldThreadData->UpdateActivity(active, core->SystemVirtualTime(), now);
+			// Pass the core's SystemVirtualTime to UpdateActivity to ensure
+			// consistency during potential migration.
+			oldThreadData->UpdateActivity(active, core->SystemVirtualTime(),
+				core->ScoreFactor(), now);
+		}
 	}
 }
 
@@ -907,7 +905,7 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 			continue;
 
 		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
-			victim->RunQueue()->GetFirstLevelBitmap() == 0)
+			victim->RunQueue()->IsBitmapEmpty())
 			continue;
 
 		int32 stolenPriority = -1;

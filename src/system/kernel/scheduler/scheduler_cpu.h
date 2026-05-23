@@ -83,6 +83,8 @@ public:
 	inline int32 PerformanceScale() const { return fPerformanceScale; }
 	inline void SetPerformanceScale(int32 scale) { fPerformanceScale = scale; }
 
+	inline uint32 ScoreFactor() const;
+
 	void Start();
 	void Stop();
 
@@ -351,6 +353,15 @@ private:
 
 	friend class DebugDumper;
 } __attribute__((aligned(64)));
+
+
+inline uint32
+CPUEntry::ScoreFactor() const
+{
+	CoreEntry* core = Core();
+	return core != NULL ? core->ScoreFactor() : (1 << 16);
+}
+
 
 // gPackageEntries are used to decide which core should be woken up from the
 // idle state. When aiming for performance we should use as many packages as
