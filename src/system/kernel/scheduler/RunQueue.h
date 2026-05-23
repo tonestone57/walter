@@ -102,11 +102,11 @@ public:
 	inline uint32 GetRealTimeBitmap() const
 	{
 #if SCHEDULER_MASK_IS_64_BIT
-		// RT lanes are 480-500, which are bits 32-52 of the 8th word (index 7).
-		return (uint32)(cpu_mask_get_atomic(&fBitmap[7]) >> 32);
+		// RT lanes are 491-511, which are bits 43-63 of the 8th word (index 7).
+		return (uint32)(cpu_mask_get_atomic(&fBitmap[7]) >> 43);
 #else
-		// RT lanes are 480-500, which are bits 0-20 of the 16th word (index 15).
-		return (uint32)cpu_mask_get_atomic(&fBitmap[15]);
+		// RT lanes are 491-511, which are bits 11-31 of the 16th word (index 15).
+		return (uint32)(cpu_mask_get_atomic(&fBitmap[15]) >> 11);
 #endif
 	}
 
@@ -121,12 +121,12 @@ public:
 
 	inline bool TestAndClearRTAtomic(int index)
 	{
-		return TestAndClearLaneAtomic(480 + index);
+		return TestAndClearLaneAtomic(491 + index);
 	}
 
 	inline void RestoreRTBitAtomic(int index)
 	{
-		RestoreLaneBitAtomic(480 + index);
+		RestoreLaneBitAtomic(491 + index);
 	}
 
 	// Lane-based atomic helpers for decentralized stealing
@@ -146,9 +146,9 @@ public:
 		cpu_mask_or_atomic(&fBitmap[word], (native_cpu_mask_t)1 << bit);
 	}
 
-	inline Element* GetRTBinHead(int index) const { return fQueues[480 + index].Head(); }
-	inline bool IsRTBinEmpty(int index) const { return fQueues[480 + index].IsEmpty(); }
-	inline Element* GetNextRT(Element* element, int index) const { return fQueues[480 + index].GetNext(element); }
+	inline Element* GetRTBinHead(int index) const { return fQueues[491 + index].Head(); }
+	inline bool IsRTBinEmpty(int index) const { return fQueues[491 + index].IsEmpty(); }
+	inline Element* GetNextRT(Element* element, int index) const { return fQueues[491 + index].GetNext(element); }
 
 	inline Element* GetLaneBinHead(int lane) const { return fQueues[lane].Head(); }
 	inline bool IsLaneBinEmpty(int lane) const { return fQueues[lane].IsEmpty(); }
@@ -245,12 +245,13 @@ RUN_QUEUE_TEMPLATE_LIST
 int32 RUN_QUEUE_CLASS_NAME::_GetLane(bigtime_t deadline, int32 priority) const
 {
 	if (priority >= 100) {
-		// Real-Time priorities (100-120) map to lanes 480-500.
-		// Higher RT priority (120) maps to higher lane index (500).
+		// Real-Time priorities (100-120) map to lanes 491-511.
+		// Higher RT priority (120) maps to absolute highest lane index (511).
+		// This puts them at the absolute beginning of the word bit-scan.
 		int32 index = (int32)priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
-		return 480 + index;
+		return 491 + index;
 	}
 
 	int32 fli = (int32)GetSchedulerMatrixRow(priority);
@@ -387,7 +388,7 @@ Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const
 		int32 index = (int32)priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
-		return fQueues[480 + index].Head();
+		return fQueues[491 + index].Head();
 	}
 
 	if (priority == B_IDLE_PRIORITY) {
