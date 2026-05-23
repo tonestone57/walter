@@ -33,8 +33,7 @@ static const int32 kNumLanes = 512;
 
 /*
  * Haiku OS non-realtime priority mapping table for a 512-lane EEVDF matrix.
- * Maps priority values 0-99 to priority bands 0-14.
- * Band 15 is reserved for Real-Time mapping within the unified 512-lane bitmap.
+ * Maps priority values 0-99 to priority bands 0-15.
  */
 static const uint8 kPriorityToRowMap[100] = {
 /* 0 - 9 */   0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -42,11 +41,11 @@ static const uint8 kPriorityToRowMap[100] = {
 /* 20 - 29 */ 5, 6, 6, 7, 7, 8, 8, 8, 9, 9,
 /* 30 - 39 */ 10, 11, 11, 11, 11, 12, 12, 12, 12, 12,
 /* 40 - 49 */ 13, 14, 14, 14, 14, 14, 14, 14, 14, 14,
-/* 50 - 59 */ 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
-/* 60 - 69 */ 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
-/* 70 - 79 */ 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
-/* 80 - 89 */ 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
-/* 90 - 99 */ 14, 14, 14, 14, 14, 14, 14, 14, 14, 14
+/* 50 - 59 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+/* 60 - 69 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+/* 70 - 79 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+/* 80 - 89 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+/* 90 - 99 */ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15
 };
 
 inline uint8 GetSchedulerMatrixRow(int32 priority) {
@@ -93,21 +92,32 @@ public:
 	inline Element* PeekRoot() const { return PeekBest(); }
 	inline Element* PeekMaximum() const { return PeekBest(); }
 
-	// Optimized flat bitmask accessors
+	// Real-Time priorities (100-120) handled separately via RR queues
+	inline uint32 GetRealTimeBitmap() const
+	{
+		return (uint32)LoadAcquire(fRealTimeBitmap);
+	}
+
+	inline bool TestAndClearRTAtomic(int index)
+	{
+		uint32 bit = 1U << index;
+		uint32 old = (uint32)AndAtomic(fRealTimeBitmap, (int32)~bit);
+		return (old & bit) != 0;
+	}
+
+	inline void RestoreRTBitAtomic(int index)
+	{
+		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+	}
+
+	inline Element* GetRTBinHead(int index) const { return fRealTimeQueues[index].Head(); }
+	inline bool IsRTBinEmpty(int index) const { return fRealTimeQueues[index].IsEmpty(); }
+	inline Element* GetNextRT(Element* element, int index) const { return fRealTimeQueues[index].GetNext(element); }
+
+	// Optimized flat bitmask accessors for FairShare lanes (0-511)
 	inline native_cpu_mask_t GetBitmapWord(int index) const
 	{
 		return cpu_mask_get_atomic(&fBitmap[index]);
-	}
-
-	inline uint32 GetRealTimeBitmap() const
-	{
-#if SCHEDULER_MASK_IS_64_BIT
-		// RT lanes are 491-511, which are bits 43-63 of the 8th word (index 7).
-		return (uint32)(cpu_mask_get_atomic(&fBitmap[7]) >> 43);
-#else
-		// RT lanes are 491-511, which are bits 11-31 of the 16th word (index 15).
-		return (uint32)(cpu_mask_get_atomic(&fBitmap[15]) >> 11);
-#endif
 	}
 
 	inline bool IsBitmapEmpty() const
@@ -117,16 +127,6 @@ public:
 				return false;
 		}
 		return true;
-	}
-
-	inline bool TestAndClearRTAtomic(int index)
-	{
-		return TestAndClearLaneAtomic(491 + index);
-	}
-
-	inline void RestoreRTBitAtomic(int index)
-	{
-		RestoreLaneBitAtomic(491 + index);
 	}
 
 	// Lane-based atomic helpers for decentralized stealing
@@ -146,18 +146,14 @@ public:
 		cpu_mask_or_atomic(&fBitmap[word], (native_cpu_mask_t)1 << bit);
 	}
 
-	inline Element* GetRTBinHead(int index) const { return fQueues[491 + index].Head(); }
-	inline bool IsRTBinEmpty(int index) const { return fQueues[491 + index].IsEmpty(); }
-	inline Element* GetNextRT(Element* element, int index) const { return fQueues[491 + index].GetNext(element); }
-
 	inline Element* GetLaneBinHead(int lane) const { return fQueues[lane].Head(); }
 	inline bool IsLaneBinEmpty(int lane) const { return fQueues[lane].IsEmpty(); }
 	inline Element* GetNextLane(Element* element, int lane) const { return fQueues[lane].GetNext(element); }
 
 	class ConstIterator {
 	public:
-		ConstIterator() : fQueue(NULL), fLane(kNumLanes - 1), fCurrent(NULL) {}
-		ConstIterator(const RunQueue* queue) : fQueue(queue), fLane(kNumLanes - 1), fCurrent(NULL)
+		ConstIterator() : fQueue(NULL), fLane(kNumLanes - 1), fRT(20), fCurrent(NULL) {}
+		ConstIterator(const RunQueue* queue) : fQueue(queue), fLane(kNumLanes - 1), fRT(20), fCurrent(NULL)
 		{
 			_Advance();
 		}
@@ -175,11 +171,30 @@ public:
 			if (fQueue == NULL) return;
 
 			if (fCurrent != NULL) {
-				fCurrent = fQueue->fQueues[fLane].GetNext(fCurrent);
-				if (fCurrent != NULL) return;
-				fLane--;
+				if (fRT >= 0) {
+					fCurrent = fQueue->fRealTimeQueues[fRT].GetNext(fCurrent);
+					if (fCurrent != NULL) return;
+					fRT--;
+				} else {
+					fCurrent = fQueue->fQueues[fLane].GetNext(fCurrent);
+					if (fCurrent != NULL) return;
+					fLane--;
+					_AdvanceLane();
+					return;
+				}
 			}
 
+			while (fRT >= 0) {
+				fCurrent = fQueue->fRealTimeQueues[fRT].Head();
+				if (fCurrent != NULL) return;
+				fRT--;
+			}
+
+			_AdvanceLane();
+		}
+
+		void _AdvanceLane()
+		{
 			while (fLane >= 0) {
 				fCurrent = fQueue->fQueues[fLane].Head();
 				if (fCurrent != NULL) return;
@@ -189,7 +204,7 @@ public:
 		}
 
 		const RunQueue* fQueue;
-		int fLane;
+		int fLane, fRT;
 		Element* fCurrent;
 	};
 
@@ -207,6 +222,9 @@ private:
 
 	DoublyLinkedList<Element, GetLink> fQueues[kNumLanes] __attribute__((aligned(64)));
 
+	uint32 fRealTimeBitmap;
+	DoublyLinkedList<Element, GetLink> fRealTimeQueues[21];
+
 	bigtime_t fSystemVirtualTime;
 	int32 fTotalCount;
 
@@ -219,7 +237,8 @@ private:
 
 RUN_QUEUE_TEMPLATE_LIST
 RUN_QUEUE_CLASS_NAME::RunQueue()
-	: fSystemVirtualTime(0),
+	: fRealTimeBitmap(0),
+	  fSystemVirtualTime(0),
 	  fTotalCount(0)
 {
 	memset(const_cast<native_cpu_mask_t*>(fBitmap), 0, sizeof(fBitmap));
@@ -244,16 +263,6 @@ void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt)
 RUN_QUEUE_TEMPLATE_LIST
 int32 RUN_QUEUE_CLASS_NAME::_GetLane(bigtime_t deadline, int32 priority) const
 {
-	if (priority >= 100) {
-		// Real-Time priorities (100-120) map to lanes 491-511.
-		// Higher RT priority (120) maps to absolute highest lane index (511).
-		// This puts them at the absolute beginning of the word bit-scan.
-		int32 index = (int32)priority - 100;
-		if (index < 0) index = 0;
-		if (index > 20) index = 20;
-		return 491 + index;
-	}
-
 	int32 fli = (int32)GetSchedulerMatrixRow(priority);
 
 	bigtime_t delta = deadline - fSystemVirtualTime;
@@ -268,10 +277,9 @@ int32 RUN_QUEUE_CLASS_NAME::_GetLane(bigtime_t deadline, int32 priority) const
 	// Branchless Inverted Mapping: ensuring higher bit indices always represent
 	// higher scheduling priority. This simplifies the hot path selection
 	// to a single word-level bit-scan.
-	// Band (fli) 14 is better than 0. Within a band, SLI 0 (earliest deadline)
+	// Band (fli) 15 is better than 0. Within a band, SLI 0 (earliest deadline)
 	// is better than SLI 31.
 	// Index = (fli * 32) + (31 - sli)
-	// FairShare threads use lanes 0 to 479 (15 bands * 32 lanes).
 	return (fli << 5) | (31 - sli);
 }
 
@@ -285,14 +293,24 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 	Traits::SetInRunQueue(element, true);
 	AddRelease(fTotalCount, 1);
 
-	int32 lane = _GetLane(thread->virtual_deadline, (int32)priority);
-	thread->run_queue_lane = lane;
+	if (priority >= 100) {
+		int32 index = (int32)priority - 100;
+		if (index < 0) index = 0;
+		if (index > 20) index = 20;
+		fRealTimeQueues[index].Add(element);
+		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+		thread->run_queue_lane = -1;
+		thread->run_queue_rt_index = index;
+	} else {
+		int32 lane = _GetLane(thread->virtual_deadline, (int32)priority);
+		thread->run_queue_lane = lane;
 
-	fQueues[lane].Add(element);
+		fQueues[lane].Add(element);
 
-	int word = lane / (sizeof(native_cpu_mask_t) * 8);
-	int bit = lane % (sizeof(native_cpu_mask_t) * 8);
-	cpu_mask_or_atomic(&fBitmap[word], (native_cpu_mask_t)1 << bit);
+		int word = lane / (sizeof(native_cpu_mask_t) * 8);
+		int bit = lane % (sizeof(native_cpu_mask_t) * 8);
+		cpu_mask_or_atomic(&fBitmap[word], (native_cpu_mask_t)1 << bit);
+	}
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -305,14 +323,24 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 	Traits::SetInRunQueue(element, true);
 	AddRelease(fTotalCount, 1);
 
-	int32 lane = _GetLane(thread->virtual_deadline, (int32)priority);
-	thread->run_queue_lane = lane;
+	if (priority >= 100) {
+		int32 index = (int32)priority - 100;
+		if (index < 0) index = 0;
+		if (index > 20) index = 20;
+		fRealTimeQueues[index].Add(element, false);
+		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+		thread->run_queue_lane = -1;
+		thread->run_queue_rt_index = index;
+	} else {
+		int32 lane = _GetLane(thread->virtual_deadline, (int32)priority);
+		thread->run_queue_lane = lane;
 
-	fQueues[lane].Add(element, false);
+		fQueues[lane].Add(element, false);
 
-	int word = lane / (sizeof(native_cpu_mask_t) * 8);
-	int bit = lane % (sizeof(native_cpu_mask_t) * 8);
-	cpu_mask_or_atomic(&fBitmap[word], (native_cpu_mask_t)1 << bit);
+		int word = lane / (sizeof(native_cpu_mask_t) * 8);
+		int bit = lane % (sizeof(native_cpu_mask_t) * 8);
+		cpu_mask_or_atomic(&fBitmap[word], (native_cpu_mask_t)1 << bit);
+	}
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -320,12 +348,19 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 {
 	Thread* thread = element->GetThread();
 
-	int32 lane = thread->run_queue_lane;
-	fQueues[lane].Remove(element);
-	if (fQueues[lane].IsEmpty()) {
-		int word = lane / (sizeof(native_cpu_mask_t) * 8);
-		int bit = lane % (sizeof(native_cpu_mask_t) * 8);
-		cpu_mask_and_atomic(&fBitmap[word], ~((native_cpu_mask_t)1 << bit));
+	if (thread->run_queue_lane < 0) {
+		int32 index = thread->run_queue_rt_index;
+		fRealTimeQueues[index].Remove(element);
+		if (fRealTimeQueues[index].IsEmpty())
+			AndAtomic(fRealTimeBitmap, (int32)~(1U << index));
+	} else {
+		int32 lane = thread->run_queue_lane;
+		fQueues[lane].Remove(element);
+		if (fQueues[lane].IsEmpty()) {
+			int word = lane / (sizeof(native_cpu_mask_t) * 8);
+			int bit = lane % (sizeof(native_cpu_mask_t) * 8);
+			cpu_mask_and_atomic(&fBitmap[word], ~((native_cpu_mask_t)1 << bit));
+		}
 	}
 
 	Traits::SetInRunQueue(element, false);
@@ -335,10 +370,15 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 RUN_QUEUE_TEMPLATE_LIST
 Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 {
-	// Branchless O(1) Selection Path:
-	// Because of inverted SLI mapping, the highest set bit in the 512-lane
-	// bitmap always corresponds to the best thread (including Real-Time).
-	// We scan words from highest (priority 511) to lowest (priority 0).
+	uint32 rtBitmap = GetRealTimeBitmap();
+	if (rtBitmap != 0) {
+		int32 index = fls(rtBitmap) - 1;
+		if (index >= 0)
+			return fRealTimeQueues[index].Head();
+	}
+
+	// Branchless O(1) Selection Path for FairShare:
+	// Highest set bit in the 512-lane bitmap corresponds to the best thread.
 	for (int i = kNumWords - 1; i >= 0; i--) {
 		native_cpu_mask_t word = cpu_mask_get_atomic(&fBitmap[i]);
 		if (word != 0) {
@@ -358,8 +398,23 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 {
 	Element* best = NULL;
 
-	// Branchless O(1) Selection Path for template PeekBest.
-	// Scans all set bits from highest to lowest priority.
+	uint32 rtBitmap = GetRealTimeBitmap();
+	while (rtBitmap != 0) {
+		int32 index = fls(rtBitmap) - 1;
+		if (index >= 0) {
+			typename DoublyLinkedList<Element, GetLink>::Iterator it = const_cast<DoublyLinkedList<Element, GetLink>&>(fRealTimeQueues[index]).GetIterator();
+			while (it.HasNext()) {
+				Element* element = it.Next();
+				if (predicate(element)) {
+					if (best == NULL || compare(element, best))
+						best = element;
+				}
+			}
+		}
+		rtBitmap &= ~(1U << index);
+	}
+
+	// FairShare word-level scans
 	for (int i = kNumWords - 1; i >= 0; i--) {
 		native_cpu_mask_t word = cpu_mask_get_atomic(&fBitmap[i]);
 		while (word != 0) {
@@ -388,7 +443,7 @@ Element* RUN_QUEUE_CLASS_NAME::GetHead(unsigned int priority) const
 		int32 index = (int32)priority - 100;
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
-		return fQueues[491 + index].Head();
+		return fRealTimeQueues[index].Head();
 	}
 
 	if (priority == B_IDLE_PRIORITY) {
