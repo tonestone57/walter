@@ -322,6 +322,11 @@ void ThreadRunQueue::Dump() const {
 
 void IRQRebalanceDPC::DoDPC(DPCQueue* queue) {
 	assign_io_interrupt_to_cpu(fIRQ, fTargetCPU);
+
+	// Find the CPUEntry that owns this DPC and clear the pending flag.
+	// This relies on IRQRebalanceDPC being a member of CPUEntry.
+	CPUEntry* cpu = (CPUEntry*)((char*)this - offsetof(CPUEntry, fRebalanceDPC));
+	StoreRelease(cpu->fRebalancePending, 0);
 }
 
 CPUEntry::CPUEntry()

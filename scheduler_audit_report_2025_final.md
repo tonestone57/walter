@@ -30,12 +30,16 @@ The Haiku scheduler has been extensively audited for correctness, accuracy, and 
 2. **Power Saving Consolidation**: The `sSmallTaskCore` array in `power_saving.cpp` is a point of contention for CPUs within the same NUMA node, leading to cache-line bouncing.
 3. **EEVDF Resolution Updates**: Global ICI broadcasts during `update_quantum_lengths_dpc` introduce system-wide jitter when interactivity levels change rapidly.
 
-## 4. Architectural Optimality
-- **Heterogeneous Scaling**: The use of a fixed-point `fScoreFactor` eliminates 64-bit division in the scheduling hot path, which is critical for performance on 32-bit architectures and low-power E-cores.
-- **Cache Locality**: Grouping global interaction state and per-CPU metrics into 64-byte aligned structures effectively mitigates false sharing.
+## 4. Architectural Optimality & 2025 Optimizations
+- **Reciprocal Fixed-Point Math**: Replaced 64-bit division in `RunQueue::_GetLane` and `_ComputeEffectivePriority` with high-performance reciprocal multiplication. Used a safe 32-bit shift to prevent integer overflow for large time deltas.
+- **Scalable IRQ Rebalancing**: Implemented a `fRebalancePending` flag to prevent redundant DPC enqueueing, ensuring system stability during high interrupt load.
+- **Cache Locality & False Sharing Mitigation**:
+  - Grouped global interaction state into aligned structures.
+  - Refactored `sSmallTaskCore` in `power_saving.cpp` to use 64-byte aligned entries, eliminating NUMA-node contention during consolidation updates.
+- **Iterator Optimization**: `RunQueue::ConstIterator` now utilizes word-level bit scans, enabling $O(1)$ skipping of empty priority bins during run-queue traversal.
 - **NUMA-Awareness**: Topology-aware clustering and "Home Package" preference in the rebalancing logic minimize cross-node interconnect traffic.
 
 ## 5. Conclusion
 The scheduler is working **properly and accurately**. It achieves $O(1)$ or near-$O(1)$ complexity for almost all critical scheduling operations. The implementation of capacity-aware EEVDF provides a solid foundation for modern hybrid processor support.
 
-*Audit completed by Jules (2025).*
+*Scheduler Audit Documentation (2025)*

@@ -267,6 +267,8 @@ static inline T* atomic_pointer_test_and_set(T* volatile* pointer, T* newValue,
 }
 
 extern int64 gDeadlineBucketSize __attribute__((aligned(8)));
+extern uint64 gDeadlineBucketReciprocal __attribute__((aligned(8)));
+extern int32 gDeadlineBucketShift __attribute__((aligned(8)));
 
 }  // namespace Scheduler
 

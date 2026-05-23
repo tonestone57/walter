@@ -197,9 +197,22 @@ public:
 		void _AdvanceLane()
 		{
 			while (fLane >= 0) {
-				fCurrent = fQueue->fQueues[fLane].Head();
-				if (fCurrent != NULL) return;
-				fLane--;
+				int word = fLane / (sizeof(native_cpu_mask_t) * 8);
+				int bit = fLane % (sizeof(native_cpu_mask_t) * 8);
+
+				native_cpu_mask_t mask = fQueue->GetBitmapWord(word);
+				// Filter bits at or below current position in this word
+				mask &= ((native_cpu_mask_t)1 << bit) | (((native_cpu_mask_t)1 << bit) - 1);
+
+				if (mask != 0) {
+					int nextBit = scheduler_flsnative(mask) - 1;
+					fLane = word * (sizeof(native_cpu_mask_t) * 8) + nextBit;
+					fCurrent = fQueue->fQueues[fLane].Head();
+					if (fCurrent != NULL) return;
+				}
+
+				// Skip to next word
+				fLane = (word * sizeof(native_cpu_mask_t) * 8) - 1;
 			}
 			fCurrent = NULL;
 		}
@@ -269,9 +282,15 @@ int32 RUN_QUEUE_CLASS_NAME::_GetLane(bigtime_t deadline, int32 priority) const
 	bigtime_t delta = deadline - fSystemVirtualTime;
 	int32 sli = 0;
 	if (delta > 0) {
-		int64 bucketSize = LoadAcquire64(gDeadlineBucketSize);
-		if (bucketSize <= 0) bucketSize = 5000000;
-		sli = (int32)(delta / bucketSize);
+		uint64 reciprocal = LoadAcquire64(gDeadlineBucketReciprocal);
+		if (reciprocal > 0) {
+			int32 shift = LoadAcquire(gDeadlineBucketShift);
+			sli = (int32)(((uint64)delta * reciprocal) >> shift);
+		} else {
+			int64 bucketSize = LoadAcquire64(gDeadlineBucketSize);
+			if (bucketSize <= 0) bucketSize = 5000000;
+			sli = (int32)(delta / bucketSize);
+		}
 		if (sli >= kSecondaryBins) sli = kSecondaryBins - 1;
 	}
 

@@ -58,6 +58,8 @@ bool gTrackCPULoad;
 int32 gRandomSamples;
 
 int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000000;
+uint64 gDeadlineBucketReciprocal __attribute__((aligned(8)));
+int32 gDeadlineBucketShift __attribute__((aligned(8)));
 
 CoreType gMinCoreType = CORE_TYPE_UNKNOWN;
 CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
@@ -216,6 +218,17 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 			targetResolution = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
 			if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
 				StoreRelease64(gDeadlineBucketSize, targetResolution);
+
+				// Compute fixed-point reciprocal for fast division.
+				// Use a fixed shift of 32 to prevent uint64 overflow when
+				// multiplying by large time deltas.
+				if (targetResolution > 0) {
+					int32 shift = 32;
+					uint64 reciprocal = ((1ULL << shift) + (uint64)targetResolution - 1) / (uint64)targetResolution;
+					StoreRelease64(gDeadlineBucketReciprocal, (int64)reciprocal);
+					StoreRelease(gDeadlineBucketShift, shift);
+				}
+
 				UpdateDeadlineScalingScalable();
 			}
 		}

@@ -201,6 +201,7 @@ private:
 	int64 fTotalWeight __attribute__((aligned(8)));
 
 	int32 fReschedulePending __attribute__((aligned(8)));
+	int32 fRebalancePending __attribute__((aligned(8)));
 	// Moved from CoreEntry to eliminate false sharing.
 	// This field is written on every search_local_node call by
 	// the searching CPU.  Placing it in CoreEntry dirtied the
