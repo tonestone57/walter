@@ -247,8 +247,18 @@ RUN_QUEUE_CLASS_NAME::RunQueue()
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt)
 {
-	if (IsEmpty())
+	if (IsEmpty()) {
 		fSystemVirtualTime = svt;
+		return;
+	}
+
+	// SVT Advancement: Even if the queue is non-empty, we must advance the
+	// local fSystemVirtualTime if it lags significantly behind the core's SVT.
+	// This ensures that the deadline quantization buckets (SLI) correctly
+	// reflect current scheduler progress.
+	// 40ms lag threshold (arbitrary but generous).
+	if (svt > fSystemVirtualTime + 40000)
+		fSystemVirtualTime = svt - 10000; // Keep a small buffer
 }
 
 RUN_QUEUE_TEMPLATE_LIST

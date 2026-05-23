@@ -639,7 +639,17 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
 
 		// Heterogeneous scaling: adjust the sleep-compensation floor by core capacity.
 		uint32 score_factor = (core != NULL) ? core->ScoreFactor() : (1 << 16);
-		bigtime_t scaledLagFloor = (kMaxLagFloor * score_factor) >> 16;
+
+		// QAD-inspired Interactive Latency Credits: highly interactive threads
+		// are allowed to retain more "lag" (up to 1ms worth of virtual time)
+		// when waking up, which gives them more urgent deadlines.
+		int32 interactivity = fInteractivityScore;
+		if (interactivity < 0) interactivity = 0;
+		if (interactivity > 1000) interactivity = 1000;
+
+		bigtime_t lagFloor = kMaxLagFloor + (interactivity * 800LL) / 1000;
+
+		bigtime_t scaledLagFloor = (lagFloor * score_factor) >> 16;
 		bigtime_t vLagFloor = (scaledLagFloor * 1000000LL) / weight;
 
 		if (vrt < svt - vLagFloor)
