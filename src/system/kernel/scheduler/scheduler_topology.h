@@ -327,6 +327,8 @@ static inline void CheckMaskedPackagesMinimumLoad(
 	if (useExtendedBitmask)
 		memset(extendedVisited, 0, sizeof(extendedVisited));
 
+	int32 lastPackageID = -1;
+
 	for (int32 i = 0; i < kCPUSetArraySize; i++) {
 		uint32 bits = mask.Bits(i);
 		if (bits == 0)
@@ -343,35 +345,44 @@ static inline void CheckMaskedPackagesMinimumLoad(
 			CPUEntry* cpuEntry = CPUEntry::GetCPU(cpuID);
 			if (cpuEntry == NULL)
 				continue;
+
+			// Quick ID check to skip lookups for consecutive CPU bits in the same package.
+			// This is especially effective for SMT systems where sibling threads
+			// are often adjacent in the mask.
 			CoreEntry* cpuCore = cpuEntry->Core();
-			if (cpuCore != NULL) {
-				PackageEntry* package = cpuCore->Package();
-				if (package != NULL) {
-					bool alreadyVisited = false;
-					if (useVisitedBitmask) {
-						int32 idx = package->ID();
-						if (idx >= 0 && idx < 128) {
-							int32 word = idx / 64;
-							uint64 bitMask = 1ULL << (idx % 64);
-							if (visitedPackages[word] & bitMask)
-								alreadyVisited = true;
-							else
-								visitedPackages[word] |= bitMask;
-						}
-					} else if (useExtendedBitmask) {
-						int32 idx = package->ID();
-						if (idx >= 0 && idx < 512) {
-							int32 word = idx / 64;
-							uint64 bitMask = 1ULL << (idx % 64);
-							if (extendedVisited[word] & bitMask)
-								alreadyVisited = true;
-							else
-								extendedVisited[word] |= bitMask;
-						}
-					} else {
-						// Fallback: consecutive-duplicate suppression only.
-						alreadyVisited = (package == lastPackage);
-					}
+			if (cpuCore == NULL || cpuCore->Package() == NULL)
+				continue;
+
+			int32 packageID = cpuCore->Package()->ID();
+			if (packageID == lastPackageID)
+				continue;
+
+			lastPackageID = packageID;
+			PackageEntry* package = cpuCore->Package();
+
+			bool alreadyVisited = false;
+			if (useVisitedBitmask) {
+				if (packageID >= 0 && packageID < 128) {
+					int32 word = packageID / 64;
+					uint64 bitMask = 1ULL << (packageID % 64);
+					if (visitedPackages[word] & bitMask)
+						alreadyVisited = true;
+					else
+						visitedPackages[word] |= bitMask;
+				}
+			} else if (useExtendedBitmask) {
+				if (packageID >= 0 && packageID < 512) {
+					int32 word = packageID / 64;
+					uint64 bitMask = 1ULL << (packageID % 64);
+					if (extendedVisited[word] & bitMask)
+						alreadyVisited = true;
+					else
+						extendedVisited[word] |= bitMask;
+				}
+			} else {
+				// Fallback: consecutive-duplicate suppression only.
+				alreadyVisited = (package == lastPackage);
+			}
 					if (!alreadyVisited) {
 						if (CheckPackageMinimumLoad(cpu, package, &mask,
 													bestCore, bestLoad, type)) {

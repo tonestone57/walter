@@ -770,7 +770,14 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		static_assert(kMaxDynamicPriority <= THREAD_MAX_SET_PRIORITY,
 					  "kMaxDynamicPriority exceeds maximum thread priority");
 
-		bigtime_t urgency = kMaxDynamicPriority - diff / bucketSize;
+		uint64 reciprocal = LoadAcquire64(Scheduler::gDeadlineBucketReciprocal);
+		bigtime_t urgency;
+		if (reciprocal > 0) {
+			int32 shift = LoadAcquire(Scheduler::gDeadlineBucketShift);
+			urgency = kMaxDynamicPriority - (bigtime_t)(((uint64)diff * reciprocal) >> shift);
+		} else {
+			urgency = kMaxDynamicPriority - diff / bucketSize;
+		}
 		if (urgency < 0)
 			urgency = 0;
 		if (urgency > kMaxDynamicPriority)

@@ -58,6 +58,8 @@ bool gTrackCPULoad;
 int32 gRandomSamples;
 
 int64 gDeadlineBucketSize __attribute__((aligned(8))) = 5000000;
+uint64 gDeadlineBucketReciprocal __attribute__((aligned(8)));
+int32 gDeadlineBucketShift __attribute__((aligned(8)));
 
 CoreType gMinCoreType = CORE_TYPE_UNKNOWN;
 CoreType gMaxCoreType = CORE_TYPE_UNKNOWN;
@@ -184,13 +186,14 @@ static timer sInteractionTimer;
 // to prevent false sharing between CPUs during frequent updates.
 struct CACHE_LINE_ALIGN InteractivityState {
 	int64 lastInteractionTime;
+	int64 lastResolutionChange;
 	int32 dpcPending;
 	int32 timerArmed;
 	int32 pendingDPCTarget;
 };
 
 static struct InteractivityState sInteractivityState = {
-	0, 0, 0, 0
+	0, 0, 0, 0, 0
 };
 
 
@@ -216,6 +219,17 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 			targetResolution = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
 			if (LoadAcquire64(gDeadlineBucketSize) != targetResolution) {
 				StoreRelease64(gDeadlineBucketSize, targetResolution);
+
+				// Compute fixed-point reciprocal for fast division.
+				// Use a fixed shift of 32 to prevent uint64 overflow when
+				// multiplying by large time deltas.
+				if (targetResolution > 0) {
+					int32 shift = 32;
+					uint64 reciprocal = ((1ULL << shift) + (uint64)targetResolution - 1) / (uint64)targetResolution;
+					StoreRelease64(gDeadlineBucketReciprocal, (int64)reciprocal);
+					StoreRelease(gDeadlineBucketShift, shift);
+				}
+
 				UpdateDeadlineScalingScalable();
 			}
 		}
@@ -327,6 +341,13 @@ void scheduler_update_interaction_state(bigtime_t now) {
 			return;
 	}
 
+	// Resolution Dampening Cooldown (50ms).  EEVDF matrix updates require
+	// global ICI broadcasts and RCU synchronization; frequent switching
+	// under fluctuating interactivity can introduce system-wide jitter.
+	const bigtime_t kResolutionCooldown = 50000;
+	if (now - (bigtime_t)LoadAcquire64(sInteractivityState.lastResolutionChange) < kResolutionCooldown)
+		return;
+
 	if (currentBucketSize == 1000000) {
 		// Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
@@ -336,6 +357,9 @@ void scheduler_update_interaction_state(bigtime_t now) {
 		}
 		return;
 	}
+
+	// Record resolution change attempt.
+	StoreRelease64(sInteractivityState.lastResolutionChange, (int64)now);
 
 	// This part is called rarely (only when scaling up resolution)
 	// We must not hold scheduler locks here!
@@ -2216,9 +2240,9 @@ void scheduler_enable_scheduling() {
 
 int32 scheduler_get_total_runnable_threads() {
 	int32 total = 0;
-	int32 cpuCount = smp_get_num_cpus();
-	for (int32 i = 0; i < cpuCount; i++) {
-		total += gCPUEntries[i].RunnableCount();
+	int32 nodeCount = gNodeCount;
+	for (int32 i = 0; i < nodeCount; i++) {
+		total += gSchedulerNodes[i].RunnableCount();
 	}
 	return total;
 }
