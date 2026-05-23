@@ -71,8 +71,7 @@ struct LocalNodeStealAction {
 			return false;
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
-		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
-			victim->RunQueue()->IsBitmapEmpty())
+		if (victim->RunQueue()->IsBitmapEmpty())
 			return false;
 
 		int32 stolenPriority = -1;
@@ -141,8 +140,7 @@ struct NUMARandomStealAction {
 			return false;
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
-		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
-			victim->RunQueue()->IsBitmapEmpty())
+		if (victim->RunQueue()->IsBitmapEmpty())
 			return false;
 
 		int32 stolenPriority = -1;
@@ -208,8 +206,7 @@ struct GlobalRandomStealAction {
 			return false;
 
 		// Lock-Free Bit-Stealing Phase 1: Atomic Remote Scanning
-		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
-			victim->RunQueue()->IsBitmapEmpty())
+		if (victim->RunQueue()->IsBitmapEmpty())
 			return false;
 
 		int32 stolenPriority = -1;
@@ -691,47 +688,7 @@ ThreadData* CPUEntry::StealThreadLockless(int32& stolenPriority, int32 thiefCPU)
 
 	bigtime_t svt = SystemVirtualTime();
 
-	// Lock-Free Bit-Stealing Phase 1: Real-Time threads
-	uint32 rtBitmap = fRunQueue.GetRealTimeBitmap();
-	while (rtBitmap != 0) {
-		int32 index = fls(rtBitmap) - 1;
-		if (index < 0) break;
-
-		// Atomic Steal: Attempt to claim the RT bin
-		if (fRunQueue.TestAndClearRTAtomic(index)) {
-			// Success! We claimed the bin bit. Now acquire the lock to safely extract.
-			if (TryLockRunQueue()) {
-				ThreadData* thread = fRunQueue.GetRTBinHead(index);
-
-				// Verify affinity and availability
-				while (thread != NULL) {
-					const CPUSet& threadMask = thread->GetThread()->cpumask;
-					if (threadMask.IsEmpty() || threadMask.GetBit(thiefCPU)) {
-						stolenPriority = thread->GetThread()->priority;
-						Remove(thread);
-						// If the bin is NOT empty, we must restore the bit so
-						// others can steal.
-						if (!fRunQueue.IsRTBinEmpty(index))
-							fRunQueue.RestoreRTBitAtomic(index);
-						return thread;	// LOCK HELD upon return!
-					}
-					thread = fRunQueue.GetNextRT(thread, index);
-				}
-
-				// No suitable thread found in this bin; restore bit, unlock
-				// and continue.
-				if (!fRunQueue.IsRTBinEmpty(index))
-					fRunQueue.RestoreRTBitAtomic(index);
-				UnlockRunQueue();
-			} else {
-				// Failed to acquire lock; restore bit and continue.
-				fRunQueue.RestoreRTBitAtomic(index);
-			}
-		}
-		rtBitmap &= ~(1U << index);
-	}
-
-	// Lock-Free Bit-Stealing Phase 2: FairShare (EEVDF) bins
+	// Lock-Free Bit-Stealing: scan unified 512-lane flat bitmap
 	// Portable unrolled bit-scan for 512 flat lanes.
 	// On 64-bit: 8 words. On 32-bit: 16 words.
 	const int kNumWords = 512 / (sizeof(native_cpu_mask_t) * 8);
@@ -904,8 +861,7 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 		if (victim == NULL || victim->ID() == fCPUNumber)
 			continue;
 
-		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
-			victim->RunQueue()->IsBitmapEmpty())
+		if (victim->RunQueue()->IsBitmapEmpty())
 			continue;
 
 		int32 stolenPriority = -1;

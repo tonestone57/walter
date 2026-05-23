@@ -647,10 +647,10 @@ inline bool ThreadData::Enqueue(CPUEntry* cpu, bool& wasRunQueueEmpty,
 		if (interactivity < 0) interactivity = 0;
 		if (interactivity > 1000) interactivity = 1000;
 
-		bigtime_t lagFloor = kMaxLagFloor + (interactivity * 800LL) / 1000;
+		bigtime_t lagFloor = kMaxLagFloor + (interactivity * kInteractiveLagCreditMax) / 1000;
 
 		bigtime_t scaledLagFloor = (lagFloor * score_factor) >> 16;
-		bigtime_t vLagFloor = (scaledLagFloor * 1000000LL) / weight;
+		bigtime_t vLagFloor = (scaledLagFloor * kReferenceWeight) / weight;
 
 		if (vrt < svt - vLagFloor)
 			StoreRelease64(fThread->virtual_runtime, (int64)(svt - vLagFloor));
@@ -779,10 +779,12 @@ inline void ThreadData::UpdateActivity(bigtime_t active, bigtime_t svt,
 		// Scaled Lag Calculus (Handles P vs. E Core Asymmetry)
 		// 32-bit optimization: use pre-calculated fixed-point score_factor
 		// to avoid expensive 64-bit integer division in the hot path.
-		// scaled_active = (active * 1024) / capacity
+		// QAD Direct Capacity Scaling formula:
+		// scaled_active = (active * kDefaultCapacity) / capacity
 		bigtime_t scaled_active = (active * score_factor) >> 16;
 
-		bigtime_t delta = (scaled_active * 1000000LL) / weight;
+		// vRuntimeDelta = (scaled_active * kReferenceWeight) / weight
+		bigtime_t delta = (scaled_active * kReferenceWeight) / weight;
 
 		UpdateVirtualRuntime(delta, svt);
 

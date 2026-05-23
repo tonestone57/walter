@@ -278,6 +278,12 @@ namespace Scheduler {
 const bigtime_t kForegroundVRuntimeOffset = 5000000;
 
 const bigtime_t kMaxLagFloor = 200000;
+const bigtime_t kInteractiveLagCreditMax = 800;
+
+const bigtime_t kSVTStagnationThreshold = 40000;
+const bigtime_t kSVTStagnationBuffer = 10000;
+
+const int64 kReferenceWeight = 1000;
 
 extern int64 gL3LagThreshold;
 extern int64 gNUMANodeLagThreshold;

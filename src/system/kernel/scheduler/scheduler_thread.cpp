@@ -669,9 +669,13 @@ void ThreadData::_UpdateDeadline(bigtime_t now) {
 	// to ensure consistent virtual deadline increments across P/E cores.
 	CoreEntry* core = Core();
 	uint32 score_factor = (core != NULL) ? core->ScoreFactor() : (1 << 16);
+
+	// QAD Direct Capacity Scaling formula:
+	// scaledRequestSize = (requestSize * kDefaultCapacity) / capacity
 	bigtime_t scaledRequestSize = (requestSize * score_factor) >> 16;
 
-	bigtime_t slice = (scaledRequestSize * 1000000LL) / weight;
+	// vDeadlineSlice = (scaledRequestSize * kReferenceWeight) / weight
+	bigtime_t slice = (scaledRequestSize * kReferenceWeight) / weight;
 
 	// Note: Deadline floor is unnecessary in the virtual domain.
 	// As long as weight > 0 and requestSize > 0, slice is positive.
