@@ -275,7 +275,14 @@ public:
 	}
 
 	inline void SetSystemVirtualTime(bigtime_t time) {
-		StoreRelease64(fSystemVirtualTime, (int64)time);
+		// Monotonic SVT update: ensures virtual time never regresses
+		// even if multiple CPUs update it concurrently.
+		bigtime_t old = (bigtime_t)LoadAcquire64(fSystemVirtualTime);
+		while (time > old) {
+			if ((bigtime_t)TestAndSet64(fSystemVirtualTime, (int64)time, (int64)old) == old)
+				break;
+			old = (bigtime_t)LoadAcquire64(fSystemVirtualTime);
+		}
 	}
 	inline bigtime_t PreemptionThreshold() const {
 		return (bigtime_t)LoadAcquire64(fPreemptionThreshold);

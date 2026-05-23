@@ -93,24 +93,10 @@ public:
 	inline Element* PeekRoot() const { return PeekBest(); }
 	inline Element* PeekMaximum() const { return PeekBest(); }
 
-	// Optimized flat bitmask accessors
+	// Real-Time priorities (100-120) handled separately via RR queues
 	inline uint32 GetRealTimeBitmap() const
 	{
 		return (uint32)LoadAcquire(fRealTimeBitmap);
-	}
-
-	inline native_cpu_mask_t GetBitmapWord(int index) const
-	{
-		return cpu_mask_get_atomic(&fBitmap[index]);
-	}
-
-	inline bool IsBitmapEmpty() const
-	{
-		for (int i = 0; i < kNumWords; i++) {
-			if (cpu_mask_get_atomic(&fBitmap[i]) != 0)
-				return false;
-		}
-		return true;
 	}
 
 	inline bool TestAndClearRTAtomic(int index)
@@ -123,6 +109,25 @@ public:
 	inline void RestoreRTBitAtomic(int index)
 	{
 		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+	}
+
+	inline Element* GetRTBinHead(int index) const { return fRealTimeQueues[index].Head(); }
+	inline bool IsRTBinEmpty(int index) const { return fRealTimeQueues[index].IsEmpty(); }
+	inline Element* GetNextRT(Element* element, int index) const { return fRealTimeQueues[index].GetNext(element); }
+
+	// Optimized flat bitmask accessors for FairShare lanes (0-511)
+	inline native_cpu_mask_t GetBitmapWord(int index) const
+	{
+		return cpu_mask_get_atomic(&fBitmap[index]);
+	}
+
+	inline bool IsBitmapEmpty() const
+	{
+		for (int i = 0; i < kNumWords; i++) {
+			if (cpu_mask_get_atomic(&fBitmap[i]) != 0)
+				return false;
+		}
+		return true;
 	}
 
 	// Lane-based atomic helpers for decentralized stealing
@@ -141,10 +146,6 @@ public:
 		int bit = lane % (sizeof(native_cpu_mask_t) * 8);
 		cpu_mask_or_atomic(&fBitmap[word], (native_cpu_mask_t)1 << bit);
 	}
-
-	inline Element* GetRTBinHead(int index) const { return fRealTimeQueues[index].Head(); }
-	inline bool IsRTBinEmpty(int index) const { return fRealTimeQueues[index].IsEmpty(); }
-	inline Element* GetNextRT(Element* element, int index) const { return fRealTimeQueues[index].GetNext(element); }
 
 	inline Element* GetLaneBinHead(int lane) const { return fQueues[lane].Head(); }
 	inline bool IsLaneBinEmpty(int lane) const { return fQueues[lane].IsEmpty(); }
@@ -247,8 +248,17 @@ RUN_QUEUE_CLASS_NAME::RunQueue()
 RUN_QUEUE_TEMPLATE_LIST
 void RUN_QUEUE_CLASS_NAME::CheckEligibility(bigtime_t svt)
 {
-	if (IsEmpty())
+	if (IsEmpty()) {
 		fSystemVirtualTime = svt;
+		return;
+	}
+
+	// SVT Advancement: Even if the queue is non-empty, we must advance the
+	// local fSystemVirtualTime if it lags significantly behind the core's SVT.
+	// This ensures that the deadline quantization buckets (SLI) correctly
+	// reflect current scheduler progress.
+	if (svt > fSystemVirtualTime + kSVTStagnationThreshold)
+		fSystemVirtualTime = svt - kSVTStagnationBuffer;
 }
 
 RUN_QUEUE_TEMPLATE_LIST
@@ -368,10 +378,8 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest() const
 			return fRealTimeQueues[index].Head();
 	}
 
-	// Branchless O(1) Selection Path:
-	// Because of inverted SLI mapping (fli * 32 + (31 - sli)), the highest set
-	// bit in the 512-lane bitmap always corresponds to the best thread.
-	// We scan words from highest (priority 511) to lowest (priority 0).
+	// Branchless O(1) Selection Path for FairShare:
+	// Highest set bit in the 512-lane bitmap corresponds to the best thread.
 	for (int i = kNumWords - 1; i >= 0; i--) {
 		native_cpu_mask_t word = cpu_mask_get_atomic(&fBitmap[i]);
 		if (word != 0) {
@@ -407,8 +415,7 @@ Element* RUN_QUEUE_CLASS_NAME::PeekBest(const Compare2& compare,
 		rtBitmap &= ~(1U << index);
 	}
 
-	// Branchless O(1) Selection Path for template PeekBest.
-	// Scans all set bits from highest to lowest priority.
+	// FairShare word-level scans
 	for (int i = kNumWords - 1; i >= 0; i--) {
 		native_cpu_mask_t word = cpu_mask_get_atomic(&fBitmap[i]);
 		while (word != 0) {

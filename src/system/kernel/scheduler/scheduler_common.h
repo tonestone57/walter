@@ -275,9 +275,15 @@ extern int64 gDeadlineBucketSize __attribute__((aligned(8)));
 
 namespace Scheduler {
 
-const bigtime_t kForegroundVRuntimeOffset = 5000000;
+const bigtime_t kForegroundVRuntimeOffset = 5000;
 
 const bigtime_t kMaxLagFloor = 200000;
+const bigtime_t kInteractiveLagCreditMax = 50000;
+
+const bigtime_t kSVTStagnationThreshold = 40000;
+const bigtime_t kSVTStagnationBuffer = 10000;
+
+const int64 kReferenceWeight = 1000000;
 
 extern int64 gL3LagThreshold;
 extern int64 gNUMANodeLagThreshold;
