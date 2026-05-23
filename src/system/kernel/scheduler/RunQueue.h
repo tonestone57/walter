@@ -30,6 +30,7 @@ namespace Scheduler {
 static const int32 kPrimaryBins = 16;
 static const int32 kSecondaryBins = 32;
 static const int32 kNumLanes = 512;
+static const int32 kRTSubsystemSignal = 15;
 
 /*
  * Haiku OS non-realtime priority mapping table for a 512-lane EEVDF matrix.
@@ -50,7 +51,7 @@ static const uint8 kPriorityToRowMap[100] = {
 
 inline uint8 GetSchedulerMatrixRow(int32 priority) {
 	if (unlikely(priority < 0)) return 0;
-	if (unlikely(priority >= 100)) return 15;
+	if (unlikely(priority >= 100)) return kRTSubsystemSignal;
 	return kPriorityToRowMap[priority];
 }
 
