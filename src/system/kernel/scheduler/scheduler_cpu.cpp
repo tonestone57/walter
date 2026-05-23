@@ -355,6 +355,7 @@ CPUEntry::CPUEntry()
 void CPUEntry::Init(int32 id, CoreEntry* core) {
 	fCPUNumber = id;
 	atomic_pointer_set<CoreEntry>(&fCore, core);
+	fNode = (core != NULL && core->Package() != NULL) ? core->Package()->Node() : NULL;
 	StoreRelease64(fRCULastGeneration, 0);
 	// Note: improve per-CPU RNG seed entropy. On boot, system_time()
 	// returns small values with low entropy; successive CPUs initialized
@@ -1265,6 +1266,8 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	for (int i = 0; i < kWords; i++) {
 		uint32 bits = fCPUSet.Bits(i);
+		if (bits == 0)
+			continue;
 		while (bits != 0) {
 			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
 			int cpuID = i * 32 + bit;

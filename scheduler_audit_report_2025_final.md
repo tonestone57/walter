@@ -22,13 +22,14 @@ The Haiku scheduler has been extensively audited for correctness, accuracy, and 
 | **Work-Stealing** | $O(S)$ | $S$ = random samples (capped at 64). Scalable. |
 | **ChooseCore** | $O(S)$ / $O(N_{core})$ | Hierarchical sampling + SMT core scan. |
 | **Rebalance** | $O(S)$ | Randomized probing ensures $O(1)$ relative to total cores. |
-| **Total Runnable Count** | $O(N)$ | Linear scan of per-CPU counters. |
-| **Min Virtual Runtime** | $O(N)$ | $N$ = CPUs in core/system (linear scan). |
+| **Total Runnable Count** | $O(N_{node})$ | Hierarchical node-level aggregation. |
+| **Min Virtual Runtime** | $O(N_{core})$ | Word-skipping bitmap scan. |
 
-### Identified Bottlenecks
-1. **High Core Count Scans ($128+$ cores)**: `scheduler_get_total_runnable_threads` and `CheckMaskedPackagesMinimumLoad` perform linear scans of `CPUSet` bitmasks. While optimized with `scheduler_ctz`, the $O(N)$ overhead becomes measurable during mass wakeups.
-2. **Power Saving Consolidation**: The `sSmallTaskCore` array in `power_saving.cpp` is a point of contention for CPUs within the same NUMA node, leading to cache-line bouncing.
-3. **EEVDF Resolution Updates**: Global ICI broadcasts during `update_quantum_lengths_dpc` introduce system-wide jitter when interactivity levels change rapidly.
+### Resolved Bottlenecks (2025 Updates)
+1. **Hierarchical Runnable Counting**: Replaced the $O(N_{cpu})$ linear scan in `scheduler_get_total_runnable_threads` with a hierarchical $O(N_{node})$ aggregation. Per-CPU runnable updates now maintain a synchronized counter in the parent `SchedulerNode`.
+2. **Mask Scan Optimization**: `CheckMaskedPackagesMinimumLoad` and `CoreEntry::GetMinVirtualRuntime` now utilize word-skipping and package-ID caching to minimize redundant lookups during affinity-masked core selection.
+3. **Power Saving Consolidation**: The `sSmallTaskCore` array was refactored to use 64-byte aligned entries, eliminating NUMA-node contention during consolidation target updates.
+4. **Resolution Dampening**: Implemented a 50ms cooldown for EEVDF matrix resolution changes to mitigate system-wide jitter from frequent ICI broadcasts.
 
 ## 4. Architectural Optimality & 2025 Optimizations
 - **Reciprocal Fixed-Point Math**: Replaced 64-bit division in `RunQueue::_GetLane` and `_ComputeEffectivePriority` with high-performance reciprocal multiplication. Used a safe 32-bit shift to prevent integer overflow for large time deltas.

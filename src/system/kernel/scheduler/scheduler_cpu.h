@@ -144,8 +144,14 @@ public:
 	inline int32 ThreadCount() const { return LoadAcquire(fThreadCount); }
 
 	inline int32 RunnableCount() const { return LoadAcquire(fRunnableCount); }
-	inline void IncrementRunnableCount() { AddRelease(fRunnableCount, 1); }
-	inline void DecrementRunnableCount() { AddRelease(fRunnableCount, -1); }
+	inline void IncrementRunnableCount() {
+		AddRelease(fRunnableCount, 1);
+		if (fNode != NULL) fNode->IncrementRunnableCount();
+	}
+	inline void DecrementRunnableCount() {
+		AddRelease(fRunnableCount, -1);
+		if (fNode != NULL) fNode->DecrementRunnableCount();
+	}
 
 	inline int64 TotalWeight() const {
 		return LoadAcquire64(fTotalWeight);
@@ -174,6 +180,7 @@ private:
 
 	int32 fCPUNumber;
 	CoreEntry* fCore;
+	SchedulerNode* fNode;
 
 	ThreadRunQueue fRunQueue;
 	spinlock fQueueLock;
@@ -404,6 +411,10 @@ public:
 	inline int32 PackageCount() const { return fPackageCount; }
 	inline void SetPackageCount(int32 count) { fPackageCount = count; }
 
+	inline int32 RunnableCount() const { return LoadAcquire(fRunnableCount); }
+	inline void IncrementRunnableCount() { AddRelease(fRunnableCount, 1); }
+	inline void DecrementRunnableCount() { AddRelease(fRunnableCount, -1); }
+
 	// SetPackageIdle removed - it was never called from any
 	// translation unit.  All idle-mask updates go through PackageGoesIdle /
 	// PackageWakesUp.  Leaving dead code here invited future callers to
@@ -417,6 +428,8 @@ private:
 
 	int32 fPackageStartIndex;
 	int32 fPackageCount;
+
+	int32 fRunnableCount __attribute__((aligned(64)));
 } __attribute__((aligned(64)));
 
 class PackageEntry {
