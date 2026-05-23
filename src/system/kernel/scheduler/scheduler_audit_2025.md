@@ -71,7 +71,7 @@
 
 - [x] **Task 1: Implement RCU-safe Scheduler Listeners**
 - [x] **Task 2: Dynamic Interconnect-Aware Thresholds**
-- [ ] **Task 3: Hardware-Guided EAS (Energy-Aware Scheduling)**
+- [x] **Task 3: Hardware-Guided EAS (Energy-Aware Scheduling)**
 - [x] **Task 4: Per-CPU DPC Queue Auditing & Optimization**
 
 ## 5. Performance Bottlenecks & Future Scalability
@@ -91,3 +91,15 @@ The `sSmallTaskCore` array in `power_saving.cpp` is a source of cache-line conte
 ### D. EEVDF Matrix Resolution Updates
 Updating the EEVDF matrix resolution (via `update_quantum_lengths_dpc`) requires a global ICI broadcast and RCU synchronization. Frequent interactivity changes (e.g., rapid window switching) can trigger these expensive operations too often.
 *   **Mitigation**: Implement a "dampening" filter or limit the frequency of resolution updates.
+
+## 6. Audit Fixes (Post-Phase 4)
+
+### A. Load Tracking Persistence
+- **Status**: **Resolved**.
+- **Problem**: `CoreEntry::_UpdateLoad` reset the uncollected load to zero when advancing the measurement epoch. This caused "lost" load contributions if multiple updates occurred within one CAS cycle.
+- **Solution**: Modified the CAS loop to carry over uncollected load into the next epoch, ensuring 100% accounting accuracy for core load metrics.
+
+### B. E-Core Packing Optimization
+- **Status**: **Resolved**.
+- **Problem**: Power-saving packing for E-cores used capacity-scaled scores (`GetScore`) for thresholds. Since E-cores have low capacity, they appeared "overloaded" even at 10% raw utilization, preventing effective consolidation.
+- **Solution**: Updated `choose_small_task_core` to use raw utilization (`GetLoad`) for E-core packing thresholds, allowing them to be filled up to 70% before spilling over to P-cores.
