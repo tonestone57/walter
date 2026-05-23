@@ -346,6 +346,7 @@ private:
 	int32 fHighPriorityThreadCount __attribute__((aligned(8)));
 
 	int32 fLoad;
+	int32 fCapacity;
 
 	uint32 fScoreFactor;
 
