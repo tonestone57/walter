@@ -347,6 +347,7 @@ private:
 
 	int32 fLoad;
 
+	int32 fCapacity;
 	uint32 fScoreFactor;
 
 	native_cpu_mask_t fLocalIndices __attribute__((aligned(8)));
