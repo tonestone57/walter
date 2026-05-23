@@ -65,7 +65,7 @@ If QAD were extended to 512 lanes to match BMQ-EEVDF's resolution, the compariso
 1.  **High Precision**: 512 bins (versus QAD's 128) provide better equity for mixed workloads.
 2.  **Proven Interactivity**: The interactivity score and Display-Priority awareness are fine-tuned for Haiku's UI responsiveness.
 3.  **Boot-time Calibration**: Dynamic lag thresholds ensure optimal performance across varying hardware interconnects.
-4.  **Decentralized Accounting**: Recent 2025 audits removed global lock contention on runnable counters and masks.
+4.  **Decentralized Accounting**: The implementation uses per-CPU counters to avoid global lock contention on runnable threads.
 
 ### Proposed QAD Strengths:
 1.  **Algorithmic Simplicity**: The branchless bit-parallel radix path is elegant and extremely fast.
@@ -81,9 +81,9 @@ While QAD offers interesting concepts for ultra-massive scalability, Haiku's cur
 -   **Resolution**: BMQ-EEVDF has 4x the resolution (512 bins) while maintaining the same $O(1)$ complexity.
 -   **Interactivity**: The existing interactivity score is more nuanced than the proposed QAD credits.
 -   **Cache vs. Resolution Tradeoff**: While QAD is more L1 cache-efficient, BMQ-EEVDF's 512-bin matrix provides the fine-grained deadline tracking necessary for Haiku's diverse desktop workloads. The current metadata size (~136 bytes) is a reasonable trade-off for the 4x increase in scheduling precision.
--   **Practical Scalability**: The 2025 audit resolved the primary bottlenecks QAD aimed to address (lock contention and mask limits), making Haiku's current scheduler performant on any hardware Haiku is likely to run on.
+-   **Practical Scalability**: The scheduler resolves primary scalability bottlenecks (lock contention and mask limits) through decentralized accounting and bitset-based idle masks, making it performant on high core-count systems.
 
-**Recommendation**: Retain the current BMQ-EEVDF scheduler. The QAD proposal confirms that Haiku's direction is correct, but many of the "improvements" suggested in QAD are already present or exceeded by the 2025 audited implementation. Future work should focus on the specific optimizations identified below.
+**Recommendation**: Retain the mature BMQ-EEVDF core logic but modernize it using QAD's flat bitmask and explicit scaling techniques. The QAD proposal confirms that Haiku's direction is correct, but the existing interactivity scoring is more nuanced than basic credits.
 
 ## 5. Implemented Optimizations Derived from QAD
 
