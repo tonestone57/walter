@@ -1097,6 +1097,7 @@ CoreEntry::CoreEntry()
 	  fScoreFactor(1 << 16),
 	  fLocalIndices(0) {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
+	for (int i = 0; i < 8; i++) fMemberCPUs[i] = -1;
 }
 
 
@@ -1155,6 +1156,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 		}
 	}
 	cpu->fCoreLocalIndex = localIndex;
+	fMemberCPUs[localIndex] = cpu->ID();
 
 	fCPUSet.SetBitAtomic(cpu->ID());
 
@@ -1202,6 +1204,7 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 	int32 oldIdleCount = AddAcquireRelease(fIdleCPUCount, -1);
 
 	fCPUSet.ClearBitAtomic(cpu->ID());
+	fMemberCPUs[cpu->fCoreLocalIndex] = -1;
 	int32 oldCPUCount = AddAcquireRelease(fCPUCount, -1);
 
 	if (oldCPUCount == 1) {
@@ -1253,23 +1256,21 @@ bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Aggregate min vruntime across all CPUs in the core
+	// Aggregate min vruntime across all CPUs in the core.
+	// Optimization: Iterate only member CPUs (max 8) instead of O(N) bitmask.
 	bigtime_t minVRuntime = 0;
 	bool found = false;
 
-	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-	for (int i = 0; i < kWords; i++) {
-		uint32 bits = fCPUSet.Bits(i);
-		while (bits != 0) {
-			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
-			int cpuID = i * 32 + bit;
-			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
-			bigtime_t vrt = cpu->GetMinVirtualRuntime();
-			if (vrt > 0 && (!found || vrt < minVRuntime)) {
-				minVRuntime = vrt;
-				found = true;
-			}
-			bits &= ~(1U << bit);
+	for (int i = 0; i < 8; i++) {
+		int32 cpuID = fMemberCPUs[i];
+		if (cpuID < 0)
+			continue;
+
+		CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
+		bigtime_t vrt = cpu->GetMinVirtualRuntime();
+		if (vrt > 0 && (!found || vrt < minVRuntime)) {
+			minVRuntime = vrt;
+			found = true;
 		}
 	}
 
@@ -1279,32 +1280,16 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 CPUEntry* CoreEntry::PeekMinimumLoadCPU() {
 	// Optimization: If a physical core is idle, explicitly return the
 	// Primary logical CPU first.
-	// Note: use fCPUSet.FindFirstSet() equivalent via scheduler_ctz()
-	// on each bitmap word rather than iterating all (SMP_MAX_CPUS+31)/32
-	// words. For a core with CPUs in a small ID range this avoids scanning
-	// all zero words before finding the first set bit.
 	if (fCPUCount > 1 && GetScore() == 0) {
-		// Find first CPU in this core's set using the bitmap directly.
-		// Each word covers 32 CPU IDs; stop at first non-zero word.
-		const int kWords = (SMP_MAX_CPUS + 31) / 32;
-		for (int i = 0; i < kWords; i++) {
-			uint32 bits = fCPUSet.Bits(i);
-			if (bits == 0)
+		for (int i = 0; i < 8; i++) {
+			int32 cpu = fMemberCPUs[i];
+			if (cpu < 0)
 				continue;
-			int cpu = i * 32 + scheduler_ctz((native_cpu_mask_t)bits);
-			if (cpu < smp_get_num_cpus()) {
-				CPUEntry* entry = &gCPUEntries[cpu];
-				// Note: verify the CPU is still in the heap before
-				// returning it. A concurrent RemoveCPU may have set the heap
-				// key to B_INT32_MIN between the fCPUSet read and this check.
-				// GetKey returns B_INT32_MIN for removed CPUs; any valid CPU
-				// has key >= B_IDLE_PRIORITY (0).
-				if (entry->Core() == this && !gCPU[cpu].disabled &&
-					CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)
-					return entry;
-			}
-			// First set bit found but not valid; fall through to heap path.
-			break;
+
+			CPUEntry* entry = &gCPUEntries[cpu];
+			if (entry->Core() == this && !gCPU[cpu].disabled &&
+				CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)
+				return entry;
 		}
 	}
 

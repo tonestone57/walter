@@ -357,6 +357,7 @@ private:
 	uint32 fScoreFactor;
 
 	native_cpu_mask_t fLocalIndices __attribute__((aligned(8)));
+	int32 fMemberCPUs[8];
 
 	friend class DebugDumper;
 } __attribute__((aligned(64)));

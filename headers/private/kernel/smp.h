@@ -70,6 +70,7 @@ private:
 	static	const int	kArraySize = ROUNDUP(SMP_MAX_CPUS, kArrayBits) / kArrayBits;
 
 			uint32		fBitmap[kArraySize];
+			int32		fCount;
 };
 
 
@@ -112,6 +113,7 @@ void call_single_cpu_sync(uint32 targetCPU, void (*func)(void*, int),
 
 inline
 CPUSet::CPUSet()
+	: fCount(0)
 {
 	memset(fBitmap, 0, sizeof(fBitmap));
 }
@@ -121,13 +123,15 @@ inline void
 CPUSet::ClearAll()
 {
 	memset(fBitmap, 0, sizeof(fBitmap));
+	atomic_set(&fCount, 0);
 }
 
 
 inline void
 CPUSet::SetAll()
 {
-	memset(fBitmap, ~uint8(0), sizeof(fBitmap));
+	memset(fBitmap, 0xff, sizeof(fBitmap));
+	atomic_set(&fCount, SMP_MAX_CPUS);
 }
 
 
@@ -135,7 +139,11 @@ inline void
 CPUSet::SetBit(int32 cpu)
 {
 	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
-	*element |= 1u << (cpu % kArrayBits);
+	uint32 bit = 1u << (cpu % kArrayBits);
+	if ((*element & bit) == 0) {
+		*element |= bit;
+		fCount++;
+	}
 }
 
 
@@ -143,7 +151,11 @@ inline void
 CPUSet::ClearBit(int32 cpu)
 {
 	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
-	*element &= ~uint32(1u << (cpu % kArrayBits));
+	uint32 bit = 1u << (cpu % kArrayBits);
+	if ((*element & bit) != 0) {
+		*element &= ~bit;
+		fCount--;
+	}
 }
 
 
@@ -151,7 +163,9 @@ inline void
 CPUSet::SetBitAtomic(int32 cpu)
 {
 	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
-	atomic_or(element, 1u << (cpu % kArrayBits));
+	uint32 bit = 1u << (cpu % kArrayBits);
+	if ((atomic_or(element, bit) & bit) == 0)
+		atomic_add(&fCount, 1);
 }
 
 
@@ -159,13 +173,18 @@ inline void
 CPUSet::ClearBitAtomic(int32 cpu)
 {
 	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
-	atomic_and(element, ~uint32(1u << (cpu % kArrayBits)));
+	uint32 bit = 1u << (cpu % kArrayBits);
+	if ((atomic_and(element, ~bit) & bit) != 0)
+		atomic_add(&fCount, -1);
 }
 
 
 inline bool
 CPUSet::Matches(const CPUSet& mask) const
 {
+	if (fCount == 0 || mask.fCount == 0)
+		return false;
+
 	for (int i = 0; i < kArraySize; i++) {
 		if ((fBitmap[i] & mask.fBitmap[i]) != 0)
 			return true;
@@ -187,8 +206,17 @@ inline CPUSet
 CPUSet::And(const CPUSet& mask) const
 {
 	CPUSet andSet;
-	for (int i = 0; i < kArraySize; i++)
-		andSet.fBitmap[i] = fBitmap[i] & mask.fBitmap[i];
+	if (fCount == 0 || mask.fCount == 0)
+		return andSet;
+
+	int32 count = 0;
+	for (int i = 0; i < kArraySize; i++) {
+		uint32 val = fBitmap[i] & mask.fBitmap[i];
+		andSet.fBitmap[i] = val;
+		if (val != 0)
+			count += __builtin_popcount(val);
+	}
+	andSet.fCount = count;
 	return andSet;
 }
 
@@ -196,12 +224,7 @@ CPUSet::And(const CPUSet& mask) const
 inline bool
 CPUSet::IsEmpty() const
 {
-	for (int i = 0; i < kArraySize; i++) {
-		if (fBitmap[i] != 0)
-			return false;
-	}
-
-	return true;
+	return atomic_get((int32*)&fCount) == 0;
 }
 
 
