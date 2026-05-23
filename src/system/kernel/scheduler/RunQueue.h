@@ -290,14 +290,11 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element);
 		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
-		thread->fli_index = -1;
-		thread->sli_index = index;
+		thread->run_queue_lane = -1;
+		thread->run_queue_rt_index = index;
 	} else {
 		int32 lane = _GetLane(thread->virtual_deadline, (int32)priority);
-		// We reuse fli_index to store the flat lane index.
-		// For Real-Time threads, fli_index is -1 and sli_index holds the RT queue index.
-		// For EEVDF threads, fli_index holds the flat lane (0-511).
-		thread->fli_index = lane;
+		thread->run_queue_lane = lane;
 
 		fQueues[lane].Add(element);
 
@@ -323,11 +320,11 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element, false);
 		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
-		thread->fli_index = -1;
-		thread->sli_index = index;
+		thread->run_queue_lane = -1;
+		thread->run_queue_rt_index = index;
 	} else {
 		int32 lane = _GetLane(thread->virtual_deadline, (int32)priority);
-		thread->fli_index = lane;
+		thread->run_queue_lane = lane;
 
 		fQueues[lane].Add(element, false);
 
@@ -342,13 +339,13 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 {
 	Thread* thread = element->GetThread();
 
-	if (thread->fli_index < 0) {
-		int32 index = thread->sli_index;
+	if (thread->run_queue_lane < 0) {
+		int32 index = thread->run_queue_rt_index;
 		fRealTimeQueues[index].Remove(element);
 		if (fRealTimeQueues[index].IsEmpty())
 			AndAtomic(fRealTimeBitmap, (int32)~(1U << index));
 	} else {
-		int32 lane = thread->fli_index;
+		int32 lane = thread->run_queue_lane;
 		fQueues[lane].Remove(element);
 		if (fQueues[lane].IsEmpty()) {
 			int word = lane / (sizeof(native_cpu_mask_t) * 8);

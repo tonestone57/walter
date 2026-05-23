@@ -260,8 +260,8 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 	bigtime_t		virtual_deadline __attribute__((aligned(8)));  // d_i
 	uint32			sched_weight;      // w_i
 	bigtime_t		time_slice __attribute__((aligned(8)));        // q_i
-	int32			fli_index;         // Tracks current First-Level Bitmap position
-	int32			sli_index;         // Tracks current Second-Level Bitmap position
+	int32			run_queue_lane;    // Tracks current flat lane (0-511)
+	int32			run_queue_rt_index;// Tracks RT queue index (0-20) if lane < 0
 	bigtime_t		lastMigrationTime;
 	bool			inRunQueue;
 	Thread*			next;
