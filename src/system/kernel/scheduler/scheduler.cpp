@@ -1024,14 +1024,14 @@ static void reschedule(int32 nextState, Thread* handoffTarget = NULL) {
 					CPUEntry* enqueuedCPU = nextThreadData->EnqueuedCPU();
 					if (enqueuedCPU != NULL && enqueuedCPU->ID() == thisCPU) {
 						nextThreadData->Dequeue();
-						oldThreadData->DonateTimesliceTo(handoffTarget, now);
+						oldThreadData->DonateTimesliceToLocked(handoffTarget, now);
 						handoffTarget->state = B_THREAD_RUNNING;
 					} else {
 						nextThreadData = NULL;
 						release_spinlock(&handoffTarget->scheduler_lock);
 					}
 				} else {
-					oldThreadData->DonateTimesliceTo(handoffTarget, now);
+					oldThreadData->DonateTimesliceToLocked(handoffTarget, now);
 					handoffTarget->state = B_THREAD_RUNNING;
 				}
 			} else {
@@ -1706,7 +1706,7 @@ measure_latency_ns(int32 targetCPU)
 
 	bigtime_t start = system_time();
 	for (int32 i = 0; i < kIterations; i++) {
-		AtomicOr(target, 0);
+		AtomicOr(*target, 0);
 	}
 	bigtime_t end = system_time();
 
@@ -2348,9 +2348,9 @@ SchedulerListener::~SchedulerListener() {}
 void scheduler_add_listener(struct SchedulerListener* listener) {
 	InterruptsWriteSpinLocker _(gSchedulerListenersLock);
 
-	SchedulerListener* head = atomic_pointer_get(&gSchedulerListeners);
+	SchedulerListener* head = AtomicPointerGet(&gSchedulerListeners);
 	listener->fNext = head;
-	atomic_pointer_set(&gSchedulerListeners, listener);
+	AtomicPointerSet(&gSchedulerListeners, listener);
 }
 
 /*! Remove the given scheduler listener. Thread lock must be held.
@@ -2358,23 +2358,23 @@ void scheduler_add_listener(struct SchedulerListener* listener) {
 void scheduler_remove_listener(struct SchedulerListener* listener) {
 	InterruptsWriteSpinLocker _(gSchedulerListenersLock);
 
-	SchedulerListener* head = atomic_pointer_get(&gSchedulerListeners);
+	SchedulerListener* head = AtomicPointerGet(&gSchedulerListeners);
 	SchedulerListener* prev = NULL;
 	SchedulerListener* curr = head;
 
 	while (curr != NULL && curr != listener) {
 		prev = curr;
-		curr = atomic_pointer_get(&curr->fNext);
+		curr = AtomicPointerGet(&curr->fNext);
 	}
 
 	if (curr == NULL)
 		return;
 
 	if (prev == NULL) {
-		atomic_pointer_set(&gSchedulerListeners,
-			atomic_pointer_get(&curr->fNext));
+		AtomicPointerSet(&gSchedulerListeners,
+			AtomicPointerGet(&curr->fNext));
 	} else {
-		atomic_pointer_set(&prev->fNext, atomic_pointer_get(&curr->fNext));
+		AtomicPointerSet(&prev->fNext, AtomicPointerGet(&curr->fNext));
 	}
 
 	// Wait for any concurrent readers (NotifySchedulerListeners) to finish.

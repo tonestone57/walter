@@ -48,7 +48,7 @@ void ThreadData::_InitBase() {
 	fHomePackage = -1;
 
 	fEffectivePriority = GetPriority();
-	StoreRelease64(&fBaseQuantum, (int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
+	StoreRelease64(fBaseQuantum, (int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
 				THREAD_MAX_SET_PRIORITY)]));
 
 	StoreRelease64(fTimeUsed, 0);
@@ -150,7 +150,7 @@ ThreadData::ThreadData(Thread* thread) : fThread(thread) {}
 
 void ThreadData::Init(bigtime_t now) {
 	_InitBase();
-	atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
+	AtomicPointerSet<CoreEntry>(&fCore, (CoreEntry*)NULL);
 
 	Thread* currentThread = thread_get_current_thread();
 	ThreadData* currentThreadData = currentThread->scheduler_data;
@@ -195,7 +195,7 @@ void ThreadData::Init(bigtime_t now) {
 void ThreadData::Init(CoreEntry* core) {
 	_InitBase();
 
-	atomic_pointer_set<CoreEntry>(&fCore, core);
+	AtomicPointerSet<CoreEntry>(&fCore, core);
 	fHomePackage = core->Package()->ID();
 	fReady = true;
 	fNeededLoad = 0;
@@ -288,7 +288,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 					// race). Let the retry loop handle it.
 					continue;
 				}
-				if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
+				if (AtomicPointerGet<CoreEntry>(&fCore) != targetCore)
 					MigrateTo(targetCore, now);
 				return false;
 			}
@@ -315,7 +315,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 		if (fHomePackage == -1)
 			fHomePackage = targetCore->Package()->ID();
 
-		if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
+		if (AtomicPointerGet<CoreEntry>(&fCore) != targetCore)
 			MigrateTo(targetCore, now);
 		return rescheduleNeeded;
 	}
@@ -341,7 +341,7 @@ bool ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU,
 		}
 	}
 
-	if (atomic_pointer_get<CoreEntry>(&fCore) != targetCore)
+	if (AtomicPointerGet<CoreEntry>(&fCore) != targetCore)
 		MigrateTo(targetCore, now);
 	return false;
 }
@@ -367,7 +367,7 @@ bigtime_t ThreadData::ComputeQuantum() const {
 	// fCore between the three calls below, mixing data from two different
 	// CoreEntry objects. The reads are still individually approximate (no
 	// run-queue lock is held), but they now all refer to the same object.
-	CoreEntry* const core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* const core = AtomicPointerGet<CoreEntry>(&fCore);
 
 	// Defensive null guard: fCore can be transiently NULL during a race
 	// between UnassignCore() and the subsequent MigrateTo() (e.g. rapid CPU
@@ -501,7 +501,7 @@ bigtime_t ThreadData::_ComputeQuantumForCore(CoreEntry* core,
 void ThreadData::UnassignCore(bool running) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	ASSERT(core != NULL);
 	if (running || fThread->state == B_THREAD_READY) {
 		if (fReady && !IsIdle()) {
@@ -518,7 +518,7 @@ void ThreadData::UnassignCore(bool running) {
 		fReady = false;
 	}
 	if (!fReady)
-		atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
+		AtomicPointerSet<CoreEntry>(&fCore, (CoreEntry*)NULL);
 }
 
 /* static */ void ThreadData::ComputeQuantumLengths() {
@@ -552,7 +552,7 @@ void ThreadData::UnassignCore(bool running) {
 }
 
 
-void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
+void ThreadData::DonateTimesliceToLocked(Thread* beneficiary, bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (beneficiary == NULL)
@@ -572,17 +572,7 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 		(bigtime_t)LoadAcquire64(fTimeUsed);
 	if (timeLeft > 0) {
 		// Donate remaining slice to the beneficiary.
-		// Callers MUST NOT hold any run-queue spinlock when invoking this
-		// function; doing so inverts the lock ordering (Core/CPU queue lock
-		// → thread scheduler_lock) and risks deadlock.
-		// Note: DonateTimesliceTo is only called with interrupts
-		// disabled. InterruptsSpinLocker calls disable_interrupts() again,
-		// then restore_interrupts() in its destructor - which would re-enable
-		// interrupts prematurely if the outer context expects them disabled.
-		// Use plain SpinLocker (no interrupt manipulation) since interrupts
-		// are already disabled by the caller's contract.
-		ASSERT(!are_interrupts_enabled());
-		SpinLocker locker(beneficiary->scheduler_lock);
+		// Beneficiary's scheduler_lock must be held by the caller.
 		ThreadData* beneficiaryData = beneficiary->scheduler_data;
 		if (beneficiaryData != NULL) {
 			AddRelease64(beneficiaryData->fStolenTime, (int64)timeLeft);
@@ -596,6 +586,28 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 	// immediately after this call to prevent double-dipping.
 	StoreRelease64(fQuantumStart, (int64)now);
 	StoreRelease64(fTimeUsed, (int64)quantum);
+}
+
+
+void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
+	SCHEDULER_ENTER_FUNCTION();
+
+	if (beneficiary == NULL)
+		return;
+
+	// Donate remaining slice to the beneficiary.
+	// Callers MUST NOT hold any run-queue spinlock when invoking this
+	// function; doing so inverts the lock ordering (Core/CPU queue lock
+	// → thread scheduler_lock) and risks deadlock.
+	// Note: DonateTimesliceTo is only called with interrupts
+	// disabled. InterruptsSpinLocker calls disable_interrupts() again,
+	// then restore_interrupts() in its destructor - which would re-enable
+	// interrupts prematurely if the outer context expects them disabled.
+	// Use plain SpinLocker (no interrupt manipulation) since interrupts
+	// are already disabled by the caller's contract.
+	ASSERT(!are_interrupts_enabled());
+	SpinLocker locker(beneficiary->scheduler_lock);
+	DonateTimesliceToLocked(beneficiary, now);
 }
 
 
@@ -639,7 +651,7 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 	if (oldLoad == fNeededLoad)
 		return;	 // no change
 
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	if (core != NULL)
 		core->ChangeLoad(fNeededLoad - oldLoad, now);
 }
@@ -811,7 +823,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		}
 	}
 
-	StoreRelease64(&fBaseQuantum, (int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
+	StoreRelease64(fBaseQuantum, (int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
 				THREAD_MAX_SET_PRIORITY)]));
 }
 
@@ -840,7 +852,7 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 	if (now == 0)
 		now = system_time();
 
-	if (atomic_pointer_get<CoreEntry>(&fCore) == targetCore)
+	if (AtomicPointerGet<CoreEntry>(&fCore) == targetCore)
 		return;
 
 	// Defensive null guard: ChooseCoreAndCPU can return NULL if all
@@ -848,11 +860,11 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 	// thread until a core becomes available.
 	if (targetCore == NULL) {
 		if (fReady && gTrackCoreLoad) {
-			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+			CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 			if (core != NULL)
 				core->RemoveLoad(fNeededLoad, true, now);
 		}
-		atomic_pointer_set<CoreEntry>(&fCore, (CoreEntry*)NULL);
+		AtomicPointerSet<CoreEntry>(&fCore, (CoreEntry*)NULL);
 		return;
 	}
 
@@ -869,7 +881,7 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 
 	if (fReady) {
 		if (gTrackCoreLoad) {
-			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+			CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 			if (core != NULL)
 				core->RemoveLoad(fNeededLoad, true, now);
 			targetCore->AddLoad(fNeededLoad, fLoadMeasurementEpoch, true, now);
@@ -877,7 +889,7 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 
 		if (!IsIdle()) {
 			int32 priority = GetEffectivePriority();
-			CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+			CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 			if (core != NULL) {
 				core->DecrementTotalThreadCount();
 				if (fIsHighPriorityContributed) {
@@ -894,7 +906,7 @@ void ThreadData::MigrateTo(CoreEntry* targetCore, bigtime_t now) {
 		}
 	}
 
-	atomic_pointer_set<CoreEntry>(&fCore, targetCore);
+	AtomicPointerSet<CoreEntry>(&fCore, targetCore);
 }
 
 ThreadProcessing::~ThreadProcessing() {}

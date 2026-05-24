@@ -83,7 +83,7 @@ public:
 
 	inline int32 ID() const { return fCPUNumber; }
 	inline CoreEntry* Core() const {
-		return atomic_pointer_get<CoreEntry>(
+		return AtomicPointerGet<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 	}
 
@@ -585,7 +585,7 @@ inline int32 CPUEntry::GetLoad() const {
 
 	// Penalize SMT siblings to prefer physical cores
 	CoreEntry* core =
-		atomic_pointer_get<CoreEntry>(const_cast<CoreEntry* volatile*>(&fCore));
+		AtomicPointerGet<CoreEntry>(const_cast<CoreEntry* volatile*>(&fCore));
 	if (core != NULL && core->CPUCount() > 1) {
 		// If at least one other thread is running on this core
 		if (core->ThreadCount() > 1)

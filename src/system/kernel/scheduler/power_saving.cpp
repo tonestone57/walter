@@ -123,7 +123,7 @@ static void switch_to_mode() {
 	}
 	if (sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
-			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[i].core, (CoreEntry*)NULL);
+			AtomicPointerSet<CoreEntry>(&sSmallTaskCore[i].core, (CoreEntry*)NULL);
 	}
 }
 
@@ -131,7 +131,7 @@ static void switch_to_mode() {
 static void set_cpu_enabled(int32 cpu, bool enabled) {
 	if (!enabled && sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
-			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[i].core, (CoreEntry*)NULL);
+			AtomicPointerSet<CoreEntry>(&sSmallTaskCore[i].core, (CoreEntry*)NULL);
 	}
 }
 
@@ -218,7 +218,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
-		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+		CoreEntry* current = (CoreEntry*)AtomicPointerGet<CoreEntry>(
 			&sSmallTaskCore[currentNodeID].core);
 		if (current != NULL && current->Type() == gMinCoreType &&
 			current->GetScore() < kHighLoad) {
@@ -267,20 +267,20 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 			const int kMaxCASRetries = 16;
 			while (true) {
 				CoreEntry* currentE =
-					atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core);
+					AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core);
 				if (currentE != NULL && currentE->Type() == gMinCoreType &&
 					currentE->GetScore() < kHighLoad) {
 					return currentE;
 				}
 
-				if (atomic_pointer_test_and_set<CoreEntry>(
+				if (AtomicPointerTestAndSet<CoreEntry>(
 						&sSmallTaskCore[nodeID].core, eCore, currentE) == currentE) {
 					return eCore;
 				}
 
 				if (++casRetries >= kMaxCASRetries) {
 					CoreEntry* latest =
-						atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core);
+						AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core);
 					return (latest != NULL) ? latest : eCore;
 				}
 				cpu_pause();
@@ -296,7 +296,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
-		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+		CoreEntry* current = (CoreEntry*)AtomicPointerGet<CoreEntry>(
 			&sSmallTaskCore[currentNodeID].core);
 		if (current != NULL && current->GetScore() < kHighLoad)
 			return current;
@@ -349,11 +349,11 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 		const int kMaxCASRetries = 16;
 		while (true) {
 			CoreEntry* current =
-				atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core);
+				AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core);
 			if (current != NULL && current->GetScore() < kHighLoad)
 				return current;
 
-			if (atomic_pointer_test_and_set<CoreEntry>(
+			if (AtomicPointerTestAndSet<CoreEntry>(
 					&sSmallTaskCore[nodeID].core, core, current) == current) {
 				return core;
 			}
@@ -361,7 +361,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 			if (++casRetries >= kMaxCASRetries) {
 				// Give up; return best known candidate to avoid spinning.
 				CoreEntry* latest =
-					atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core);
+					AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core);
 				return (latest != NULL) ? latest : core;
 			}
 			cpu_pause();
@@ -794,8 +794,8 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 		// sSmallTaskCore branch below is skipped safely.
 
 		if (nodeID >= 0 && nodeID < gNodeCount && sSmallTaskCore != NULL &&
-			atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core) == core) {
-			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[nodeID].core,
+			AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core) == core) {
+			AtomicPointerSet<CoreEntry>(&sSmallTaskCore[nodeID].core,
 										  (CoreEntry*)NULL);
 			CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 
@@ -955,7 +955,7 @@ static void rebalance_irqs(bool idle) {
 	bool hasSmallTaskCore = false;
 	if (sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++) {
-			if (atomic_pointer_get<CoreEntry>(&sSmallTaskCore[i].core) != NULL) {
+			if (AtomicPointerGet<CoreEntry>(&sSmallTaskCore[i].core) != NULL) {
 				hasSmallTaskCore = true;
 				break;
 			}
@@ -987,7 +987,7 @@ static void rebalance_irqs(bool idle) {
 		currentCore->Package()->Node() != NULL) {
 		int32 nodeID = currentCore->Package()->Node()->ID();
 		if (nodeID >= 0 && nodeID < gNodeCount &&
-			atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core) ==
+			AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core) ==
 				currentCore) {
 			return;
 		}
@@ -1030,7 +1030,7 @@ static void rebalance_irqs(bool idle) {
 			currentCore->Package()->Node() != NULL) {
 			int32 nodeID = currentCore->Package()->Node()->ID();
 			if (nodeID >= 0 && nodeID < gNodeCount)
-				other = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+				other = (CoreEntry*)AtomicPointerGet<CoreEntry>(
 					&sSmallTaskCore[nodeID].core);
 		}
 	} else {
@@ -1098,11 +1098,11 @@ static void rebalance_irqs(bool idle) {
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
-	if (atomic_get_and_set(cpuEntry->fRebalancePending, 1) == 0) {
+	if (AtomicGetAndSet(cpuEntry->fRebalancePending, 1) == 0) {
 		cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 		cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 		if (DPCQueue::CPUQueue(newCPU, B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC) != B_OK)
-			atomic_set(cpuEntry->fRebalancePending, 0);
+			StoreRelease(cpuEntry->fRebalancePending, 0);
 	}
 }
 

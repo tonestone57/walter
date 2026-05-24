@@ -826,11 +826,11 @@ static void rebalance_irqs(bool idle) {
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
-	if (atomic_get_and_set(cpuEntry->fRebalancePending, 1) == 0) {
+	if (AtomicGetAndSet(cpuEntry->fRebalancePending, 1) == 0) {
 		cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 		cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 		if (DPCQueue::CPUQueue(newCPU, B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC) != B_OK)
-			atomic_set(cpuEntry->fRebalancePending, 0);
+			StoreRelease(cpuEntry->fRebalancePending, 0);
 	}
 }
 

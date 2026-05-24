@@ -271,7 +271,7 @@ Profiler::FunctionData* Profiler::_FindFunction(const char* function) {
 	// FunctionData slots are allocated from fFunctionData[] and NEVER freed
 	// or reused during the lifetime of the Profiler object (fNextFunctionSlot
 	// only increases). Therefore a pointer read from fHashTable[index] via
-	// atomic_pointer_get<FunctionData>() cannot become dangling or be reused
+	// AtomicPointerGet<FunctionData>() cannot become dangling or be reused
 	// for a different function while we dereference it - the "ABA problem"
 	// cannot occur here. The lockless search is safe for the current design.
 	//
@@ -284,7 +284,7 @@ Profiler::FunctionData* Profiler::_FindFunction(const char* function) {
 	uint32 startIndex = index;
 	do {
 		FunctionData* entry =
-			atomic_pointer_get<FunctionData>(&fHashTable[index]);
+			AtomicPointerGet<FunctionData>(&fHashTable[index]);
 		if (entry == NULL)
 			break;
 
@@ -305,7 +305,7 @@ Profiler::FunctionData* Profiler::_FindFunction(const char* function) {
 	startIndex = index;
 	do {
 		FunctionData* entry =
-			atomic_pointer_get<FunctionData>(&fHashTable[index]);
+			AtomicPointerGet<FunctionData>(&fHashTable[index]);
 		if (entry == NULL)
 			break;
 
@@ -326,11 +326,11 @@ Profiler::FunctionData* Profiler::_FindFunction(const char* function) {
 
 		// Insert into hash table.
 		index = hash % kHashTableSize;
-		while (atomic_pointer_get<FunctionData>(&fHashTable[index]) != NULL)
+		while (AtomicPointerGet<FunctionData>(&fHashTable[index]) != NULL)
 			index = (index + 1) % kHashTableSize;
 
 		memory_write_barrier();
-		atomic_pointer_set<FunctionData>(&fHashTable[index], entry);
+		AtomicPointerSet<FunctionData>(&fHashTable[index], entry);
 
 		return entry;
 	}

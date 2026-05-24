@@ -207,7 +207,7 @@ static inline int scheduler_ctz(native_cpu_mask_t value) {
 
 // atomic_pointer: architecture-independent atomic pointer operations.
 template <typename T>
-static inline T* atomic_pointer_get(T* const volatile* pointer) {
+static inline T* AtomicPointerGet(T* const volatile* pointer) {
 #if SCHEDULER_MASK_IS_64_BIT
 	return reinterpret_cast<T*>(LoadAcquire64(*(int64 volatile*)pointer));
 #else
@@ -216,7 +216,7 @@ static inline T* atomic_pointer_get(T* const volatile* pointer) {
 }
 
 template <typename T>
-static inline void atomic_pointer_set(T* volatile* pointer, T* value) {
+static inline void AtomicPointerSet(T* volatile* pointer, T* value) {
 #if SCHEDULER_MASK_IS_64_BIT
 	StoreRelease64(*(int64 volatile*)pointer, (int64)reinterpret_cast<addr_t>(value));
 #else
@@ -225,7 +225,7 @@ static inline void atomic_pointer_set(T* volatile* pointer, T* value) {
 }
 
 template <typename T>
-static inline T* atomic_pointer_test_and_set(T* volatile* pointer, T* newValue,
+static inline T* AtomicPointerTestAndSet(T* volatile* pointer, T* newValue,
 											 T* expectedValue) {
 #if SCHEDULER_MASK_IS_64_BIT
 	return reinterpret_cast<T*>(AtomicTestAndSet64(*(int64 volatile*)pointer,
@@ -472,13 +472,13 @@ class Scheduler {
 public:
 	static inline void SetOperationMode(scheduler_mode mode,
 										scheduler_mode_operations* operations) {
-		atomic_pointer_set<scheduler_mode_operations>(&sCurrentMode,
+		AtomicPointerSet<scheduler_mode_operations>(&sCurrentMode,
 													  operations);
 		StoreRelease(sCurrentModeID, (int32)mode);
 	}
 
 	static inline scheduler_mode_operations* GetCurrentMode() {
-		return atomic_pointer_get<scheduler_mode_operations>(&sCurrentMode);
+		return AtomicPointerGet<scheduler_mode_operations>(&sCurrentMode);
 	}
 
 	static inline scheduler_mode Mode() {

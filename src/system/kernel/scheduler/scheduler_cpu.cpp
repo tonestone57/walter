@@ -50,10 +50,10 @@ Scheduler::UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 
 	uint64 mask = 1ULL << localIndex;
 	if (idle) {
-		AtomicOr64(&gIdleCoresInNode[nodeID], (int64)mask);
-		AtomicOr64(&gIdleNodeSummary, (int64)(1ULL << nodeID));
+		AtomicOr64(gIdleCoresInNode[nodeID], (int64)mask);
+		AtomicOr64(gIdleNodeSummary, (int64)(1ULL << nodeID));
 	} else {
-		AtomicAnd64(&gIdleCoresInNode[nodeID], (int64)~mask);
+		AtomicAnd64(gIdleCoresInNode[nodeID], (int64)~mask);
 		// Double-check: if the entire node is now active, clear summary bit.
 		// Using a loop to handle potential race between cores.
 		while (true) {
@@ -63,7 +63,7 @@ Scheduler::UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 			uint64 summary = (uint64)LoadAcquire64(gIdleNodeSummary);
 			if (!(summary & (1ULL << nodeID))) break;
 
-			if (AtomicTestAndSet64(&gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == (int64)summary)
+			if (AtomicTestAndSet64(gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == (int64)summary)
 				break;
 		}
 	}
@@ -389,7 +389,7 @@ CPUEntry::CPUEntry()
 
 void CPUEntry::Init(int32 id, CoreEntry* core) {
 	fCPUNumber = id;
-	atomic_pointer_set<CoreEntry>(&fCore, core);
+	AtomicPointerSet<CoreEntry>(&fCore, core);
 	fNode = (core != NULL && core->Package() != NULL) ? core->Package()->Node() : NULL;
 	StoreRelease64(fRCULastGeneration, 0);
 	// Note: improve per-CPU RNG seed entropy. On boot, system_time()
@@ -427,7 +427,7 @@ void CPUEntry::Init(int32 id, CoreEntry* core) {
 void CPUEntry::Start() {
 	// fThreadCount and fLoad are already initialized in CoreEntry::AddCPU
 	// while holding the necessary locks.
-	StoreRelease64(&fMeasureTime, system_time());
+	StoreRelease64(fMeasureTime, system_time());
 	StoreRelease64(fMeasureActiveTime, 0);
 }
 
@@ -550,7 +550,7 @@ void CPUEntry::UpdatePriority(int32 priority) {
 	if (oldPriority == priority)
 		return;
 
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	if (core == NULL)
 		return;
 
@@ -587,7 +587,7 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 		if (oldLoad < 0)
 			break;
 		if ((bigtime_t)AtomicTestAndSet64(fMeasureActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
-			StoreRelease64(&fMeasureTime, tempMeasureTime);
+			StoreRelease64(fMeasureTime, tempMeasureTime);
 			currentLoad = tempLoad;
 			break;
 		}
@@ -836,7 +836,7 @@ void CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now) {
 
 		AddRelease64(fMeasureActiveTime, (int64)(active));
 
-		CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+		CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 		if (core != NULL) {
 			core->IncreaseActiveTime(active);
 
@@ -919,7 +919,7 @@ uint32 CPUEntry::GetRandom() {
 }
 
 ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	PackageEntry* package = core->Package();
 
 	int32 registeredCores = package->RegisteredCoreCount();
@@ -991,7 +991,7 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 
 
 ThreadData* CPUEntry::_TryStealWorkNUMA(bigtime_t now) {
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	PackageEntry* package = core->Package();
 	SchedulerNode* node = package->Node();
 
@@ -1013,7 +1013,7 @@ ThreadData* CPUEntry::_TryStealWorkNUMA(bigtime_t now) {
 
 
 ThreadData* CPUEntry::_TryStealWorkGlobal(bigtime_t now) {
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	PackageEntry* package = core->Package();
 
 	ThreadData* stolen = NULL;
