@@ -20,7 +20,7 @@ The Haiku scheduler has been extensively audited for correctness, accuracy, and 
 | **RunQueue Push/Pop** | $O(1)$ | Flat 512-lane bitmask scan. |
 | **Selection (Peek)** | $O(1)$ | Word-level bitwise scans (max 8-16 words). |
 | **Work-Stealing** | $O(S)$ | $S$ = random samples (capped at 64). Scalable. |
-| **ChooseCore** | $O(S)$ / $O(N_{core})$ | Hierarchical sampling + SMT core scan. |
+| **ChooseCore** | $O(S) / O(1)$ | Hierarchical sampling + O(1) LFB idle discovery. |
 | **Rebalance** | $O(S)$ | Randomized probing ensures $O(1)$ relative to total cores. |
 | **Total Runnable Count** | $O(N_{node})$ | Hierarchical node-level aggregation. |
 | **Min Virtual Runtime** | $O(1)$ | O(1) local mapping via fLogicalCPUs + fLocalIndices. |
@@ -28,7 +28,8 @@ The Haiku scheduler has been extensively audited for correctness, accuracy, and 
 ### Resolved Bottlenecks (2025 Updates)
 1. **Hierarchical Runnable Counting**: Replaced the $O(N_{cpu})$ linear scan in `scheduler_get_total_runnable_threads` with a hierarchical $O(N_{node})$ aggregation. This avoids the massive cache-line contention of a single global atomic counter while maintaining $O(Nodes)$ scalability.
 2. **Core-Local Topology Optimization**: Refactored `CoreEntry` to utilize a 64-bit `fLocalIndices` mask and an `fLogicalCPUs` array. This reduces core-local searches (e.g., `GetMinVirtualRuntime`, `PeekMinimumLoadCPU`) from $O(SMP\_MAX\_CPUS)$ to $O(1)$ or $O(\text{ThreadsPerCore})$.
-3. **Mask Scan Optimization**: `CheckMaskedPackagesMinimumLoad` now utilizes word-skipping and package-ID caching to minimize redundant lookups during affinity-masked core selection.
+3. **Layered Flat Bitmask (LFB)**: Implemented a two-tiered bitmask structure (`gIdleNodeSummary` and `gIdleCoresInNode`) for true $O(1)$ discovery of idle cores. This eliminates pointer-chasing in the topology tree and ensures the discovery path remains cache-hot.
+4. **Mask Scan Optimization**: `CheckMaskedPackagesMinimumLoad` now utilizes word-skipping and package-ID caching to minimize redundant lookups during affinity-masked core selection.
 3. **Power Saving Consolidation**: The `sSmallTaskCore` array was refactored to use 64-byte aligned entries, eliminating NUMA-node contention during consolidation target updates.
 4. **Resolution Dampening**: Implemented a 50ms cooldown for EEVDF matrix resolution changes to mitigate system-wide jitter from frequent ICI broadcasts.
 

@@ -34,6 +34,36 @@ SchedulerNode* gSchedulerNodes;
 CPUSet gIdleNodeMask;
 int32 gNodeCount;
 
+uint64 gIdleNodeSummary __attribute__((aligned(64))) = 0;
+uint64 gIdleCoresInNode[64] __attribute__((aligned(64)));
+
+void
+Scheduler::UpdateIdleCoreLFB(CoreEntry* core, bool idle)
+{
+	int32 nodeID = core->Package()->Node()->NodeIndex();
+	int32 localIndex = core->NodeLocalIndex();
+
+	if (nodeID < 0 || nodeID >= 64 || localIndex < 0 || localIndex >= 64)
+		return;
+
+	uint64 mask = 1ULL << localIndex;
+	if (idle) {
+		uint64 old = (uint64)OrAtomic64((int64*)&gIdleCoresInNode[nodeID], (int64)mask);
+		if (old == 0) {
+			OrAtomic64((int64*)&gIdleNodeSummary, (int64)(1ULL << nodeID));
+		}
+	} else {
+		uint64 old = (uint64)AndAtomic64((int64*)&gIdleCoresInNode[nodeID], (int64)~mask);
+		if ((old & mask) != 0 && (old & ~mask) == 0) {
+			// Last idle core in node is now active.
+			// Double-check to catch race: if no other bits are set, clear summary bit.
+			if (LoadAcquire64(gIdleCoresInNode[nodeID]) == 0) {
+				AndAtomic64((int64*)&gIdleNodeSummary, (int64)~(1ULL << nodeID));
+			}
+		}
+	}
+}
+
 struct LocalNodeStealAction {
 	CPUEntry* cpu;
 	PackageEntry* package;

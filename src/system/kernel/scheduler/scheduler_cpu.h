@@ -245,6 +245,7 @@ public:
 	static inline CoreEntry* GetCore(int32 cpu);
 
 	inline int32 ID() const { return fCoreID; }
+	inline int32 NodeLocalIndex() const { return fNodeLocalIndex; }
 	inline PackageEntry* Package() const { return fPackage; }
 	inline int32 PackageIndex() const { return fPackageIndex; }
 	inline int32 CPUCount() const { return LoadAcquire(fCPUCount); }
@@ -358,6 +359,7 @@ private:
 	bigtime_t fLastLoadUpdate __attribute__((aligned(8)));
 
 	int32 fCoreID;
+	int32 fNodeLocalIndex;
 	PackageEntry* fPackage __attribute__((aligned(64)));
 	int32 fPackageIndex;
 
@@ -526,6 +528,12 @@ extern int32 gPackageCount;
 extern SchedulerNode* gSchedulerNodes;
 extern CPUSet gIdleNodeMask;
 extern int32 gNodeCount;
+
+// Layered Flat Bitmask for O(1) idle core discovery (supports up to 4096 cores)
+extern uint64 gIdleNodeSummary __attribute__((aligned(64)));
+extern uint64 gIdleCoresInNode[64] __attribute__((aligned(64)));
+
+void UpdateIdleCoreLFB(CoreEntry* core, bool idle);
 
 inline void CPUEntry::LockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
@@ -792,8 +800,10 @@ inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 	int32 newIdleCount = AddAcquireRelease(fIdleCPUCount, 1) + 1;
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
-	if (cpuCount > 0 && newIdleCount >= cpuCount)
+	if (cpuCount > 0 && newIdleCount >= cpuCount) {
 		fPackage->CoreGoesIdle(this);
+		UpdateIdleCoreLFB(this, true);
+	}
 }
 
 inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
@@ -810,8 +820,10 @@ inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
-	if (AddAcquireRelease(fIdleCPUCount, -1) == cpuCount)
+	if (AddAcquireRelease(fIdleCPUCount, -1) == cpuCount) {
 		fPackage->CoreWakesUp(this);
+		UpdateIdleCoreLFB(this, false);
+	}
 }
 
 /* static */ inline CoreEntry* CoreEntry::GetCore(int32 cpu) {

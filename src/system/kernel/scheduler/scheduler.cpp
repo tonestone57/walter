@@ -1805,6 +1805,9 @@ static status_t init() {
 		gSchedulerNodes[i].SetNUMAID(sNodeToNUMA[i]);
 	}
 
+	gIdleNodeSummary = 0;
+	memset(const_cast<uint64*>(gIdleCoresInNode), 0, sizeof(gIdleCoresInNode));
+
 	gCPUEntries = new (std::nothrow) CPUEntry[cpuCount];
 	gCoreEntries = new (std::nothrow) CoreEntry[coreCount];
 	gPackageEntries = new (std::nothrow) PackageEntry[packageCount];
@@ -1926,6 +1929,12 @@ static status_t init() {
 		coreToPackage[coreIndex] = packageID;
 	}
 
+	int32* nodeCoreCounters = new (std::nothrow) int32[nodeCount];
+	if (nodeCoreCounters == NULL)
+		return B_NO_MEMORY;
+	ArrayDeleter<int32> nodeCoreCountersDeleter(nodeCoreCounters);
+	memset(nodeCoreCounters, 0, sizeof(int32) * nodeCount);
+
 	for (int32 i = 0; i < coreCount; i++) {
 		int32 packageID = coreToPackage[i];
 		CoreEntry* core = &gCoreEntries[i];
@@ -1955,6 +1964,18 @@ static status_t init() {
 		core->Init(i, package);
 		core->fPackageIndex = packageIndex;
 		package->RegisterCore(packageIndex, core);
+
+		int32 nodeID = package->Node()->NodeIndex();
+		if (nodeID >= 0 && nodeID < nodeCount) {
+			int32 nodeLocalIndex = nodeCoreCounters[nodeID]++;
+			if (nodeLocalIndex < 64) {
+				core->fNodeLocalIndex = nodeLocalIndex;
+			} else {
+				core->fNodeLocalIndex = -1;
+			}
+		} else {
+			core->fNodeLocalIndex = -1;
+		}
 	}
 
 	for (int32 i = 0; i < cpuCount; i++) {
