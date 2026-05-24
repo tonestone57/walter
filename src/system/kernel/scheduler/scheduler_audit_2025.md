@@ -73,12 +73,14 @@
 - [x] **Task 2: Dynamic Interconnect-Aware Thresholds**
 - [ ] **Task 3: Hardware-Guided EAS (Energy-Aware Scheduling)**
 - [x] **Task 4: Per-CPU DPC Queue Auditing & Optimization**
+- [x] **Task 5: Optimized Runnable Thread Accounting**
+- [x] **Task 6: Core-Local Topology Iteration Optimization**
 
 ## 5. Performance Bottlenecks & Future Scalability
 
 ### A. CPUSet Iteration Overhead
-On systems with 128+ cores, functions like `CoreEntry::GetMinVirtualRuntime`, `scheduler_get_total_runnable_threads`, and `CheckMaskedPackagesMinimumLoad` perform linear scans of `CPUSet` bitmasks. While optimized with `scheduler_ctz`, the $O(N)$ complexity becomes a measurable bottleneck during high-frequency scheduling events.
-*   **Mitigation**: Consider implementing hierarchical bitmasks or summary counters for high-core-count domains.
+On systems with 128+ cores, functions like `CoreEntry::GetMinVirtualRuntime` and `CheckMaskedPackagesMinimumLoad` perform linear scans of `CPUSet` bitmasks. While optimized with `scheduler_ctz`, the $O(N)$ complexity becomes a measurable bottleneck during high-frequency scheduling events.
+*   **Mitigation**: Optimized global thread accounting via decentralized per-node summation ($O(Nodes)$) instead of a single global atomic counter ($O(1)$) to prevent cache-line contention on many-core systems. Refactored `CoreEntry` to utilize 64-bit `fLocalIndices` for core-local searches, reducing the scan scope from the global `CPUSet` (SMP_MAX_CPUS) to the physical core (max 64 lanes).
 
 ### B. Random Sampling Latency
 `search_global_random` in `scheduler_topology.h` utilizes a hierarchical Node -> Package sampling strategy. On many-node NUMA systems, the multiple levels of RNG calls and bitmask deduplication introduce latency.

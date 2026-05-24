@@ -875,13 +875,14 @@ void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 }
 
 uint32 CPUEntry::GetRandom() {
+	// Xorshift64* generator: fast O(1) RNG with high-quality distribution
+	// for work-stealing and random sampling.
 	uint64 x = fRandomState;
 	x ^= x >> 12;
 	x ^= x << 25;
 	x ^= x >> 27;
 	fRandomState = x;
-	// Multiplicative mapping to mix the state: 0x2545F4914F6CDD1DULL
-	// is a large 64-bit prime constant used to distribute entropy.
+	// Multiplicative mapping using a 64-bit prime constant to mix entropy.
 	return (uint32)((x * 0x2545F4914F6CDD1DULL) >> 32);
 }
 
@@ -1101,6 +1102,7 @@ CoreEntry::CoreEntry()
 	  fCombinedLoad(0),
 	  fLastLoadUpdate(0),
 	  fScoreFactor(1 << 16),
+	  fEnergyModel(NULL),
 	  fLocalIndices(0) {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 }
@@ -1115,10 +1117,29 @@ void CoreEntry::Init(int32 id, PackageEntry* package) {
 
 	fScoreFactor = (kDefaultCapacity << 16) / fCapacity;
 
+	fEnergyModel = NULL;
+
+	memset(fLogicalCPUs, 0, sizeof(fLogicalCPUs));
+
 	fCPUHeap.~CPUPriorityHeap();
 	new (&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
 	if (fCPUHeap.InitCheck() != B_OK)
 		panic("CoreEntry::Init: failed to allocate CPU heap");
+}
+
+
+uint32
+CoreEntry::EstimatePower(int32 load) const
+{
+	if (fEnergyModel == NULL)
+		return 0;
+
+	if (load <= 0)
+		return fEnergyModel->idlePower;
+
+	// Simple linear model: power = idle + (active - idle) * load / 1000
+	uint64 dynamic = (uint64)(fEnergyModel->activePower - fEnergyModel->idlePower) * load;
+	return fEnergyModel->idlePower + (uint32)(dynamic / 1000);
 }
 
 
@@ -1161,6 +1182,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 		}
 	}
 	cpu->fCoreLocalIndex = localIndex;
+	fLogicalCPUs[localIndex] = cpu;
 
 	fCPUSet.SetBitAtomic(cpu->ID());
 
@@ -1207,6 +1229,7 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 	// before RemoveCPU is called (set by scheduler_set_cpu_enabled).
 	int32 oldIdleCount = AddAcquireRelease(fIdleCPUCount, -1);
 
+	fLogicalCPUs[cpu->fCoreLocalIndex] = NULL;
 	fCPUSet.ClearBitAtomic(cpu->ID());
 	int32 oldCPUCount = AddAcquireRelease(fCPUCount, -1);
 
@@ -1259,26 +1282,24 @@ bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Aggregate min vruntime across all CPUs in the core
+	// Aggregate min vruntime across all logical CPUs in this physical core.
+	// Optimization: iterate over fLocalIndices (core-local scope) instead of
+	// the global fCPUSet. This avoids scanning all SMP_MAX_CPUS bits.
 	bigtime_t minVRuntime = 0;
 	bool found = false;
 
-	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-	for (int i = 0; i < kWords; i++) {
-		uint32 bits = fCPUSet.Bits(i);
-		if (bits == 0)
-			continue;
-		while (bits != 0) {
-			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
-			int cpuID = i * 32 + bit;
-			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
+	native_cpu_mask_t bits = cpu_mask_get_atomic(&fLocalIndices);
+	while (bits != 0) {
+		int32 localIndex = scheduler_ctz(bits);
+		CPUEntry* cpu = fLogicalCPUs[localIndex];
+		if (cpu != NULL) {
 			bigtime_t vrt = cpu->GetMinVirtualRuntime();
 			if (vrt > 0 && (!found || vrt < minVRuntime)) {
 				minVRuntime = vrt;
 				found = true;
 			}
-			bits &= ~(1U << bit);
 		}
+		bits &= ~((native_cpu_mask_t)1 << localIndex);
 	}
 
 	return minVRuntime;
@@ -1287,32 +1308,15 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 CPUEntry* CoreEntry::PeekMinimumLoadCPU() {
 	// Optimization: If a physical core is idle, explicitly return the
 	// Primary logical CPU first.
-	// Note: use fCPUSet.FindFirstSet() equivalent via scheduler_ctz()
-	// on each bitmap word rather than iterating all (SMP_MAX_CPUS+31)/32
-	// words. For a core with CPUs in a small ID range this avoids scanning
-	// all zero words before finding the first set bit.
+	// Note: use fLocalIndices for O(1) local mapping.
 	if (fCPUCount > 1 && GetScore() == 0) {
-		// Find first CPU in this core's set using the bitmap directly.
-		// Each word covers 32 CPU IDs; stop at first non-zero word.
-		const int kWords = (SMP_MAX_CPUS + 31) / 32;
-		for (int i = 0; i < kWords; i++) {
-			uint32 bits = fCPUSet.Bits(i);
-			if (bits == 0)
-				continue;
-			int cpu = i * 32 + scheduler_ctz((native_cpu_mask_t)bits);
-			if (cpu < smp_get_num_cpus()) {
-				CPUEntry* entry = &gCPUEntries[cpu];
-				// Note: verify the CPU is still in the heap before
-				// returning it. A concurrent RemoveCPU may have set the heap
-				// key to B_INT32_MIN between the fCPUSet read and this check.
-				// GetKey returns B_INT32_MIN for removed CPUs; any valid CPU
-				// has key >= B_IDLE_PRIORITY (0).
-				if (entry->Core() == this && !gCPU[cpu].disabled &&
-					CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)
-					return entry;
-			}
-			// First set bit found but not valid; fall through to heap path.
-			break;
+		native_cpu_mask_t bits = cpu_mask_get_atomic(&fLocalIndices);
+		if (bits != 0) {
+			int32 localIndex = scheduler_ctz(bits);
+			CPUEntry* entry = fLogicalCPUs[localIndex];
+			if (entry != NULL && !gCPU[entry->ID()].disabled &&
+				CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)
+				return entry;
 		}
 	}
 
@@ -1472,7 +1476,10 @@ void SchedulerNode::Init(int32 id) {
 }
 
 PackageEntry::PackageEntry()
-	: fIdleCoreCount(0), fCoreCount(0), fRegisteredCoreCount(0) {
+	: fIdleCoreCount(0),
+	  fCoreCount(0),
+	  fRegisteredCoreCount(0),
+	  fEnergyModel(NULL) {
 	B_INITIALIZE_RW_SPINLOCK(&fCoreLock);
 }
 
@@ -1486,6 +1493,8 @@ void PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex) {
 	fCoreCount = 0;
 	fRegisteredCoreCount = 0;
 	fMaxAttempts = 0;
+	fEnergyModel = NULL;
+
 	memset(fCores, 0, sizeof(fCores));
 	// Note: explicitly zero fCoreLoads on every Init() call.
 	// If PackageEntry objects are ever reused after a topology rebuild,
@@ -1493,6 +1502,18 @@ void PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex) {
 	memset(fCoreLoads, 0, sizeof(fCoreLoads));
 	// Zero fIdleCoreCount explicitly to match fIdleCoreMask == 0.
 	fIdleCoreCount = 0;
+}
+
+
+uint32
+PackageEntry::EstimatePackagePower(int32 totalLoad) const
+{
+	if (fEnergyModel == NULL)
+		return 0;
+
+	// Package-level power often includes a constant overhead for shared caches
+	// and interconnects.
+	return fEnergyModel->idlePower + (totalLoad * fEnergyModel->activePower) / 1000;
 }
 
 

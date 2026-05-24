@@ -50,6 +50,7 @@ public:
 // Adjusted to sizeof(native_cpu_mask_t) * 8 to support larger clusters on
 // 64-bit. This allows a single L3 domain to span up to 64 cores.
 const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
+const int32 kMaxCPUsPerCore = kMaxCoresPerPackage;
 // Validate the shift range: PackageIndex is in [0, kMaxCoresPerPackage),
 // so (native_cpu_mask_t)1 << PackageIndex() must not overflow. The old
 // assert compared kMaxCoresPerPackage to itself (tautological). This one
@@ -66,6 +67,12 @@ class ThreadRunQueue : public RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY,
 									   ThreadDataDeadlineCompare> {
 public:
 	void Dump() const;
+};
+
+struct EnergyModel {
+	uint32 idlePower;
+	uint32 activePower;
+	uint32 efficiencyScale;
 };
 
 class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
@@ -254,6 +261,11 @@ public:
 
 	inline CPUPriorityHeap* CPUHeap();
 
+	inline const EnergyModel* GetEnergyModel() const { return fEnergyModel; }
+	inline void SetEnergyModel(const EnergyModel* model) { fEnergyModel = model; }
+
+	uint32 EstimatePower(int32 load) const;
+
 	inline int32 ThreadCount() const { return LoadAcquire(fTotalThreadCount); }
 	inline void IncrementTotalThreadCount() {
 		AddRelease(fTotalThreadCount, 1);
@@ -364,7 +376,10 @@ private:
 
 	uint32 fScoreFactor;
 
+	const EnergyModel* fEnergyModel;
+
 	native_cpu_mask_t fLocalIndices __attribute__((aligned(8)));
+	CPUEntry* fLogicalCPUs[kMaxCPUsPerCore];
 
 	friend class DebugDumper;
 } __attribute__((aligned(64)));
@@ -446,6 +461,11 @@ public:
 								  const CPUSet* mask = NULL) const;
 	inline native_cpu_mask_t IdleCoreMask() const;
 	inline int32 IdleCoreCount() const { return LoadAcquire(fIdleCoreCount); }
+
+	inline const EnergyModel* GetEnergyModel() const { return fEnergyModel; }
+	inline void SetEnergyModel(const EnergyModel* model) { fEnergyModel = model; }
+
+	uint32 EstimatePackagePower(int32 totalLoad) const;
 	inline CoreEntry* GetCore(int32 index) const;
 	inline SchedulerNode* Node() const { return fNode; }
 	inline int32 NodeIndex() const { return fNodeIndex; }
@@ -480,6 +500,8 @@ private:
 	int32 fCoreCount;
 	int32 fRegisteredCoreCount;
 	int32 fMaxAttempts;
+
+	const EnergyModel* fEnergyModel;
 
 public:
 	inline int32 CoreCount() const { return fCoreCount; }
