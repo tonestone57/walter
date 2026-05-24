@@ -169,7 +169,7 @@ public:
 	}
 
 	bool SetReschedulePending() {
-		return GetAndSet(fReschedulePending, 1) == 0;
+		return AtomicGetAndSet(fReschedulePending, 1) == 0;
 	}
 	void ClearReschedulePending() { StoreRelease(fReschedulePending, 0); }
 
@@ -300,7 +300,7 @@ public:
 		// even if multiple CPUs update it concurrently.
 		bigtime_t old = (bigtime_t)LoadAcquire64(fSystemVirtualTime);
 		while (time > old) {
-			if ((bigtime_t)TestAndSet64(fSystemVirtualTime, (int64)time, (int64)old) == old)
+			if ((bigtime_t)AtomicTestAndSet64(fSystemVirtualTime, (int64)time, (int64)old) == old)
 				break;
 			old = (bigtime_t)LoadAcquire64(fSystemVirtualTime);
 		}
@@ -623,8 +623,7 @@ inline CPUPriorityHeap* CoreEntry::CPUHeap() {
 
 inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 	SCHEDULER_ENTER_FUNCTION();
-	AddRelease64(fActiveTime,
-				 (int64)activeTime);
+	AddRelease64(fActiveTime, (int64)activeTime);
 }
 
 inline bigtime_t CoreEntry::GetActiveTime() const {
@@ -644,8 +643,7 @@ inline void CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad,
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = AddAcquireRelease64(fCombinedLoad,
-		(int64)load << 32);
+	int64 oldCombined = AddRelease64(fCombinedLoad, (int64)load << 32);
 	if ((uint32)oldCombined != epoch)
 		AddRelease(fLoad, load);
 
@@ -659,8 +657,7 @@ inline uint32 CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now) {
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = AddAcquireRelease64(fCombinedLoad,
-		(int64)(-load) << 32);
+	int64 oldCombined = AddRelease64(fCombinedLoad, (int64)(-load) << 32);
 	if (force) {
 		AddRelease(fLoad, -load);
 
@@ -679,8 +676,7 @@ inline void CoreEntry::ChangeLoad(int32 delta, bigtime_t now) {
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 
 	if (delta != 0) {
-		AddRelease64(fCombinedLoad,
-			(int64)delta << 32);
+		AddRelease64(fCombinedLoad, (int64)delta << 32);
 		AddRelease(fLoad, delta);
 	}
 
@@ -706,6 +702,7 @@ inline void PackageEntry::CoreGoesIdle(CoreEntry* core) {
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
+	UpdateIdleCoreLFB(core, true);
 }
 
 inline void PackageEntry::CoreWakesUp(CoreEntry* core) {
@@ -728,6 +725,7 @@ inline void PackageEntry::CoreWakesUp(CoreEntry* core) {
 		if (fNode != NULL)
 			fNode->PackageWakesUp(this);
 	}
+	UpdateIdleCoreLFB(core, false);
 }
 
 inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
@@ -738,7 +736,7 @@ inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 		return;
 
 	// fIdlePackageMask is native_cpu_mask_t (32-bit on 32-bit
-	// systems); atomic_or64 writes 8 bytes over a 4-byte field, corrupting
+	// systems); ::atomic_or64 writes 8 bytes over a 4-byte field, corrupting
 	// adjacent struct memory.  Use cpu_mask_or_atomic throughout.
 	native_cpu_mask_t oldMask = cpu_mask_or_atomic(
 		&fIdlePackageMask, (native_cpu_mask_t)1 << package->NodeIndex());
@@ -800,12 +798,11 @@ inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 	// barrier between atomic-add(fIdleCPUCount) and atomic-get(fCPUCount),
 	// the CPU could observe fCPUCount before fIdleCPUCount increment is
 	// globally visible, causing a spurious PackageGoesIdle call.
-	int32 newIdleCount = AddAcquireRelease(fIdleCPUCount, 1) + 1;
+	int32 newIdleCount = AddRelease(fIdleCPUCount, 1) + 1;
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
 	if (cpuCount > 0 && newIdleCount >= cpuCount) {
 		fPackage->CoreGoesIdle(this);
-		UpdateIdleCoreLFB(this, true);
 	}
 }
 
@@ -823,9 +820,8 @@ inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
-	if (AddAcquireRelease(fIdleCPUCount, -1) == cpuCount) {
+	if (AddRelease(fIdleCPUCount, -1) == cpuCount) {
 		fPackage->CoreWakesUp(this);
-		UpdateIdleCoreLFB(this, false);
 	}
 }
 

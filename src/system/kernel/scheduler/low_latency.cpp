@@ -358,7 +358,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 	// search already found a suitable core.
 	// Layered Flat Bitmask (LFB) Optimization: Achieving O(1) idle discovery.
 	if (!skipIdleScan) {
-		uint64 summary = LoadAcquire64(gIdleNodeSummary);
+		uint64 summary = atomic_get64(gIdleNodeSummary);
 
 		// Prioritize current NUMA node (Stage 1 LFB)
 		int32 localNodeID = -1;
@@ -369,7 +369,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		}
 
 		if (localNodeID >= 0 && localNodeID < gNodeCount && (summary & (1ULL << localNodeID))) {
-			uint64 nodeMask = LoadAcquire64(gIdleCoresInNode[localNodeID]);
+			uint64 nodeMask = atomic_get64(gIdleCoresInNode[localNodeID]);
 			while (nodeMask != 0) {
 				int32 localIdx = scheduler_ctz(nodeMask);
 				nodeMask &= ~(1ULL << localIdx);
@@ -391,7 +391,7 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 				summary &= ~(1ULL << nIdx);
 				if (nIdx == localNodeID || nIdx >= gNodeCount) continue;
 
-				uint64 nodeMask = LoadAcquire64(gIdleCoresInNode[nIdx]);
+				uint64 nodeMask = atomic_get64(gIdleCoresInNode[nIdx]);
 				while (nodeMask != 0) {
 					int32 localIdx = scheduler_ctz(nodeMask);
 					nodeMask &= ~(1ULL << localIdx);
@@ -826,11 +826,11 @@ static void rebalance_irqs(bool idle) {
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
-	if (GetAndSet(cpuEntry->fRebalancePending, 1) == 0) {
+	if (atomic_get_and_set(cpuEntry->fRebalancePending, 1) == 0) {
 		cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 		cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 		if (DPCQueue::CPUQueue(newCPU, B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC) != B_OK)
-			StoreRelease(cpuEntry->fRebalancePending, 0);
+			atomic_set(cpuEntry->fRebalancePending, 0);
 	}
 }
 

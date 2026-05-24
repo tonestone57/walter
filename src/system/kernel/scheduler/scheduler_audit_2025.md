@@ -75,12 +75,17 @@
 - [x] **Task 4: Per-CPU DPC Queue Auditing & Optimization**
 - [x] **Task 5: Optimized Runnable Thread Accounting**
 - [x] **Task 6: Core-Local Topology Iteration Optimization**
+- [x] **Task 7: Layered Flat Bitmask (LFB) for O(1) Idle Discovery**
+- [x] **Task 8: Directed Quantum Handoff (DQH) for Message Chains**
 
 ## 5. Performance Bottlenecks & Future Scalability
 
 ### A. CPUSet Iteration Overhead
 On systems with 128+ cores, functions like `CoreEntry::GetMinVirtualRuntime` and `CheckMaskedPackagesMinimumLoad` perform linear scans of `CPUSet` bitmasks. While optimized with `scheduler_ctz`, the $O(N)$ complexity becomes a measurable bottleneck during high-frequency scheduling events.
-*   **Mitigation**: Optimized global thread accounting via decentralized per-node summation ($O(Nodes)$) instead of a single global atomic counter ($O(1)$) to prevent cache-line contention on many-core systems. Refactored `CoreEntry` to utilize 64-bit `fLocalIndices` for core-local searches, reducing the scan scope from the global `CPUSet` (SMP_MAX_CPUS) to the physical core (max 64 lanes).
+*   **Mitigation**:
+    - **Decentralized Runnable Counting**: Optimized global thread accounting via decentralized per-node summation ($O(Nodes)$) instead of a single global atomic counter to prevent cache-line contention.
+    - **Core-Local Bitmasks**: Refactored `CoreEntry` to utilize 64-bit `fLocalIndices` for core-local searches, reducing the scan scope from the global `CPUSet` (SMP_MAX_CPUS) to the physical core (max 64 lanes).
+    - **Layered Flat Bitmask (LFB)**: Implemented a two-tiered atomic bitmask structure (`gIdleNodeSummary` and `gIdleCoresInNode`) for deterministic $O(1) discovery of idle cores across up to 4096 cores, eliminating hierarchical tree walks.
 
 ### B. Random Sampling Latency
 `search_global_random` in `scheduler_topology.h` utilizes a hierarchical Node -> Package sampling strategy. On many-node NUMA systems, the multiple levels of RNG calls and bitmask deduplication introduce latency.
@@ -92,4 +97,8 @@ The `sSmallTaskCore` array in `power_saving.cpp` is a source of cache-line conte
 
 ### D. EEVDF Matrix Resolution Updates
 Updating the EEVDF matrix resolution (via `update_quantum_lengths_dpc`) requires a global ICI broadcast and RCU synchronization. Frequent interactivity changes (e.g., rapid window switching) can trigger these expensive operations too often.
-*   **Mitigation**: Implement a "dampening" filter or limit the frequency of resolution updates.
+*   **Mitigation**: Implemented a 50ms cooldown "dampening" filter and an atomic re-check loop in the resolution update DPC to consolidate rapid changes.
+
+### E. Message-Driven UI Latency
+Coupled threads (e.g., `app_server` and UI looper) frequently block on each other, leading to repeated "GoesAway/Enqueue" cycles that incur full selection matrix search costs.
+*   **Mitigation**: Implemented **Directed Quantum Handoff (DQH)**. Interacting threads can now donate their remaining timeslice and trigger an immediate context switch to the partner thread, bypassing the run-queue selection logic entirely for message chains.

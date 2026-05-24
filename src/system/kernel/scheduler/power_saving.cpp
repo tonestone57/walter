@@ -387,7 +387,7 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	}
 
 	if (nodeID >= 0 && nodeID < gNodeCount) {
-		uint64 nodeMask = LoadAcquire64(gIdleCoresInNode[nodeID]);
+		uint64 nodeMask = atomic_get64(gIdleCoresInNode[nodeID]);
 		while (nodeMask != 0) {
 			int32 localIdx = scheduler_ctz(nodeMask);
 			nodeMask &= ~(1ULL << localIdx);
@@ -399,14 +399,14 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	}
 
 	// Step 2: Global LFB Discovery (O(1) summary scan)
-	uint64 summary = LoadAcquire64(gIdleNodeSummary);
+	uint64 summary = atomic_get64(gIdleNodeSummary);
 	while (summary != 0) {
 		int32 nIdx = scheduler_ctz(summary);
 		summary &= ~(1ULL << nIdx);
 
 		if (nIdx == nodeID || nIdx >= gNodeCount) continue;
 
-		uint64 nodeMask = LoadAcquire64(gIdleCoresInNode[nIdx]);
+		uint64 nodeMask = atomic_get64(gIdleCoresInNode[nIdx]);
 		while (nodeMask != 0) {
 			int32 localIdx = scheduler_ctz(nodeMask);
 			nodeMask &= ~(1ULL << localIdx);
@@ -1098,11 +1098,11 @@ static void rebalance_irqs(bool idle) {
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
-	if (GetAndSet(cpuEntry->fRebalancePending, 1) == 0) {
+	if (atomic_get_and_set(cpuEntry->fRebalancePending, 1) == 0) {
 		cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 		cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 		if (DPCQueue::CPUQueue(newCPU, B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC) != B_OK)
-			StoreRelease(cpuEntry->fRebalancePending, 0);
+			atomic_set(cpuEntry->fRebalancePending, 0);
 	}
 }
 

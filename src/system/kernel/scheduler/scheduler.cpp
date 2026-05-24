@@ -84,14 +84,13 @@ void scheduler_synchronize() {
 
 	// Increment the global generation counter.  All future reschedules
 	// will observe the new value.
-	int64 targetGen = AddAcquireRelease64(gRCUGeneration, 1) +
+	int64 targetGen = AddRelease64(gRCUGeneration, 1) +
 					   1;
 
 	// Update current CPU generation to match, so future synchronizations
 	// don't wait for us unnecessarily, and so that we don't deadlock if another
 	// CPU is also waiting for us in scheduler_synchronize().
-	StoreRelease64(CPUEntry::GetCPU(thisCPU)->fRCULastGeneration,
-				 targetGen);
+	StoreRelease64(CPUEntry::GetCPU(thisCPU)->fRCULastGeneration, targetGen);
 
 	// Broadcast an ICI to all other enabled CPUs to force them into a quiescent
 	// state (reschedule).
@@ -133,7 +132,7 @@ void scheduler_call_rcu(void (*callback)(void*), void* arg) {
 	entry->arg = arg;
 
 	// Increment generation and set target
-	entry->targetGen = AddAcquireRelease64(gRCUGeneration, 1) + 1;
+	entry->targetGen = AddRelease64(gRCUGeneration, 1) + 1;
 
 	CPUEntry* cpu = CPUEntry::GetCPU(smp_get_current_cpu());
 	InterruptsSpinLocker locker(cpu->fRCUCallbackLock);
@@ -243,7 +242,7 @@ static void update_quantum_lengths_dpc(void* /*arg*/) {
 		if ((int64)LoadAcquire(sInteractivityState.pendingDPCTarget) == targetResolution)
 			break;
 
-		if (GetAndSet(sInteractivityState.dpcPending, 1) != 0) {
+		if (AtomicGetAndSet(sInteractivityState.dpcPending, 1) != 0) {
 			// Another CPU already queued a new DPC; we are done.
 			break;
 		}
@@ -265,7 +264,7 @@ static status_t interaction_timer_hook(struct timer* timer) {
 	StoreRelease(sInteractivityState.timerArmed, 0);
 
 	StoreRelease(sInteractivityState.pendingDPCTarget, 5000000);
-	if (GetAndSet(sInteractivityState.dpcPending, 1) == 0) {
+	if (AtomicGetAndSet(sInteractivityState.dpcPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
@@ -330,8 +329,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 							  : 1200;  // fallback: 1.2ms minimal quantum
 
 	while (now - lastTime >= threshold) {
-		if ((bigtime_t)TestAndSet64(sInteractivityState.lastInteractionTime, (int64)now,
-				(int64)lastTime) == lastTime) {
+		if ((bigtime_t)AtomicTestAndSet64(sInteractivityState.lastInteractionTime, (int64)now, (int64)lastTime) == lastTime) {
 			lastTime = now;
 			break;
 		}
@@ -351,7 +349,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	if (currentBucketSize == 1000000) {
 		// Replace non-atomic timer_is_active()+add_timer() pair
 		// with an atomic test-and-set so only one CPU arms the timer.
-		if (GetAndSet(sInteractivityState.timerArmed, 1) == 0) {
+		if (AtomicGetAndSet(sInteractivityState.timerArmed, 1) == 0) {
 			add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 					  B_ONE_SHOT_RELATIVE_TIMER);
 		}
@@ -374,7 +372,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// the CAS wiped a concurrent CPU's already-queued flag, allowing both CPUs
 	// to satisfy the "old == 0" check and enqueue duplicate DPCs.
 	StoreRelease(sInteractivityState.pendingDPCTarget, 1000000);
-	if (GetAndSet(sInteractivityState.dpcPending, 1) == 0) {
+	if (AtomicGetAndSet(sInteractivityState.dpcPending, 1) == 0) {
 		int64 target = (int64)LoadAcquire(sInteractivityState.pendingDPCTarget);
 		if (DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY)
 				->Add(&update_quantum_lengths_dpc, (void*)(addr_t)target) !=
@@ -394,7 +392,7 @@ void scheduler_update_interaction_state(bigtime_t now) {
 	// Only arm the timer if the DPC was successfully queued above.
 	// Note: sTimerArmed must not be set if Add() failed, since we
 	// returned early above in that case and never reach this line.
-	if (GetAndSet(sInteractivityState.timerArmed, 1) == 0) {
+	if (AtomicGetAndSet(sInteractivityState.timerArmed, 1) == 0) {
 		add_timer(&sInteractionTimer, &interaction_timer_hook, 500000,
 				  B_ONE_SHOT_RELATIVE_TIMER);
 	}
@@ -700,8 +698,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 								 (bigtime_t)LoadAcquire64(targetCPU->fLastReschedule),
 								 kRescheduleCooldown)) {
 				if (targetCPU->SetReschedulePending()) {
-					StoreRelease64(targetCPU->fLastReschedule,
-										   (int64)now);
+					StoreRelease64(targetCPU->fLastReschedule, (int64)now);
 					smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
 								 NULL, SMP_MSG_FLAG_ASYNC);
 				}
@@ -928,8 +925,7 @@ static void reschedule(int32 nextState, Thread* handoffTarget = NULL) {
 	// RCU Quiescent State: Report current generation.
 	// Since reschedule() runs with interrupts disabled, it forms a
 	// natural RCU critical section boundary.
-	StoreRelease64(cpu->fRCULastGeneration,
-				 LoadAcquire64(gRCUGeneration));
+	StoreRelease64(cpu->fRCULastGeneration, LoadAcquire64(gRCUGeneration));
 
 	gCPU[thisCPU].invoke_scheduler = false;
 
@@ -1013,20 +1009,35 @@ static void reschedule(int32 nextState, Thread* handoffTarget = NULL) {
 	// select thread with the biggest priority and enqueue back the old thread
 	ThreadData* nextThreadData = NULL;
 
-	if (handoffTarget != NULL) {
-		InterruptsSpinLocker handoffLocker(handoffTarget->scheduler_lock);
-		nextThreadData = handoffTarget->scheduler_data;
+	if (handoffTarget != NULL && handoffTarget != oldThread) {
+		// Use try_acquire to avoid AB-BA deadlocks with couples
+		if (try_acquire_spinlock(&handoffTarget->scheduler_lock)) {
+			nextThreadData = handoffTarget->scheduler_data;
 
-		if (nextThreadData != NULL && handoffTarget->state == B_THREAD_READY) {
-			// Directed Quantum Handoff: Skip BMQ matrix search
-			// and run the target thread immediately.
-			if (nextThreadData->IsEnqueued())
-				nextThreadData->Dequeue();
-
-			oldThreadData->DonateTimesliceTo(handoffTarget, now);
-			handoffTarget->state = B_THREAD_RUNNING;
-		} else {
-			nextThreadData = NULL;
+			if (nextThreadData != NULL && handoffTarget->state == B_THREAD_READY) {
+				// Directed Quantum Handoff: Skip BMQ selection and run
+				// target immediately.
+				if (nextThreadData->IsEnqueued()) {
+					// To safely dequeue from a potentially remote CPU queue,
+					// we'd need its runqueue lock. Bailing if remote to ensure
+					// consistency for now.
+					CPUEntry* enqueuedCPU = nextThreadData->EnqueuedCPU();
+					if (enqueuedCPU != NULL && enqueuedCPU->ID() == thisCPU) {
+						nextThreadData->Dequeue();
+						oldThreadData->DonateTimesliceTo(handoffTarget, now);
+						handoffTarget->state = B_THREAD_RUNNING;
+					} else {
+						nextThreadData = NULL;
+						release_spinlock(&handoffTarget->scheduler_lock);
+					}
+				} else {
+					oldThreadData->DonateTimesliceTo(handoffTarget, now);
+					handoffTarget->state = B_THREAD_RUNNING;
+				}
+			} else {
+				nextThreadData = NULL;
+				release_spinlock(&handoffTarget->scheduler_lock);
+			}
 		}
 	}
 
@@ -1095,7 +1106,12 @@ static void reschedule(int32 nextState, Thread* handoffTarget = NULL) {
 				oldThreadData->PutBack(now);
 		}
 
-		acquire_spinlock(&nextThread->scheduler_lock);
+		// If nextThread is the handoff target, we already hold its lock.
+		if (nextThreadData != NULL && nextThread == handoffTarget) {
+			// Already locked above.
+		} else {
+			acquire_spinlock(&nextThread->scheduler_lock);
+		}
 	}
 
 	TRACE("reschedule(): cpu %" B_PRId32 ", next thread = %" B_PRId32 "\n",
@@ -1171,7 +1187,6 @@ void scheduler_reschedule(int32 nextState) {
 void
 scheduler_reschedule_handoff(Thread* target)
 {
-	ASSERT(!are_interrupts_enabled());
 	SCHEDULER_ENTER_FUNCTION();
 
 	if (!LoadAcquire(sSchedulerEnabled)) {
@@ -1179,7 +1194,14 @@ scheduler_reschedule_handoff(Thread* target)
 		return;
 	}
 
+	cpu_status state = disable_interrupts();
+	Thread* thread = thread_get_current_thread();
+	acquire_spinlock(&thread->scheduler_lock);
+
 	reschedule(B_THREAD_READY, target);
+
+	release_spinlock(&thread->scheduler_lock);
+	restore_interrupts(state);
 }
 
 
@@ -1198,7 +1220,7 @@ void scheduler_on_thread_init(Thread* thread) {
 
 	if (thread_is_idle_thread(thread)) {
 		static int32 sIdleThreadsID __attribute__((aligned(8)));
-		int32 cpuID = AddAcquireRelease(sIdleThreadsID, 1);
+		int32 cpuID = AddRelease(sIdleThreadsID, 1);
 
 		thread->previous_cpu = &gCPU[cpuID];
 		thread->pinned_to_cpu = cpuID + 1;
@@ -1679,12 +1701,12 @@ measure_latency_ns(int32 targetCPU)
 
 	// Use fThreadCount as a sacrificial target for atomic ops.
 	// It's 4-byte aligned and safe to read/write.
-	volatile int32* target = (int32*)&gCPUEntries[targetCPU].fThreadCount;
+	volatile int32* target = &gCPUEntries[targetCPU].fThreadCount;
 	const int32 kIterations = 10000;
 
 	bigtime_t start = system_time();
 	for (int32 i = 0; i < kIterations; i++) {
-		atomic_or((int32*)target, 0);
+		AtomicOr(target, 0);
 	}
 	bigtime_t end = system_time();
 
@@ -1839,7 +1861,7 @@ static status_t init() {
 	}
 
 	gIdleNodeSummary = 0;
-	memset(const_cast<uint64*>(gIdleCoresInNode), 0, sizeof(gIdleCoresInNode));
+	memset(gIdleCoresInNode, 0, sizeof(gIdleCoresInNode));
 	memset(gNodeCoreMap, 0, sizeof(gNodeCoreMap));
 
 	gCPUEntries = new (std::nothrow) CPUEntry[cpuCount];

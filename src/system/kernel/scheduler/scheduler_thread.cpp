@@ -48,8 +48,7 @@ void ThreadData::_InitBase() {
 	fHomePackage = -1;
 
 	fEffectivePriority = GetPriority();
-	StoreRelease64(fBaseQuantum,
-		(int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
+	StoreRelease64(&fBaseQuantum, (int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
 				THREAD_MAX_SET_PRIORITY)]));
 
 	StoreRelease64(fTimeUsed, 0);
@@ -622,7 +621,7 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 							   tempLoad, now);
 		if (oldLoad < 0)
 			break;
-		if (TestAndSet64(fMeasureAvailableActiveTime, (int64)((uint64)tempMeasureActiveTime), (int64)measureActiveTime) ==
+		if (AtomicTestAndSet64(fMeasureAvailableActiveTime, (int64)((uint64)tempMeasureActiveTime), (int64)measureActiveTime) ==
 			(int64)measureActiveTime) {
 			StoreRelease64(fLastMeasureAvailableTime, (int64)tempLastMeasureTime);
 			fNeededLoad = tempLoad;
@@ -812,8 +811,7 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		}
 	}
 
-	StoreRelease64(fBaseQuantum,
-		(int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
+	StoreRelease64(&fBaseQuantum, (int64)LoadAcquire64(sQuantumLengths[min_c(GetEffectivePriority(),
 				THREAD_MAX_SET_PRIORITY)]));
 }
 

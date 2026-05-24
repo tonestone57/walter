@@ -50,18 +50,21 @@ Scheduler::UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 
 	uint64 mask = 1ULL << localIndex;
 	if (idle) {
-		uint64 old = (uint64)OrAtomic64((int64*)&gIdleCoresInNode[nodeID], (int64)mask);
-		if (old == 0) {
-			OrAtomic64((int64*)&gIdleNodeSummary, (int64)(1ULL << nodeID));
-		}
+		AtomicOr64(&gIdleCoresInNode[nodeID], (int64)mask);
+		AtomicOr64(&gIdleNodeSummary, (int64)(1ULL << nodeID));
 	} else {
-		uint64 old = (uint64)AndAtomic64((int64*)&gIdleCoresInNode[nodeID], (int64)~mask);
-		if ((old & mask) != 0 && (old & ~mask) == 0) {
-			// Last idle core in node is now active.
-			// Double-check to catch race: if no other bits are set, clear summary bit.
-			if (LoadAcquire64(gIdleCoresInNode[nodeID]) == 0) {
-				AndAtomic64((int64*)&gIdleNodeSummary, (int64)~(1ULL << nodeID));
-			}
+		AtomicAnd64(&gIdleCoresInNode[nodeID], (int64)~mask);
+		// Double-check: if the entire node is now active, clear summary bit.
+		// Using a loop to handle potential race between cores.
+		while (true) {
+			uint64 cores = (uint64)LoadAcquire64(gIdleCoresInNode[nodeID]);
+			if (cores != 0) break;
+
+			uint64 summary = (uint64)LoadAcquire64(gIdleNodeSummary);
+			if (!(summary & (1ULL << nodeID))) break;
+
+			if (AtomicTestAndSet64(&gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == (int64)summary)
+				break;
 		}
 	}
 }
@@ -424,8 +427,7 @@ void CPUEntry::Init(int32 id, CoreEntry* core) {
 void CPUEntry::Start() {
 	// fThreadCount and fLoad are already initialized in CoreEntry::AddCPU
 	// while holding the necessary locks.
-	StoreRelease64(fMeasureTime,
-				 system_time());
+	StoreRelease64(&fMeasureTime, system_time());
 	StoreRelease64(fMeasureActiveTime, 0);
 }
 
@@ -584,10 +586,8 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 							   tempLoad, now);
 		if (oldLoad < 0)
 			break;
-		if ((bigtime_t)TestAndSet64(fMeasureActiveTime,
-				tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
-			StoreRelease64(fMeasureTime,
-						 tempMeasureTime);
+		if ((bigtime_t)AtomicTestAndSet64(fMeasureActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
+			StoreRelease64(&fMeasureTime, tempMeasureTime);
 			currentLoad = tempLoad;
 			break;
 		}
@@ -1259,11 +1259,11 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 
 	// The CPU is guaranteed to be idle and accounted for in fIdleCPUCount
 	// before RemoveCPU is called (set by scheduler_set_cpu_enabled).
-	int32 oldIdleCount = AddAcquireRelease(fIdleCPUCount, -1);
+	int32 oldIdleCount = AddRelease(fIdleCPUCount, -1);
 
 	fLogicalCPUs[cpu->fCoreLocalIndex] = NULL;
 	fCPUSet.ClearBitAtomic(cpu->ID());
-	int32 oldCPUCount = AddAcquireRelease(fCPUCount, -1);
+	int32 oldCPUCount = AddRelease(fCPUCount, -1);
 
 	if (oldCPUCount == 1) {
 		// core has been disabled
@@ -1379,13 +1379,13 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 	if (!forceUpdate) {
 		if (now < kLoadMeasureInterval + lastUpdate)
 			return;
-		if (TestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
+		if (AtomicTestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
 			return;
 		}
 	} else {
 		// on CAS failure another CPU won the update race; that
 		// update is sufficient, so return rather than silently skipping.
-		if (TestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
+		if (AtomicTestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
 			return;
 		}
 	}
@@ -1405,8 +1405,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch;  // Load reset to 0
 
-		int64 actual = TestAndSet64(fCombinedLoad,
-			newCombined, oldCombined);
+		int64 actual = AtomicTestAndSet64(fCombinedLoad, newCombined, oldCombined);
 		if (actual == oldCombined) {
 			// Note: snapshot prevLoad immediately after winning the
 			// outer CAS on fCombinedLoad, not before the loop.  The original
@@ -1440,7 +1439,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 				if (newFLoad < 0)
 					newFLoad = 0;
 
-				int32 actualLoad = TestAndSet(fLoad, (int32)newFLoad, (int32)currentFLoad);
+				int32 actualLoad = AtomicTestAndSet(fLoad, (int32)newFLoad, (int32)currentFLoad);
 				if (actualLoad == currentFLoad)
 					break;
 
@@ -1470,8 +1469,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 
 			int32 load = (int32)(oldCombined >> 32) / freshCPUCount;
 			load = ((int64)load * fScoreFactor) >> 16;
-			StoreRelease(fPackage->fCoreLoads[fPackageIndex],
-						 min_c(load, (int32)kMaxLoad));
+			StoreRelease(fPackage->fCoreLoads[fPackageIndex], min_c(load, (int32)kMaxLoad));
 			return;
 		}
 		oldCombined = actual;
@@ -1482,8 +1480,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 		load = ((int64)load * fScoreFactor) >> 16;
 
 		int32 oldLoad = LoadAcquire(fPackage->fCoreLoads[fPackageIndex]);
-		StoreRelease(fPackage->fCoreLoads[fPackageIndex],
-					 SmoothLoad(oldLoad, min_c(load, (int32)kMaxLoad)));
+		StoreRelease(fPackage->fCoreLoads[fPackageIndex], SmoothLoad(oldLoad, min_c(load, (int32)kMaxLoad)));
 	}
 }
 
