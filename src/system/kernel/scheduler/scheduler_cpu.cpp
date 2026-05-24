@@ -1511,9 +1511,15 @@ PackageEntry::EstimatePackagePower(int32 totalLoad) const
 	if (fEnergyModel == NULL)
 		return 0;
 
-	// Package-level power often includes a constant overhead for shared caches
-	// and interconnects.
-	return fEnergyModel->idlePower + (totalLoad * fEnergyModel->activePower) / 1000;
+	// Simple linear model for package power.
+	// activePower is the total power of the package at maximum possible load.
+	// totalLoad is the sum of loads of all cores in the package.
+	int32 maxPackageLoad = fRegisteredCoreCount * 1000;
+	if (totalLoad <= 0 || maxPackageLoad <= 0)
+		return fEnergyModel->idlePower;
+
+	uint64 dynamic = (uint64)(fEnergyModel->activePower - fEnergyModel->idlePower) * totalLoad;
+	return fEnergyModel->idlePower + (uint32)(dynamic / maxPackageLoad);
 }
 
 
