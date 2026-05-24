@@ -533,6 +533,9 @@ extern int32 gNodeCount;
 extern uint64 gIdleNodeSummary __attribute__((aligned(64)));
 extern uint64 gIdleCoresInNode[64] __attribute__((aligned(64)));
 
+// Mapping table for O(1) CoreEntry retrieval from node-local index
+extern CoreEntry* gNodeCoreMap[64][64] __attribute__((aligned(64)));
+
 void UpdateIdleCoreLFB(CoreEntry* core, bool idle);
 
 inline void CPUEntry::LockRunQueue() {

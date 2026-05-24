@@ -37,6 +37,8 @@ int32 gNodeCount;
 uint64 gIdleNodeSummary __attribute__((aligned(64))) = 0;
 uint64 gIdleCoresInNode[64] __attribute__((aligned(64)));
 
+CoreEntry* gNodeCoreMap[64][64] __attribute__((aligned(64)));
+
 void
 Scheduler::UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 {
@@ -1567,6 +1569,7 @@ void PackageEntry::AddIdleCore(CoreEntry* core) {
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
+	UpdateIdleCoreLFB(core, true);
 }
 
 
@@ -1595,6 +1598,7 @@ void PackageEntry::RemoveIdleCore(CoreEntry* core) {
 		if (fNode != NULL)
 			fNode->PackageWakesUp(this);
 	}
+	UpdateIdleCoreLFB(core, false);
 }
 
 CoreEntry* PackageEntry::GetIdleCore(int32 index) const {

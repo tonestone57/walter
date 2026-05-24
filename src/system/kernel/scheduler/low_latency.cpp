@@ -369,24 +369,18 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 		}
 
 		if (localNodeID >= 0 && localNodeID < gNodeCount && (summary & (1ULL << localNodeID))) {
-			SchedulerNode* node = &gSchedulerNodes[localNodeID];
-			int32 pkgCount = node->PackageCount();
-			int32 basePkg = node->PackageStartIndex();
-			for (int32 i = 0; i < pkgCount; i++) {
-				PackageEntry* pkg = &gPackageEntries[basePkg + i];
-				uint64 pkgIdle = pkg->IdleCoreMask();
-				while (pkgIdle != 0) {
-					int32 bitIdx = scheduler_ctz(pkgIdle);
-					pkgIdle &= ~(1ULL << bitIdx);
-					CoreEntry* candidate = pkg->GetCore(bitIdx);
-					if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-						if (preferMax && candidate->Type() != gMaxCoreType && gMinCoreType != gMaxCoreType) continue;
-						if (preferMin && candidate->Type() != gMinCoreType && gMinCoreType != gMaxCoreType) continue;
-						core = candidate;
-						break;
-					}
+			uint64 nodeMask = LoadAcquire64(gIdleCoresInNode[localNodeID]);
+			while (nodeMask != 0) {
+				int32 localIdx = scheduler_ctz(nodeMask);
+				nodeMask &= ~(1ULL << localIdx);
+
+				CoreEntry* candidate = gNodeCoreMap[localNodeID][localIdx];
+				if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+					if (preferMax && candidate->Type() != gMaxCoreType && gMinCoreType != gMaxCoreType) continue;
+					if (preferMin && candidate->Type() != gMinCoreType && gMinCoreType != gMaxCoreType) continue;
+					core = candidate;
+					break;
 				}
-				if (core != NULL) break;
 			}
 		}
 
@@ -397,24 +391,18 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 				summary &= ~(1ULL << nIdx);
 				if (nIdx == localNodeID || nIdx >= gNodeCount) continue;
 
-				SchedulerNode* node = &gSchedulerNodes[nIdx];
-				int32 pkgCount = node->PackageCount();
-				int32 basePkg = node->PackageStartIndex();
-				for (int32 i = 0; i < pkgCount; i++) {
-					PackageEntry* pkg = &gPackageEntries[basePkg + i];
-					uint64 pkgIdle = pkg->IdleCoreMask();
-					while (pkgIdle != 0) {
-						int32 bitIdx = scheduler_ctz(pkgIdle);
-						pkgIdle &= ~(1ULL << bitIdx);
-						CoreEntry* candidate = pkg->GetCore(bitIdx);
-						if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
-							if (preferMax && candidate->Type() != gMaxCoreType && gMinCoreType != gMaxCoreType) continue;
-							if (preferMin && candidate->Type() != gMinCoreType && gMinCoreType != gMaxCoreType) continue;
-							core = candidate;
-							break;
-						}
+				uint64 nodeMask = LoadAcquire64(gIdleCoresInNode[nIdx]);
+				while (nodeMask != 0) {
+					int32 localIdx = scheduler_ctz(nodeMask);
+					nodeMask &= ~(1ULL << localIdx);
+
+					CoreEntry* candidate = gNodeCoreMap[nIdx][localIdx];
+					if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+						if (preferMax && candidate->Type() != gMaxCoreType && gMinCoreType != gMaxCoreType) continue;
+						if (preferMin && candidate->Type() != gMinCoreType && gMinCoreType != gMaxCoreType) continue;
+						core = candidate;
+						break;
 					}
-					if (core != NULL) break;
 				}
 				if (core != NULL) break;
 			}

@@ -918,7 +918,7 @@ static inline void switch_thread(Thread* fromThread, Thread* toThread) {
 }
 
 
-static void reschedule(int32 nextState) {
+static void reschedule(int32 nextState, Thread* handoffTarget = NULL) {
 	ASSERT(!are_interrupts_enabled());
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -1011,8 +1011,26 @@ static void reschedule(int32 nextState) {
 	oldThread->has_yielded = false;
 
 	// select thread with the biggest priority and enqueue back the old thread
-	ThreadData* nextThreadData;
-	if (gCPU[thisCPU].disabled) {
+	ThreadData* nextThreadData = NULL;
+
+	if (handoffTarget != NULL) {
+		InterruptsSpinLocker handoffLocker(handoffTarget->scheduler_lock);
+		nextThreadData = handoffTarget->scheduler_data;
+
+		if (nextThreadData != NULL && handoffTarget->state == B_THREAD_READY) {
+			// Directed Quantum Handoff: Skip BMQ matrix search
+			// and run the target thread immediately.
+			if (nextThreadData->IsEnqueued())
+				nextThreadData->Dequeue();
+
+			oldThreadData->DonateTimesliceTo(handoffTarget, now);
+			handoffTarget->state = B_THREAD_RUNNING;
+		} else {
+			nextThreadData = NULL;
+		}
+	}
+
+	if (nextThreadData == NULL && gCPU[thisCPU].disabled) {
 		if (!oldThreadData->IsIdle()) {
 			putOldThreadAtBack = true;
 			oldThreadData->UnassignCore(true);
@@ -1147,6 +1165,21 @@ void scheduler_reschedule(int32 nextState) {
 	}
 
 	reschedule(nextState);
+}
+
+
+void
+scheduler_reschedule_handoff(Thread* target)
+{
+	ASSERT(!are_interrupts_enabled());
+	SCHEDULER_ENTER_FUNCTION();
+
+	if (!LoadAcquire(sSchedulerEnabled)) {
+		scheduler_reschedule(B_THREAD_READY);
+		return;
+	}
+
+	reschedule(B_THREAD_READY, target);
 }
 
 
@@ -1807,6 +1840,7 @@ static status_t init() {
 
 	gIdleNodeSummary = 0;
 	memset(const_cast<uint64*>(gIdleCoresInNode), 0, sizeof(gIdleCoresInNode));
+	memset(gNodeCoreMap, 0, sizeof(gNodeCoreMap));
 
 	gCPUEntries = new (std::nothrow) CPUEntry[cpuCount];
 	gCoreEntries = new (std::nothrow) CoreEntry[coreCount];
@@ -1970,6 +2004,8 @@ static status_t init() {
 			int32 nodeLocalIndex = nodeCoreCounters[nodeID]++;
 			if (nodeLocalIndex < 64) {
 				core->fNodeLocalIndex = nodeLocalIndex;
+				if (nodeID < 64)
+					gNodeCoreMap[nodeID][nodeLocalIndex] = core;
 			} else {
 				core->fNodeLocalIndex = -1;
 			}

@@ -585,8 +585,12 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 		ASSERT(!are_interrupts_enabled());
 		SpinLocker locker(beneficiary->scheduler_lock);
 		ThreadData* beneficiaryData = beneficiary->scheduler_data;
-		if (beneficiaryData != NULL)
+		if (beneficiaryData != NULL) {
 			AddRelease64(beneficiaryData->fStolenTime, (int64)timeLeft);
+			// Handoff Boost: Grant the beneficiary a temporary urgency bonus
+			// to ensure it starts processing the message immediately.
+			beneficiaryData->ResetPriorityBoost(now);
+		}
 	}
 
 	// Exhaust donor slice: we expect the donor to yield or be descheduled

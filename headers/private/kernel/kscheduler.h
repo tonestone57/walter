@@ -40,6 +40,7 @@ void scheduler_reschedule_ici(void);
 	The caller must hold the current thread \c scheduler_lock.
 */
 void scheduler_reschedule(int32 next_state);
+void scheduler_reschedule_handoff(Thread* target);
 
 /*!	Sets the given thread's priority.
 	The thread may be running or may be in the ready-to-run queue.

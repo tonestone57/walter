@@ -388,22 +388,13 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 
 	if (nodeID >= 0 && nodeID < gNodeCount) {
 		uint64 nodeMask = LoadAcquire64(gIdleCoresInNode[nodeID]);
-		if (nodeMask != 0) {
+		while (nodeMask != 0) {
 			int32 localIdx = scheduler_ctz(nodeMask);
-			// Find CoreEntry by local index within node.
-			// This requires iterating the node's packages (hierarchical fallback).
-			// LFB ensures the core exists, so scan is bounded and predictable.
-			SchedulerNode* node = &gSchedulerNodes[nodeID];
-			int32 pkgCount = node->PackageCount();
-			int32 basePkg = node->PackageStartIndex();
-			for (int32 i = 0; i < pkgCount; i++) {
-				PackageEntry* pkg = &gPackageEntries[basePkg + i];
-				uint64 pkgIdle = pkg->IdleCoreMask();
-				if (pkgIdle != 0) {
-					CoreEntry* candidate = pkg->GetIdleCorePacking(cpu, mask);
-					if (candidate != NULL) return candidate;
-				}
-			}
+			nodeMask &= ~(1ULL << localIdx);
+
+			CoreEntry* candidate = gNodeCoreMap[nodeID][localIdx];
+			if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask)))
+				return candidate;
 		}
 	}
 
@@ -416,18 +407,13 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 		if (nIdx == nodeID || nIdx >= gNodeCount) continue;
 
 		uint64 nodeMask = LoadAcquire64(gIdleCoresInNode[nIdx]);
-		if (nodeMask != 0) {
-			SchedulerNode* node = &gSchedulerNodes[nIdx];
-			int32 pkgCount = node->PackageCount();
-			int32 basePkg = node->PackageStartIndex();
-			for (int32 i = 0; i < pkgCount; i++) {
-				PackageEntry* pkg = &gPackageEntries[basePkg + i];
-				uint64 pkgIdle = pkg->IdleCoreMask();
-				if (pkgIdle != 0) {
-					CoreEntry* candidate = pkg->GetIdleCorePacking(cpu, mask);
-					if (candidate != NULL) return candidate;
-				}
-			}
+		while (nodeMask != 0) {
+			int32 localIdx = scheduler_ctz(nodeMask);
+			nodeMask &= ~(1ULL << localIdx);
+
+			CoreEntry* candidate = gNodeCoreMap[nIdx][localIdx];
+			if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask)))
+				return candidate;
 		}
 	}
 
