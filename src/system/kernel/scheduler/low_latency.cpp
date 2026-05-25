@@ -356,70 +356,57 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 
 	// wake new package/core - skipped when thread coloring or home-package
 	// search already found a suitable core.
-	int scannedCount = 0;
-	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-	for (int32 i = 0; !skipIdleScan && i < kWords; i++) {
-		uint32 bits = gIdleNodeMask.Bits(i);
-		while (bits != 0) {
-			if (++scannedCount > kMaxCPUsToScan) {
-				skipIdleScan = true;
-				break;
-			}
+	// Layered Flat Bitmask (LFB) Optimization: Achieving O(1) idle discovery.
+	if (!skipIdleScan) {
+		uint64 summary = atomic_get64(gIdleNodeSummary);
 
-			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
-			bits &= ~(1U << bit);
-			int32 nodeIndex = i * 32 + bit;
+		// Prioritize current NUMA node (Stage 1 LFB)
+		int32 localNodeID = -1;
+		CoreEntry* currentCore = cpu->Core();
+		if (currentCore != NULL && currentCore->Package() != NULL &&
+			currentCore->Package()->Node() != NULL) {
+			localNodeID = currentCore->Package()->NodeIndex();
+		}
 
-			if (nodeIndex >= gNodeCount)
-				continue;
+		if (localNodeID >= 0 && localNodeID < gNodeCount && (summary & (1ULL << localNodeID))) {
+			uint64 nodeMask = atomic_get64(gIdleCoresInNode[localNodeID]);
+			while (nodeMask != 0) {
+				int32 localIdx = scheduler_ctz(nodeMask);
+				nodeMask &= ~(1ULL << localIdx);
 
-			SchedulerNode* node = &gSchedulerNodes[nodeIndex];
-		native_cpu_mask_t idlePackageMask = node->IdlePackageMask();
-
-		while (idlePackageMask != 0) {
-			int32 packageIndex = scheduler_flsnative(idlePackageMask) - 1;
-			idlePackageMask &= ~((native_cpu_mask_t)1 << packageIndex);
-
-			int32 globalPackageIndex = node->PackageStartIndex() + packageIndex;
-			// Safety check for bounds, though masks shouldn't be set if out of
-			// bounds
-			if (globalPackageIndex >= gPackageCount)
-				continue;
-
-			PackageEntry* package = &gPackageEntries[globalPackageIndex];
-			native_cpu_mask_t idleMask = package->IdleCoreMask();
-			while (idleMask != 0) {
-				int32 bitIdx = scheduler_ctz(idleMask);
-				idleMask &= ~((native_cpu_mask_t)1 << bitIdx);
-
-				CoreEntry* candidate = package->GetCore(bitIdx);
-				if (candidate != NULL &&
-					(!useMask || candidate->CPUMask().Matches(mask))) {
-					// enforce thread-coloring type preference on the
-					// idle-core result.
-					if (preferMax && candidate->Type() != gMaxCoreType &&
-						gMinCoreType != gMaxCoreType) {
-						continue;
-					}
-					if (preferMin && candidate->Type() != gMinCoreType &&
-						gMinCoreType != gMaxCoreType) {
-						continue;
-					}
-
-					// Note: only accept the candidate if it truly
-					// matches. Do not set core and then break only to have the
-					// outer loop reset it - test the full condition here so
-					// that a mismatched candidate does not prevent scanning
-					// remaining bits in idleMask.
+				CoreEntry* candidate = gNodeCoreMap[localNodeID][localIdx];
+				if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+					if (preferMax && candidate->Type() != gMaxCoreType && gMinCoreType != gMaxCoreType) continue;
+					if (preferMin && candidate->Type() != gMinCoreType && gMinCoreType != gMaxCoreType) continue;
 					core = candidate;
-					break;	// exits idleMask loop
+					break;
 				}
 			}
-			if (core != NULL)
-				break;	// exits idlePackageMask loop
 		}
-		if (core != NULL)
-			break;	// exits idleNodeMask loop
+
+		// Stage 2 LFB: Global Scan
+		if (core == NULL) {
+			while (summary != 0) {
+				int32 nIdx = scheduler_ctz(summary);
+				summary &= ~(1ULL << nIdx);
+				if (nIdx == localNodeID || nIdx >= gNodeCount) continue;
+
+				uint64 nodeMask = atomic_get64(gIdleCoresInNode[nIdx]);
+				while (nodeMask != 0) {
+					int32 localIdx = scheduler_ctz(nodeMask);
+					nodeMask &= ~(1ULL << localIdx);
+
+					CoreEntry* candidate = gNodeCoreMap[nIdx][localIdx];
+					if (candidate != NULL && (!useMask || candidate->CPUMask().Matches(mask))) {
+						if (preferMax && candidate->Type() != gMaxCoreType && gMinCoreType != gMaxCoreType) continue;
+						if (preferMin && candidate->Type() != gMinCoreType && gMinCoreType != gMaxCoreType) continue;
+						core = candidate;
+						break;
+					}
+				}
+				if (core != NULL) break;
+			}
+		}
 	}
 
 	if (core == NULL) {
@@ -839,7 +826,7 @@ static void rebalance_irqs(bool idle) {
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
-	if (GetAndSet(cpuEntry->fRebalancePending, 1) == 0) {
+	if (AtomicGetAndSet(cpuEntry->fRebalancePending, 1) == 0) {
 		cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 		cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 		if (DPCQueue::CPUQueue(newCPU, B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC) != B_OK)

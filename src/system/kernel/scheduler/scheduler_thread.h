@@ -160,12 +160,12 @@ public:
 	SCHEDULER_INLINE void SetEnqueued(CPUEntry* cpu) {
 		fEnqueued = true;
 		fEnqueuedInCPURunQueue = true;
-		atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, cpu);
+		AtomicPointerSet<CPUEntry>(&fEnqueuedCPU, cpu);
 	}
 	SCHEDULER_INLINE void SetDequeued() {
 		fEnqueued = false;
 		fEnqueuedInCPURunQueue = false;
-		atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, (CPUEntry*)NULL);
+		AtomicPointerSet<CPUEntry>(&fEnqueuedCPU, (CPUEntry*)NULL);
 	}
 
 	SCHEDULER_INLINE int32 GetLoad() const { return fNeededLoad; }
@@ -180,11 +180,11 @@ public:
 	}
 
 	SCHEDULER_INLINE CoreEntry* Core() const {
-		return atomic_pointer_get<CoreEntry>(
+		return AtomicPointerGet<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 	}
 	SCHEDULER_INLINE CPUEntry* EnqueuedCPU() const {
-		return atomic_pointer_get<CPUEntry>(
+		return AtomicPointerGet<CPUEntry>(
 			const_cast<CPUEntry* volatile*>(&fEnqueuedCPU));
 	}
 	void UnassignCore(bool running = false);
@@ -364,7 +364,7 @@ inline bigtime_t ThreadData::GetQuantumLeft() {
 	bigtime_t stolenTime __attribute__((aligned(8)));
 	do {
 		stolenTime = (bigtime_t)LoadAcquire64(fStolenTime);
-	} while ((bigtime_t)TestAndSet64(fStolenTime, 0, (int64)stolenTime) != stolenTime);
+	} while ((bigtime_t)AtomicTestAndSet64(fStolenTime,  0,  (int64)stolenTime) != stolenTime);
 
 	bigtime_t quantum =
 		ComputeQuantum() - (bigtime_t)LoadAcquire64(fTimeUsed);
@@ -392,7 +392,7 @@ inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,
 		now - (bigtime_t)LoadAcquire64(fQuantumStart);
 	ASSERT(timeUsed >= 0);
 	bigtime_t timeUsedTotal =
-		(bigtime_t)AddAcquireRelease64(fTimeUsed, (int64)timeUsed) +
+		(bigtime_t)AddRelease64(fTimeUsed, (int64)timeUsed) +
 		timeUsed;
 	const bigtime_t kMaxTimeUsed = Scheduler::MaximumLatency() * 2;
 	if (timeUsedTotal > kMaxTimeUsed) {
@@ -468,7 +468,7 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 			fAssignedCPU = NULL;
 		}
 
-		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
+		CoreEntry* const snap = AtomicPointerGet<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 		if (snap != NULL) {
 			snap->DecrementTotalThreadCount();
@@ -488,7 +488,7 @@ inline void ThreadData::GoesAway(bigtime_t now) {
 
 	StoreRelease64(fWentSleep, (int64)now);
 	{
-		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
+		CoreEntry* const snap = AtomicPointerGet<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 		StoreRelease64(fWentSleepActive, (int64)((snap != NULL) ? snap->GetActiveTime() : 0));
 		if (gTrackCoreLoad && snap != NULL)
@@ -517,7 +517,7 @@ inline void ThreadData::Dies(bigtime_t now) {
 			fAssignedCPU = NULL;
 		}
 
-		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(
+		CoreEntry* const snap = AtomicPointerGet<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 		if (snap != NULL) {
 			snap->DecrementTotalThreadCount();
@@ -529,7 +529,7 @@ inline void ThreadData::Dies(bigtime_t now) {
 	}
 
 	if (gTrackCoreLoad) {
-		CoreEntry* const snap = atomic_pointer_get<CoreEntry>(&fCore);
+		CoreEntry* const snap = AtomicPointerGet<CoreEntry>(&fCore);
 		if (snap != NULL)
 			snap->RemoveLoad(fNeededLoad, true, now);
 	}
@@ -718,7 +718,7 @@ inline bool ThreadData::Dequeue() {
 
 	cpu->Remove(this);
 	ASSERT(!fEnqueued);
-	atomic_pointer_set<CPUEntry>(&fEnqueuedCPU, (CPUEntry*)NULL);
+	AtomicPointerSet<CPUEntry>(&fEnqueuedCPU, (CPUEntry*)NULL);
 	return true;
 }
 
@@ -746,7 +746,7 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 		(svt > B_INT64_MAX - kLookahead) ? B_INT64_MAX : svt + kLookahead;
 
 	// Note: 32-bit Torn Read Guard.
-	// On 32-bit platforms, LoadAcquire64 might not be natively atomic.
+	// On 32-bit platforms, ::atomic_get64 might not be natively atomic.
 	// Although scheduler_common.h provides a wrapper, we use the CAS
 	// result itself as the authoritative source of the current value to
 	// ensure the update loop never operates on a torn snapshot.
@@ -754,14 +754,13 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 	while (vRuntime < ceiling) {
 		bigtime_t next = (vRuntime < ceiling - delta) ? vRuntime + delta : ceiling;
 
-		bigtime_t old = (bigtime_t)TestAndSet64(fThread->virtual_runtime, (int64)next,
-												(int64)vRuntime);
+		bigtime_t old = (bigtime_t)AtomicTestAndSet64(fThread->virtual_runtime, (int64)next, (int64)vRuntime);
 		if (old == vRuntime)
 			break;
 
 		// Note: snapshot consistency.
-		// If TestAndSet64 fails, it returns the *actual* current value.
-		// On 32-bit targets, if the first LoadAcquire64 was torn, this
+		// If ::atomic_test_and_set64 fails, it returns the *actual* current value.
+		// On 32-bit targets, if the first ::atomic_get64 was torn, this
 		// assignment from 'old' corrects it for the next iteration.
 		vRuntime = old;
 	}

@@ -93,6 +93,7 @@ The following optimizations, inspired by the QAD proposal, have been implemented
 The 16x32 matrix structure has been replaced with a flat **512-lane bitmask**.
 -   **L1 Cache Efficiency**: Selection metadata is now consolidated into **exactly one 64-byte cache line**. This ensures that the scheduling state remains "hot" and avoids multiple cache-line fills during context switches.
 -   **Branchless Selection Path**: By using **inverted SLI mapping** (`lane = fli * 32 + (31 - sli)`), the scheduler ensures that higher bit indices always represent higher priority. This simplifies selection to a single word-level bit-scan (`scheduler_flsnative`), eliminating branches and dependent loads.
+-   **Pipeline Friendliness**: The 512-lane flat structure allows modern superscalar CPUs to speculatively load the single metadata cache line, significantly reducing pipeline stalls compared to the previous two-level dependent load matrix.
 -   **Memory Footprint**: Reduced the per-CPU metadata footprint from ~136 bytes to 64 bytes (2.1x reduction).
 -   **32-bit Portability**: On 32-bit architectures, the bitmask is unrolled into 16x32-bit words, allowing efficient scanning using native assembly primitives without 64-bit emulation overhead.
 

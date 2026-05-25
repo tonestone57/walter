@@ -34,6 +34,41 @@ SchedulerNode* gSchedulerNodes;
 CPUSet gIdleNodeMask;
 int32 gNodeCount;
 
+uint64 gIdleNodeSummary __attribute__((aligned(64))) = 0;
+uint64 gIdleCoresInNode[64] __attribute__((aligned(64)));
+
+CoreEntry* gNodeCoreMap[64][64] __attribute__((aligned(64)));
+
+void
+UpdateIdleCoreLFB(CoreEntry* core, bool idle)
+{
+	int32 nodeID = core->Package()->Node()->NodeIndex();
+	int32 localIndex = core->NodeLocalIndex();
+
+	if (nodeID < 0 || nodeID >= 64 || localIndex < 0 || localIndex >= 64)
+		return;
+
+	uint64 mask = 1ULL << localIndex;
+	if (idle) {
+		AtomicOr64(gIdleCoresInNode[nodeID], (int64)mask);
+		AtomicOr64(gIdleNodeSummary, (int64)(1ULL << nodeID));
+	} else {
+		AtomicAnd64(gIdleCoresInNode[nodeID], (int64)~mask);
+		// Double-check: if the entire node is now active, clear summary bit.
+		// Using a loop to handle potential race between cores.
+		while (true) {
+			uint64 cores = (uint64)LoadAcquire64(gIdleCoresInNode[nodeID]);
+			if (cores != 0) break;
+
+			uint64 summary = (uint64)LoadAcquire64(gIdleNodeSummary);
+			if (!(summary & (1ULL << nodeID))) break;
+
+			if (AtomicTestAndSet64(gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == (int64)summary)
+				break;
+		}
+	}
+}
+
 struct LocalNodeStealAction {
 	CPUEntry* cpu;
 	PackageEntry* package;
@@ -354,7 +389,7 @@ CPUEntry::CPUEntry()
 
 void CPUEntry::Init(int32 id, CoreEntry* core) {
 	fCPUNumber = id;
-	atomic_pointer_set<CoreEntry>(&fCore, core);
+	AtomicPointerSet<CoreEntry>(&fCore, core);
 	fNode = (core != NULL && core->Package() != NULL) ? core->Package()->Node() : NULL;
 	StoreRelease64(fRCULastGeneration, 0);
 	// Note: improve per-CPU RNG seed entropy. On boot, system_time()
@@ -392,8 +427,7 @@ void CPUEntry::Init(int32 id, CoreEntry* core) {
 void CPUEntry::Start() {
 	// fThreadCount and fLoad are already initialized in CoreEntry::AddCPU
 	// while holding the necessary locks.
-	StoreRelease64(fMeasureTime,
-				 system_time());
+	StoreRelease64(fMeasureTime, system_time());
 	StoreRelease64(fMeasureActiveTime, 0);
 }
 
@@ -516,7 +550,7 @@ void CPUEntry::UpdatePriority(int32 priority) {
 	if (oldPriority == priority)
 		return;
 
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	if (core == NULL)
 		return;
 
@@ -552,10 +586,8 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 							   tempLoad, now);
 		if (oldLoad < 0)
 			break;
-		if ((bigtime_t)TestAndSet64(fMeasureActiveTime,
-				tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
-			StoreRelease64(fMeasureTime,
-						 tempMeasureTime);
+		if ((bigtime_t)AtomicTestAndSet64(fMeasureActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
+			StoreRelease64(fMeasureTime, tempMeasureTime);
 			currentLoad = tempLoad;
 			break;
 		}
@@ -804,7 +836,7 @@ void CPUEntry::UpdateActiveTime(ThreadData* oldThreadData, bigtime_t now) {
 
 		AddRelease64(fMeasureActiveTime, (int64)(active));
 
-		CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+		CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 		if (core != NULL) {
 			core->IncreaseActiveTime(active);
 
@@ -875,18 +907,19 @@ void CPUEntry::TrackLoad(ThreadData* nextThreadData, bigtime_t now) {
 }
 
 uint32 CPUEntry::GetRandom() {
+	// Xorshift64* generator: fast O(1) RNG with high-quality distribution
+	// for work-stealing and random sampling.
 	uint64 x = fRandomState;
 	x ^= x >> 12;
 	x ^= x << 25;
 	x ^= x >> 27;
 	fRandomState = x;
-	// Multiplicative mapping to mix the state: 0x2545F4914F6CDD1DULL
-	// is a large 64-bit prime constant used to distribute entropy.
+	// Multiplicative mapping using a 64-bit prime constant to mix entropy.
 	return (uint32)((x * 0x2545F4914F6CDD1DULL) >> 32);
 }
 
 ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	PackageEntry* package = core->Package();
 
 	int32 registeredCores = package->RegisteredCoreCount();
@@ -958,7 +991,7 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 
 
 ThreadData* CPUEntry::_TryStealWorkNUMA(bigtime_t now) {
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	PackageEntry* package = core->Package();
 	SchedulerNode* node = package->Node();
 
@@ -980,7 +1013,7 @@ ThreadData* CPUEntry::_TryStealWorkNUMA(bigtime_t now) {
 
 
 ThreadData* CPUEntry::_TryStealWorkGlobal(bigtime_t now) {
-	CoreEntry* core = atomic_pointer_get<CoreEntry>(&fCore);
+	CoreEntry* core = AtomicPointerGet<CoreEntry>(&fCore);
 	PackageEntry* package = core->Package();
 
 	ThreadData* stolen = NULL;
@@ -1101,6 +1134,7 @@ CoreEntry::CoreEntry()
 	  fCombinedLoad(0),
 	  fLastLoadUpdate(0),
 	  fScoreFactor(1 << 16),
+	  fEnergyModel(NULL),
 	  fLocalIndices(0) {
 	B_INITIALIZE_SPINLOCK(&fCPULock);
 }
@@ -1115,10 +1149,29 @@ void CoreEntry::Init(int32 id, PackageEntry* package) {
 
 	fScoreFactor = (kDefaultCapacity << 16) / fCapacity;
 
+	fEnergyModel = NULL;
+
+	memset(fLogicalCPUs, 0, sizeof(fLogicalCPUs));
+
 	fCPUHeap.~CPUPriorityHeap();
 	new (&fCPUHeap) CPUPriorityHeap(smp_get_num_cpus());
 	if (fCPUHeap.InitCheck() != B_OK)
 		panic("CoreEntry::Init: failed to allocate CPU heap");
+}
+
+
+uint32
+CoreEntry::EstimatePower(int32 load) const
+{
+	if (fEnergyModel == NULL)
+		return 0;
+
+	if (load <= 0)
+		return fEnergyModel->idlePower;
+
+	// Simple linear model: power = idle + (active - idle) * load / 1000
+	uint64 dynamic = (uint64)(fEnergyModel->activePower - fEnergyModel->idlePower) * load;
+	return fEnergyModel->idlePower + (uint32)(dynamic / 1000);
 }
 
 
@@ -1161,6 +1214,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 		}
 	}
 	cpu->fCoreLocalIndex = localIndex;
+	fLogicalCPUs[localIndex] = cpu;
 
 	fCPUSet.SetBitAtomic(cpu->ID());
 
@@ -1205,10 +1259,11 @@ void CoreEntry::RemoveCPU(CPUEntry* cpu,
 
 	// The CPU is guaranteed to be idle and accounted for in fIdleCPUCount
 	// before RemoveCPU is called (set by scheduler_set_cpu_enabled).
-	int32 oldIdleCount = AddAcquireRelease(fIdleCPUCount, -1);
+	int32 oldIdleCount = AddRelease(fIdleCPUCount, -1);
 
+	fLogicalCPUs[cpu->fCoreLocalIndex] = NULL;
 	fCPUSet.ClearBitAtomic(cpu->ID());
-	int32 oldCPUCount = AddAcquireRelease(fCPUCount, -1);
+	int32 oldCPUCount = AddRelease(fCPUCount, -1);
 
 	if (oldCPUCount == 1) {
 		// core has been disabled
@@ -1259,26 +1314,24 @@ bigtime_t CPUEntry::GetMinVirtualRuntime() const {
 bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 	SCHEDULER_ENTER_FUNCTION();
 
-	// Aggregate min vruntime across all CPUs in the core
+	// Aggregate min vruntime across all logical CPUs in this physical core.
+	// Optimization: iterate over fLocalIndices (core-local scope) instead of
+	// the global fCPUSet. This avoids scanning all SMP_MAX_CPUS bits.
 	bigtime_t minVRuntime = 0;
 	bool found = false;
 
-	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-	for (int i = 0; i < kWords; i++) {
-		uint32 bits = fCPUSet.Bits(i);
-		if (bits == 0)
-			continue;
-		while (bits != 0) {
-			int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
-			int cpuID = i * 32 + bit;
-			CPUEntry* cpu = CPUEntry::GetCPU(cpuID);
+	native_cpu_mask_t bits = cpu_mask_get_atomic(&fLocalIndices);
+	while (bits != 0) {
+		int32 localIndex = scheduler_ctz(bits);
+		CPUEntry* cpu = fLogicalCPUs[localIndex];
+		if (cpu != NULL) {
 			bigtime_t vrt = cpu->GetMinVirtualRuntime();
 			if (vrt > 0 && (!found || vrt < minVRuntime)) {
 				minVRuntime = vrt;
 				found = true;
 			}
-			bits &= ~(1U << bit);
 		}
+		bits &= ~((native_cpu_mask_t)1 << localIndex);
 	}
 
 	return minVRuntime;
@@ -1287,32 +1340,15 @@ bigtime_t CoreEntry::GetMinVirtualRuntime() const {
 CPUEntry* CoreEntry::PeekMinimumLoadCPU() {
 	// Optimization: If a physical core is idle, explicitly return the
 	// Primary logical CPU first.
-	// Note: use fCPUSet.FindFirstSet() equivalent via scheduler_ctz()
-	// on each bitmap word rather than iterating all (SMP_MAX_CPUS+31)/32
-	// words. For a core with CPUs in a small ID range this avoids scanning
-	// all zero words before finding the first set bit.
+	// Note: use fLocalIndices for O(1) local mapping.
 	if (fCPUCount > 1 && GetScore() == 0) {
-		// Find first CPU in this core's set using the bitmap directly.
-		// Each word covers 32 CPU IDs; stop at first non-zero word.
-		const int kWords = (SMP_MAX_CPUS + 31) / 32;
-		for (int i = 0; i < kWords; i++) {
-			uint32 bits = fCPUSet.Bits(i);
-			if (bits == 0)
-				continue;
-			int cpu = i * 32 + scheduler_ctz((native_cpu_mask_t)bits);
-			if (cpu < smp_get_num_cpus()) {
-				CPUEntry* entry = &gCPUEntries[cpu];
-				// Note: verify the CPU is still in the heap before
-				// returning it. A concurrent RemoveCPU may have set the heap
-				// key to B_INT32_MIN between the fCPUSet read and this check.
-				// GetKey returns B_INT32_MIN for removed CPUs; any valid CPU
-				// has key >= B_IDLE_PRIORITY (0).
-				if (entry->Core() == this && !gCPU[cpu].disabled &&
-					CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)
-					return entry;
-			}
-			// First set bit found but not valid; fall through to heap path.
-			break;
+		native_cpu_mask_t bits = cpu_mask_get_atomic(&fLocalIndices);
+		if (bits != 0) {
+			int32 localIndex = scheduler_ctz(bits);
+			CPUEntry* entry = fLogicalCPUs[localIndex];
+			if (entry != NULL && !gCPU[entry->ID()].disabled &&
+				CPUPriorityHeap::GetKey(entry) >= B_IDLE_PRIORITY)
+				return entry;
 		}
 	}
 
@@ -1343,13 +1379,13 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 	if (!forceUpdate) {
 		if (now < kLoadMeasureInterval + lastUpdate)
 			return;
-		if (TestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
+		if (AtomicTestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
 			return;
 		}
 	} else {
 		// on CAS failure another CPU won the update race; that
 		// update is sufficient, so return rather than silently skipping.
-		if (TestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
+		if (AtomicTestAndSet64(fLastLoadUpdate, (int64)(now), (int64)(lastUpdate)) != lastUpdate) {
 			return;
 		}
 	}
@@ -1369,8 +1405,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 		uint32 nextEpoch = (uint32)oldCombined + 1;
 		int64 newCombined = (int64)nextEpoch;  // Load reset to 0
 
-		int64 actual = TestAndSet64(fCombinedLoad,
-			newCombined, oldCombined);
+		int64 actual = AtomicTestAndSet64(fCombinedLoad, newCombined, oldCombined);
 		if (actual == oldCombined) {
 			// Note: snapshot prevLoad immediately after winning the
 			// outer CAS on fCombinedLoad, not before the loop.  The original
@@ -1404,7 +1439,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 				if (newFLoad < 0)
 					newFLoad = 0;
 
-				int32 actualLoad = TestAndSet(fLoad, (int32)newFLoad, (int32)currentFLoad);
+				int32 actualLoad = AtomicTestAndSet(fLoad, (int32)newFLoad, (int32)currentFLoad);
 				if (actualLoad == currentFLoad)
 					break;
 
@@ -1434,8 +1469,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 
 			int32 load = (int32)(oldCombined >> 32) / freshCPUCount;
 			load = ((int64)load * fScoreFactor) >> 16;
-			StoreRelease(fPackage->fCoreLoads[fPackageIndex],
-						 min_c(load, (int32)kMaxLoad));
+			StoreRelease(fPackage->fCoreLoads[fPackageIndex], min_c(load, (int32)kMaxLoad));
 			return;
 		}
 		oldCombined = actual;
@@ -1446,8 +1480,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 		load = ((int64)load * fScoreFactor) >> 16;
 
 		int32 oldLoad = LoadAcquire(fPackage->fCoreLoads[fPackageIndex]);
-		StoreRelease(fPackage->fCoreLoads[fPackageIndex],
-					 SmoothLoad(oldLoad, min_c(load, (int32)kMaxLoad)));
+		StoreRelease(fPackage->fCoreLoads[fPackageIndex], SmoothLoad(oldLoad, min_c(load, (int32)kMaxLoad)));
 	}
 }
 
@@ -1472,7 +1505,10 @@ void SchedulerNode::Init(int32 id) {
 }
 
 PackageEntry::PackageEntry()
-	: fIdleCoreCount(0), fCoreCount(0), fRegisteredCoreCount(0) {
+	: fIdleCoreCount(0),
+	  fCoreCount(0),
+	  fRegisteredCoreCount(0),
+	  fEnergyModel(NULL) {
 	B_INITIALIZE_RW_SPINLOCK(&fCoreLock);
 }
 
@@ -1486,6 +1522,8 @@ void PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex) {
 	fCoreCount = 0;
 	fRegisteredCoreCount = 0;
 	fMaxAttempts = 0;
+	fEnergyModel = NULL;
+
 	memset(fCores, 0, sizeof(fCores));
 	// Note: explicitly zero fCoreLoads on every Init() call.
 	// If PackageEntry objects are ever reused after a topology rebuild,
@@ -1493,6 +1531,24 @@ void PackageEntry::Init(int32 id, SchedulerNode* node, int32 nodeIndex) {
 	memset(fCoreLoads, 0, sizeof(fCoreLoads));
 	// Zero fIdleCoreCount explicitly to match fIdleCoreMask == 0.
 	fIdleCoreCount = 0;
+}
+
+
+uint32
+PackageEntry::EstimatePackagePower(int32 totalLoad) const
+{
+	if (fEnergyModel == NULL)
+		return 0;
+
+	// Simple linear model for package power.
+	// activePower is the total power of the package at maximum possible load.
+	// totalLoad is the sum of loads of all cores in the package.
+	int32 maxPackageLoad = fRegisteredCoreCount * 1000;
+	if (totalLoad <= 0 || maxPackageLoad <= 0)
+		return fEnergyModel->idlePower;
+
+	uint64 dynamic = (uint64)(fEnergyModel->activePower - fEnergyModel->idlePower) * totalLoad;
+	return fEnergyModel->idlePower + (uint32)(dynamic / maxPackageLoad);
 }
 
 
@@ -1510,6 +1566,7 @@ void PackageEntry::AddIdleCore(CoreEntry* core) {
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
+	UpdateIdleCoreLFB(core, true);
 }
 
 
@@ -1538,6 +1595,7 @@ void PackageEntry::RemoveIdleCore(CoreEntry* core) {
 		if (fNode != NULL)
 			fNode->PackageWakesUp(this);
 	}
+	UpdateIdleCoreLFB(core, false);
 }
 
 CoreEntry* PackageEntry::GetIdleCore(int32 index) const {

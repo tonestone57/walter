@@ -383,15 +383,14 @@ static inline void CheckMaskedPackagesMinimumLoad(
 				// Fallback: consecutive-duplicate suppression only.
 				alreadyVisited = (package == lastPackage);
 			}
-					if (!alreadyVisited) {
-						if (CheckPackageMinimumLoad(cpu, package, &mask,
-													bestCore, bestLoad, type)) {
-							return;	 // Short-circuit: found a core with very
-									 // low load.
-						}
-						lastPackage = package;
-					}
+
+			if (!alreadyVisited) {
+				if (CheckPackageMinimumLoad(cpu, package, &mask,
+											bestCore, bestLoad, type)) {
+					return;	 // Short-circuit: found a core with very
+							 // low load.
 				}
+				lastPackage = package;
 			}
 		}
 	}

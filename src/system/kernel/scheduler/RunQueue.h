@@ -102,13 +102,13 @@ public:
 	inline bool TestAndClearRTAtomic(int index)
 	{
 		uint32 bit = 1U << index;
-		uint32 old = (uint32)AndAtomic(fRealTimeBitmap, (int32)~bit);
+		uint32 old = (uint32)AtomicAnd(fRealTimeBitmap, (int32)~bit);
 		return (old & bit) != 0;
 	}
 
 	inline void RestoreRTBitAtomic(int index)
 	{
-		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+		AtomicOr(fRealTimeBitmap, (int32)(1U << index));
 	}
 
 	inline Element* GetRTBinHead(int index) const { return fRealTimeQueues[index].Head(); }
@@ -318,7 +318,7 @@ void RUN_QUEUE_CLASS_NAME::PushBack(Element* element, unsigned int priority, big
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element);
-		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+		AtomicOr(fRealTimeBitmap, (int32)(1U << index));
 		thread->run_queue_lane = -1;
 		thread->run_queue_rt_index = index;
 	} else {
@@ -348,7 +348,7 @@ void RUN_QUEUE_CLASS_NAME::PushFront(Element* element, unsigned int priority, bi
 		if (index < 0) index = 0;
 		if (index > 20) index = 20;
 		fRealTimeQueues[index].Add(element, false);
-		OrAtomic(fRealTimeBitmap, (int32)(1U << index));
+		AtomicOr(fRealTimeBitmap, (int32)(1U << index));
 		thread->run_queue_lane = -1;
 		thread->run_queue_rt_index = index;
 	} else {
@@ -372,14 +372,14 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 		int32 index = thread->run_queue_rt_index;
 		fRealTimeQueues[index].Remove(element);
 		if (fRealTimeQueues[index].IsEmpty())
-			AndAtomic(fRealTimeBitmap, (int32)~(1U << index));
+			AtomicAnd(fRealTimeBitmap, (int32)~(1U << index));
 	} else {
 		int32 lane = thread->run_queue_lane;
 		fQueues[lane].Remove(element);
 		if (fQueues[lane].IsEmpty()) {
 			int word = lane / (sizeof(native_cpu_mask_t) * 8);
 			int bit = lane % (sizeof(native_cpu_mask_t) * 8);
-			cpu_mask_and_atomic(&fBitmap[word], ~((native_cpu_mask_t)1 << bit));
+			AtomicAnd64(fBitmap[word], ~((native_cpu_mask_t)1 << bit));
 		}
 	}
 

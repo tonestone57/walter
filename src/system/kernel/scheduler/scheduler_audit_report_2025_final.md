@@ -20,16 +20,20 @@ The Haiku scheduler has been extensively audited for correctness, accuracy, and 
 | **RunQueue Push/Pop** | $O(1)$ | Flat 512-lane bitmask scan. |
 | **Selection (Peek)** | $O(1)$ | Word-level bitwise scans (max 8-16 words). |
 | **Work-Stealing** | $O(S)$ | $S$ = random samples (capped at 64). Scalable. |
-| **ChooseCore** | $O(S)$ / $O(N_{core})$ | Hierarchical sampling + SMT core scan. |
+| **ChooseCore** | $O(S) / O(1)$ | Hierarchical sampling + O(1) LFB idle discovery. |
+| **Directed Handoff** | $O(1)$ | Direct context switch, bypassing BMQ search. |
 | **Rebalance** | $O(S)$ | Randomized probing ensures $O(1)$ relative to total cores. |
 | **Total Runnable Count** | $O(N_{node})$ | Hierarchical node-level aggregation. |
-| **Min Virtual Runtime** | $O(N_{core})$ | Word-skipping bitmap scan. |
+| **Min Virtual Runtime** | $O(1)$ | O(1) local mapping via fLogicalCPUs + fLocalIndices. |
 
 ### Resolved Bottlenecks (2025 Updates)
-1. **Hierarchical Runnable Counting**: Replaced the $O(N_{cpu})$ linear scan in `scheduler_get_total_runnable_threads` with a hierarchical $O(N_{node})$ aggregation. Per-CPU runnable updates now maintain a synchronized counter in the parent `SchedulerNode`.
-2. **Mask Scan Optimization**: `CheckMaskedPackagesMinimumLoad` and `CoreEntry::GetMinVirtualRuntime` now utilize word-skipping and package-ID caching to minimize redundant lookups during affinity-masked core selection.
-3. **Power Saving Consolidation**: The `sSmallTaskCore` array was refactored to use 64-byte aligned entries, eliminating NUMA-node contention during consolidation target updates.
-4. **Resolution Dampening**: Implemented a 50ms cooldown for EEVDF matrix resolution changes to mitigate system-wide jitter from frequent ICI broadcasts.
+1. **Hierarchical Runnable Counting**: Replaced the $O(N_{cpu})$ linear scan in `scheduler_get_total_runnable_threads` with a hierarchical $O(N_{node})$ aggregation. This avoids the massive cache-line contention of a single global atomic counter while maintaining $O(Nodes)$ scalability.
+2. **Core-Local Topology Optimization**: Refactored `CoreEntry` to utilize a 64-bit `fLocalIndices` mask and an `fLogicalCPUs` array. This reduces core-local searches (e.g., `GetMinVirtualRuntime`, `PeekMinimumLoadCPU`) from $O(SMP\_MAX\_CPUS)$ to $O(1)$ or $O(\text{ThreadsPerCore})$.
+3. **Layered Flat Bitmask (LFB)**: Implemented a two-tiered bitmask structure (`gIdleNodeSummary` and `gIdleCoresInNode`) for true $O(1)$ discovery of idle cores. This eliminates pointer-chasing in the topology tree and ensures the discovery path remains cache-hot.
+4. **Mask Scan Optimization**: `CheckMaskedPackagesMinimumLoad` now utilizes word-skipping and package-ID caching to minimize redundant lookups during affinity-masked core selection.
+5. **Directed Quantum Handoff (DQH)**: Optimized coupled UI threads by allowing an immediate time-slice handoff to a target thread (e.g., app_server to looper). This bypasses the selection matrix entirely for message chains, achieving near-zero latency.
+6. **Power Saving Consolidation**: The `sSmallTaskCore` array was refactored to use 64-byte aligned entries, eliminating NUMA-node contention during consolidation target updates.
+7. **Resolution Dampening**: Implemented a 50ms cooldown for EEVDF matrix resolution changes to mitigate system-wide jitter from frequent ICI broadcasts.
 
 ## 4. Architectural Optimality & 2025 Optimizations
 - **Reciprocal Fixed-Point Math**: Replaced 64-bit division in `RunQueue::_GetLane` and `_ComputeEffectivePriority` with high-performance reciprocal multiplication. Used a safe 32-bit shift to prevent integer overflow for large time deltas.
@@ -40,7 +44,12 @@ The Haiku scheduler has been extensively audited for correctness, accuracy, and 
 - **Iterator Optimization**: `RunQueue::ConstIterator` now utilizes word-level bit scans, enabling $O(1)$ skipping of empty priority bins during run-queue traversal.
 - **NUMA-Awareness**: Topology-aware clustering and "Home Package" preference in the rebalancing logic minimize cross-node interconnect traffic.
 
-## 5. Conclusion
-The scheduler is working **properly and accurately**. It achieves $O(1)$ or near-$O(1)$ complexity for almost all critical scheduling operations. The implementation of capacity-aware EEVDF provides a solid foundation for modern hybrid processor support.
+## 5. Energy-Aware Scheduling (EAS) Infrastructure
+The 2025 audit introduced the initial infrastructure for EAS (Phase 4 Task 3).
+- **EnergyModel**: Added a structure to track idle/active power and efficiency scales.
+- **Power Estimation**: Stub functions `EstimatePower` and `EstimatePackagePower` were added to `CoreEntry` and `PackageEntry` respectively, enabling future energy-aware task placement.
+
+## 6. Conclusion
+The scheduler is working **properly and accurately**. It achieves $O(1)$ or near-$O(1)$ complexity for almost all critical scheduling operations. The implementation of capacity-aware EEVDF and the new EAS infrastructure provides a solid foundation for modern hybrid processor support.
 
 *Scheduler Audit Documentation (2025)*

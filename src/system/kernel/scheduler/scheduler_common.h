@@ -29,119 +29,103 @@
 
 namespace Scheduler {
 
-// Type-safe atomic wrappers to eliminate messy casts and ensure 32/64-bit safety.
+// Type-safe atomic wrappers with Acquire/Release semantics.
 
 template <typename T>
 inline int32 LoadAcquire(const T volatile& value) {
-	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	int32 v = atomic_get((int32*)&value);
+	static_assert(sizeof(T) == 4, "LoadAcquire requires a 32-bit type");
+	int32 v = ::atomic_get((int32 volatile*)&value);
 	memory_read_barrier();
 	return v;
 }
 
 template <typename T>
 inline void StoreRelease(T volatile& value, int32 v) {
-	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
+	static_assert(sizeof(T) == 4, "StoreRelease requires a 32-bit type");
 	memory_write_barrier();
-	atomic_set((int32*)&value, v);
+	::atomic_set((int32 volatile*)&value, v);
 }
 
 template <typename T>
-inline int32 AddAcquireRelease(T volatile& value, int32 v) {
-	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
+inline int32 AddRelease(T volatile& value, int32 v) {
+	static_assert(sizeof(T) == 4, "AddRelease requires a 32-bit type");
 	memory_write_barrier();
-	int32 old = atomic_add((int32*)&value, v);
+	int32 old = ::atomic_add((int32 volatile*)&value, v);
 	memory_read_barrier();
 	return old;
 }
 
 template <typename T>
-inline void AddRelease(T volatile& value, int32 v) {
-	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	memory_write_barrier();
-	atomic_add((int32*)&value, v);
+inline int32 AtomicOr(T volatile& value, int32 orValue) {
+	static_assert(sizeof(T) == 4, "AtomicOr requires a 32-bit type");
+	return ::atomic_or((int32 volatile*)&value, orValue);
 }
 
 template <typename T>
-inline int32 TestAndSet(T volatile& value, int32 newValue,
-						int32 expectedValue) {
-	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	return atomic_test_and_set((int32*)&value, newValue, expectedValue);
+inline int32 AtomicAnd(T volatile& value, int32 andValue) {
+	static_assert(sizeof(T) == 4, "AtomicAnd requires a 32-bit type");
+	return ::atomic_and((int32 volatile*)&value, andValue);
 }
 
 template <typename T>
-inline int32 GetAndSet(T volatile& value, int32 newValue) {
-	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	return atomic_get_and_set((int32*)&value, newValue);
+inline int32 AtomicTestAndSet(T volatile& value, int32 newValue,
+							  int32 expectedValue) {
+	static_assert(sizeof(T) == 4, "AtomicTestAndSet requires a 32-bit type");
+	return ::atomic_test_and_set((int32 volatile*)&value, newValue,
+								 expectedValue);
 }
 
 template <typename T>
-inline int32 OrAtomic(T volatile& value, int32 orValue) {
-	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	return atomic_or((int32*)&value, orValue);
-}
-
-template <typename T>
-inline int32 AndAtomic(T volatile& value, int32 andValue) {
-	static_assert(sizeof(T) == 4, "Type size mismatch for 32-bit atomic");
-	return atomic_and((int32*)&value, andValue);
+inline int32 AtomicGetAndSet(T volatile& value, int32 newValue) {
+	static_assert(sizeof(T) == 4, "AtomicGetAndSet requires a 32-bit type");
+	return ::atomic_get_and_set((int32 volatile*)&value, newValue);
 }
 
 // 64-bit variants
 
 template <typename T>
 inline int64 LoadAcquire64(const T volatile& value) {
-	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	int64 v = atomic_get64((int64*)&value);
+	static_assert(sizeof(T) == 8, "LoadAcquire64 requires a 64-bit type");
+	int64 v = ::atomic_get64((int64 volatile*)&value);
 	memory_read_barrier();
 	return v;
 }
 
 template <typename T>
 inline void StoreRelease64(T volatile& value, int64 v) {
-	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
+	static_assert(sizeof(T) == 8, "StoreRelease64 requires a 64-bit type");
 	memory_write_barrier();
-	atomic_set64((int64*)&value, v);
+	::atomic_set64((int64 volatile*)&value, v);
 }
 
 template <typename T>
-inline int64 AddAcquireRelease64(T volatile& value, int64 v) {
-	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
+inline int64 AddRelease64(T volatile& value, int64 v) {
+	static_assert(sizeof(T) == 8, "AddRelease64 requires a 64-bit type");
 	memory_write_barrier();
-	int64 old = atomic_add64((int64*)&value, v);
+	int64 old = ::atomic_add64((int64 volatile*)&value, v);
 	memory_read_barrier();
 	return old;
 }
 
 template <typename T>
-inline void AddRelease64(T volatile& value, int64 v) {
-	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	memory_write_barrier();
-	atomic_add64((int64*)&value, v);
+inline int64 AtomicOr64(T volatile& value, int64 orValue) {
+	static_assert(sizeof(T) == 8, "AtomicOr64 requires a 64-bit type");
+	return ::atomic_or64((int64 volatile*)&value, orValue);
 }
 
 template <typename T>
-inline int64 TestAndSet64(T volatile& value, int64 newValue,
-						  int64 expectedValue) {
-	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	return atomic_test_and_set64((int64*)&value, newValue, expectedValue);
+inline int64 AtomicAnd64(T volatile& value, int64 andValue) {
+	static_assert(sizeof(T) == 8, "AtomicAnd64 requires a 64-bit type");
+	return ::atomic_and64((int64 volatile*)&value, andValue);
 }
 
 template <typename T>
-inline int64 OrAtomic64(T volatile& value, int64 orValue) {
-	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	return atomic_or64((int64*)&value, orValue);
+inline int64 AtomicTestAndSet64(T volatile& value, int64 newValue,
+								int64 expectedValue) {
+	static_assert(sizeof(T) == 8, "AtomicTestAndSet64 requires a 64-bit type");
+	return ::atomic_test_and_set64((int64 volatile*)&value, newValue,
+								   expectedValue);
 }
-
-template <typename T>
-inline int64 AndAtomic64(T volatile& value, int64 andValue) {
-	static_assert(sizeof(T) == 8, "Type size mismatch for 64-bit atomic");
-	return atomic_and64((int64*)&value, andValue);
-}
-
-}  // namespace Scheduler
-
-namespace Scheduler {
 
 // Portability helpers for modern GCC and architecture independence.
 
@@ -158,18 +142,18 @@ typedef uint32 native_cpu_mask_t;
 static inline native_cpu_mask_t cpu_mask_or_atomic(native_cpu_mask_t volatile* value,
 													native_cpu_mask_t orValue) {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)OrAtomic64(*value, (int64)orValue);
+	return (native_cpu_mask_t)AtomicOr64(*value, (int64)orValue);
 #else
-	return (native_cpu_mask_t)OrAtomic(*value, (int32)orValue);
+	return (native_cpu_mask_t)AtomicOr(*value, (int32)orValue);
 #endif
 }
 
 static inline native_cpu_mask_t cpu_mask_and_atomic(native_cpu_mask_t volatile* value,
 													native_cpu_mask_t andValue) {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)AndAtomic64(*value, (int64)andValue);
+	return (native_cpu_mask_t)AtomicAnd64(*value, (int64)andValue);
 #else
-	return (native_cpu_mask_t)AndAtomic(*value, (int32)andValue);
+	return (native_cpu_mask_t)AtomicAnd(*value, (int32)andValue);
 #endif
 }
 
@@ -194,10 +178,10 @@ static inline native_cpu_mask_t cpu_mask_test_and_set_atomic(
 	native_cpu_mask_t volatile* value, native_cpu_mask_t newValue,
 	native_cpu_mask_t expectedValue) {
 #if SCHEDULER_MASK_IS_64_BIT
-	return (native_cpu_mask_t)TestAndSet64(*value,
+	return (native_cpu_mask_t)AtomicTestAndSet64(*value,
 		(int64)newValue, (int64)expectedValue);
 #else
-	return (native_cpu_mask_t)TestAndSet(*value,
+	return (native_cpu_mask_t)AtomicTestAndSet(*value,
 		(int32)newValue, (int32)expectedValue);
 #endif
 }
@@ -234,33 +218,32 @@ static inline int scheduler_ctz(native_cpu_mask_t value) {
 
 // atomic_pointer: architecture-independent atomic pointer operations.
 template <typename T>
-static inline T* atomic_pointer_get(T* const volatile* pointer) {
+static inline T* AtomicPointerGet(T* const volatile* pointer) {
 #if SCHEDULER_MASK_IS_64_BIT
-	return reinterpret_cast<T*>(atomic_get64((int64 volatile*)pointer));
+	return reinterpret_cast<T*>(LoadAcquire64(*(int64 volatile*)pointer));
 #else
-	return reinterpret_cast<T*>(atomic_get((int32 volatile*)pointer));
+	return reinterpret_cast<T*>(LoadAcquire(*(int32 volatile*)pointer));
 #endif
 }
 
 template <typename T>
-static inline void atomic_pointer_set(T* volatile* pointer, T* value) {
-	memory_write_barrier();
+static inline void AtomicPointerSet(T* volatile* pointer, T* value) {
 #if SCHEDULER_MASK_IS_64_BIT
-	atomic_set64((int64 volatile*)pointer, (int64)reinterpret_cast<addr_t>(value));
+	StoreRelease64(*(int64 volatile*)pointer, (int64)reinterpret_cast<addr_t>(value));
 #else
-	atomic_set((int32 volatile*)pointer, reinterpret_cast<int32>(value));
+	StoreRelease(*(int32 volatile*)pointer, reinterpret_cast<int32>(value));
 #endif
 }
 
 template <typename T>
-static inline T* atomic_pointer_test_and_set(T* volatile* pointer, T* newValue,
+static inline T* AtomicPointerTestAndSet(T* volatile* pointer, T* newValue,
 											 T* expectedValue) {
 #if SCHEDULER_MASK_IS_64_BIT
-	return reinterpret_cast<T*>(atomic_test_and_set64((int64 volatile*)pointer,
+	return reinterpret_cast<T*>(AtomicTestAndSet64(*(int64 volatile*)pointer,
 		(int64)reinterpret_cast<addr_t>(newValue),
 		(int64)reinterpret_cast<addr_t>(expectedValue)));
 #else
-	return reinterpret_cast<T*>(atomic_test_and_set((int32 volatile*)pointer,
+	return reinterpret_cast<T*>(AtomicTestAndSet(*(int32 volatile*)pointer,
 		reinterpret_cast<int32>(newValue),
 		reinterpret_cast<int32>(expectedValue)));
 #endif
@@ -469,14 +452,10 @@ inline SchedulerSnapshot MakeSchedulerSnapshot(int32 total,
 	SchedulerSnapshot s;
 	s.totalRunnable = total;
 
-	// Note: word-by-word LoadAcquire provides a near-atomic snapshot.
-	// While not perfectly consistent across all words at a single instant,
-	// it is sufficient for scheduler load-balancing hints where the state
-	// is highly transient.
 	const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
 	const uint32* bits = idleMask.BitData();
 	for (int32 i = 0; i < kWords; i++) {
-		s.idleMask.SetWord(i, (uint32)LoadAcquire(*(int32 volatile*)&bits[i]));
+		s.idleMask.SetWord(i, (uint32)LoadAcquire(bits[i]));
 	}
 	return s;
 }
@@ -504,13 +483,13 @@ class Scheduler {
 public:
 	static inline void SetOperationMode(scheduler_mode mode,
 										scheduler_mode_operations* operations) {
-		atomic_pointer_set<scheduler_mode_operations>(&sCurrentMode,
+		AtomicPointerSet<scheduler_mode_operations>(&sCurrentMode,
 													  operations);
-		atomic_set((int32 volatile*)&sCurrentModeID, (int32)mode);
+		StoreRelease(sCurrentModeID, (int32)mode);
 	}
 
 	static inline scheduler_mode_operations* GetCurrentMode() {
-		return atomic_pointer_get<scheduler_mode_operations>(&sCurrentMode);
+		return AtomicPointerGet<scheduler_mode_operations>(&sCurrentMode);
 	}
 
 	static inline scheduler_mode Mode() {

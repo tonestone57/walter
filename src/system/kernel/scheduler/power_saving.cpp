@@ -123,7 +123,7 @@ static void switch_to_mode() {
 	}
 	if (sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
-			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[i].core, (CoreEntry*)NULL);
+			AtomicPointerSet<CoreEntry>(&sSmallTaskCore[i].core, (CoreEntry*)NULL);
 	}
 }
 
@@ -131,7 +131,7 @@ static void switch_to_mode() {
 static void set_cpu_enabled(int32 cpu, bool enabled) {
 	if (!enabled && sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++)
-			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[i].core, (CoreEntry*)NULL);
+			AtomicPointerSet<CoreEntry>(&sSmallTaskCore[i].core, (CoreEntry*)NULL);
 	}
 }
 
@@ -218,7 +218,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
-		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+		CoreEntry* current = (CoreEntry*)AtomicPointerGet<CoreEntry>(
 			&sSmallTaskCore[currentNodeID].core);
 		if (current != NULL && current->Type() == gMinCoreType &&
 			current->GetScore() < kHighLoad) {
@@ -267,20 +267,20 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 			const int kMaxCASRetries = 16;
 			while (true) {
 				CoreEntry* currentE =
-					atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core);
+					AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core);
 				if (currentE != NULL && currentE->Type() == gMinCoreType &&
 					currentE->GetScore() < kHighLoad) {
 					return currentE;
 				}
 
-				if (atomic_pointer_test_and_set<CoreEntry>(
+				if (AtomicPointerTestAndSet<CoreEntry>(
 						&sSmallTaskCore[nodeID].core, eCore, currentE) == currentE) {
 					return eCore;
 				}
 
 				if (++casRetries >= kMaxCASRetries) {
 					CoreEntry* latest =
-						atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core);
+						AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core);
 					return (latest != NULL) ? latest : eCore;
 				}
 				cpu_pause();
@@ -296,7 +296,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 		if (currentNodeID < 0 || currentNodeID >= gNodeCount)
 			return NULL;
 
-		CoreEntry* current = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+		CoreEntry* current = (CoreEntry*)AtomicPointerGet<CoreEntry>(
 			&sSmallTaskCore[currentNodeID].core);
 		if (current != NULL && current->GetScore() < kHighLoad)
 			return current;
@@ -349,11 +349,11 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 		const int kMaxCASRetries = 16;
 		while (true) {
 			CoreEntry* current =
-				atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core);
+				AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core);
 			if (current != NULL && current->GetScore() < kHighLoad)
 				return current;
 
-			if (atomic_pointer_test_and_set<CoreEntry>(
+			if (AtomicPointerTestAndSet<CoreEntry>(
 					&sSmallTaskCore[nodeID].core, core, current) == current) {
 				return core;
 			}
@@ -361,7 +361,7 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 			if (++casRetries >= kMaxCASRetries) {
 				// Give up; return best known candidate to avoid spinning.
 				CoreEntry* latest =
-					atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core);
+					AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core);
 				return (latest != NULL) ? latest : core;
 			}
 			cpu_pause();
@@ -374,48 +374,49 @@ static CoreEntry* choose_small_task_core(CPUEntry* cpu) {
 static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	SCHEDULER_ENTER_FUNCTION();
 
-	PackageEntry* package = PackageEntry::GetLeastIdlePackage();
+	// Layered Flat Bitmask (LFB) Optimization:
+	// Achieving true O(1) idle core discovery using two-tiered bitmasks.
+	// Summary Mask identifies nodes with idle cores; Core Masks pinpoint them.
 
-	if (package == NULL) {
-		// No partially idle packages. Check for any idle package using the
-		// mask.
-		int scannedCount = 0;
-		const int32 kWords = (SMP_MAX_CPUS + 31) / 32;
-		for (int32 i = 0; i < kWords; i++) {
-			uint32 bits = gIdleNodeMask.Bits(i);
-			while (bits != 0) {
-				if (++scannedCount > kMaxCPUsToScan)
-					return NULL;
+	// Step 1: Priority for current NUMA node (if applicable)
+	int32 nodeID = -1;
+	CoreEntry* currentCore = cpu->Core();
+	if (currentCore != NULL && currentCore->Package() != NULL &&
+		currentCore->Package()->Node() != NULL) {
+		nodeID = currentCore->Package()->NodeIndex();
+	}
 
-				int32 bit = scheduler_ctz((native_cpu_mask_t)bits);
-				bits &= ~(1U << bit);
-				int32 nodeIndex = i * 32 + bit;
+	if (nodeID >= 0 && nodeID < gNodeCount) {
+		uint64 nodeMask = atomic_get64(gIdleCoresInNode[nodeID]);
+		while (nodeMask != 0) {
+			int32 localIdx = scheduler_ctz(nodeMask);
+			nodeMask &= ~(1ULL << localIdx);
 
-				if (nodeIndex >= gNodeCount)
-					continue;
-
-				SchedulerNode* node = &gSchedulerNodes[nodeIndex];
-			native_cpu_mask_t idlePackageMask = node->IdlePackageMask();
-
-			if (idlePackageMask != 0) {
-				int32 packageIndex = scheduler_flsnative(idlePackageMask) - 1;
-				// fPackageStartIndex + packageIndex gives global index
-				int32 globalIndex = node->PackageStartIndex() + packageIndex;
-				// Note: added missing gPackageCount guard.
-				if (globalIndex < gPackageCount) {
-					PackageEntry* candidate = &gPackageEntries[globalIndex];
-					// Note: check if package has any idle cores.
-					if (candidate->IdleCoreCount() > 0) {
-						package = candidate;
-						break;
-					}
-				}
-			}
+			CoreEntry* candidate = gNodeCoreMap[nodeID][localIdx];
+			if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask)))
+				return candidate;
 		}
 	}
 
-	if (package != NULL)
-		return package->GetIdleCorePacking(cpu, mask);
+	// Step 2: Global LFB Discovery (O(1) summary scan)
+	uint64 summary = atomic_get64(gIdleNodeSummary);
+	while (summary != 0) {
+		int32 nIdx = scheduler_ctz(summary);
+		summary &= ~(1ULL << nIdx);
+
+		if (nIdx == nodeID || nIdx >= gNodeCount) continue;
+
+		uint64 nodeMask = atomic_get64(gIdleCoresInNode[nIdx]);
+		while (nodeMask != 0) {
+			int32 localIdx = scheduler_ctz(nodeMask);
+			nodeMask &= ~(1ULL << localIdx);
+
+			CoreEntry* candidate = gNodeCoreMap[nIdx][localIdx];
+			if (candidate != NULL && (mask == NULL || candidate->CPUMask().Matches(*mask)))
+				return candidate;
+		}
+	}
+
 	return NULL;
 }
 
@@ -793,8 +794,8 @@ static CoreEntry* rebalance(const ThreadData* threadData, const CPUSet& mask,
 		// sSmallTaskCore branch below is skipped safely.
 
 		if (nodeID >= 0 && nodeID < gNodeCount && sSmallTaskCore != NULL &&
-			atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core) == core) {
-			atomic_pointer_set<CoreEntry>(&sSmallTaskCore[nodeID].core,
+			AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core) == core) {
+			AtomicPointerSet<CoreEntry>(&sSmallTaskCore[nodeID].core,
 										  (CoreEntry*)NULL);
 			CoreEntry* smallTaskCore = choose_small_task_core(cpu);
 
@@ -954,7 +955,7 @@ static void rebalance_irqs(bool idle) {
 	bool hasSmallTaskCore = false;
 	if (sSmallTaskCore != NULL) {
 		for (int32 i = 0; i < gNodeCount; i++) {
-			if (atomic_pointer_get<CoreEntry>(&sSmallTaskCore[i].core) != NULL) {
+			if (AtomicPointerGet<CoreEntry>(&sSmallTaskCore[i].core) != NULL) {
 				hasSmallTaskCore = true;
 				break;
 			}
@@ -986,7 +987,7 @@ static void rebalance_irqs(bool idle) {
 		currentCore->Package()->Node() != NULL) {
 		int32 nodeID = currentCore->Package()->Node()->ID();
 		if (nodeID >= 0 && nodeID < gNodeCount &&
-			atomic_pointer_get<CoreEntry>(&sSmallTaskCore[nodeID].core) ==
+			AtomicPointerGet<CoreEntry>(&sSmallTaskCore[nodeID].core) ==
 				currentCore) {
 			return;
 		}
@@ -1029,7 +1030,7 @@ static void rebalance_irqs(bool idle) {
 			currentCore->Package()->Node() != NULL) {
 			int32 nodeID = currentCore->Package()->Node()->ID();
 			if (nodeID >= 0 && nodeID < gNodeCount)
-				other = (CoreEntry*)atomic_pointer_get<CoreEntry>(
+				other = (CoreEntry*)AtomicPointerGet<CoreEntry>(
 					&sSmallTaskCore[nodeID].core);
 		}
 	} else {
@@ -1097,7 +1098,7 @@ static void rebalance_irqs(bool idle) {
 		return;
 
 	CPUEntry* cpuEntry = CPUEntry::GetCPU(cpu->cpu_num);
-	if (GetAndSet(cpuEntry->fRebalancePending, 1) == 0) {
+	if (AtomicGetAndSet(cpuEntry->fRebalancePending, 1) == 0) {
 		cpuEntry->fRebalanceDPC.fIRQ = chosenIRQ;
 		cpuEntry->fRebalanceDPC.fTargetCPU = newCPU;
 		if (DPCQueue::CPUQueue(newCPU, B_NORMAL_PRIORITY)->Add(&cpuEntry->fRebalanceDPC) != B_OK)

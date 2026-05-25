@@ -50,6 +50,7 @@ public:
 // Adjusted to sizeof(native_cpu_mask_t) * 8 to support larger clusters on
 // 64-bit. This allows a single L3 domain to span up to 64 cores.
 const int32 kMaxCoresPerPackage = sizeof(native_cpu_mask_t) * 8;
+const int32 kMaxCPUsPerCore = kMaxCoresPerPackage;
 // Validate the shift range: PackageIndex is in [0, kMaxCoresPerPackage),
 // so (native_cpu_mask_t)1 << PackageIndex() must not overflow. The old
 // assert compared kMaxCoresPerPackage to itself (tautological). This one
@@ -68,6 +69,12 @@ public:
 	void Dump() const;
 };
 
+struct EnergyModel {
+	uint32 idlePower;
+	uint32 activePower;
+	uint32 efficiencyScale;
+};
+
 class CPUEntry : public HeapLinkImpl<CPUEntry, int32> {
 public:
 	CPUEntry();
@@ -76,7 +83,7 @@ public:
 
 	inline int32 ID() const { return fCPUNumber; }
 	inline CoreEntry* Core() const {
-		return atomic_pointer_get<CoreEntry>(
+		return AtomicPointerGet<CoreEntry>(
 			const_cast<CoreEntry* volatile*>(&fCore));
 	}
 
@@ -162,7 +169,7 @@ public:
 	}
 
 	bool SetReschedulePending() {
-		return GetAndSet(fReschedulePending, 1) == 0;
+		return AtomicGetAndSet(fReschedulePending, 1) == 0;
 	}
 	void ClearReschedulePending() { StoreRelease(fReschedulePending, 0); }
 
@@ -238,6 +245,7 @@ public:
 	static inline CoreEntry* GetCore(int32 cpu);
 
 	inline int32 ID() const { return fCoreID; }
+	inline int32 NodeLocalIndex() const { return fNodeLocalIndex; }
 	inline PackageEntry* Package() const { return fPackage; }
 	inline int32 PackageIndex() const { return fPackageIndex; }
 	inline int32 CPUCount() const { return LoadAcquire(fCPUCount); }
@@ -253,6 +261,11 @@ public:
 	inline void UnlockCPU();
 
 	inline CPUPriorityHeap* CPUHeap();
+
+	inline const EnergyModel* GetEnergyModel() const { return fEnergyModel; }
+	inline void SetEnergyModel(const EnergyModel* model) { fEnergyModel = model; }
+
+	uint32 EstimatePower(int32 load) const;
 
 	inline int32 ThreadCount() const { return LoadAcquire(fTotalThreadCount); }
 	inline void IncrementTotalThreadCount() {
@@ -287,7 +300,7 @@ public:
 		// even if multiple CPUs update it concurrently.
 		bigtime_t old = (bigtime_t)LoadAcquire64(fSystemVirtualTime);
 		while (time > old) {
-			if ((bigtime_t)TestAndSet64(fSystemVirtualTime, (int64)time, (int64)old) == old)
+			if ((bigtime_t)AtomicTestAndSet64(fSystemVirtualTime, (int64)time, (int64)old) == old)
 				break;
 			old = (bigtime_t)LoadAcquire64(fSystemVirtualTime);
 		}
@@ -346,6 +359,7 @@ private:
 	bigtime_t fLastLoadUpdate __attribute__((aligned(8)));
 
 	int32 fCoreID;
+	int32 fNodeLocalIndex;
 	PackageEntry* fPackage __attribute__((aligned(64)));
 	int32 fPackageIndex;
 
@@ -364,7 +378,10 @@ private:
 
 	uint32 fScoreFactor;
 
+	const EnergyModel* fEnergyModel;
+
 	native_cpu_mask_t fLocalIndices __attribute__((aligned(8)));
+	CPUEntry* fLogicalCPUs[kMaxCPUsPerCore];
 
 	friend class DebugDumper;
 } __attribute__((aligned(64)));
@@ -446,6 +463,11 @@ public:
 								  const CPUSet* mask = NULL) const;
 	inline native_cpu_mask_t IdleCoreMask() const;
 	inline int32 IdleCoreCount() const { return LoadAcquire(fIdleCoreCount); }
+
+	inline const EnergyModel* GetEnergyModel() const { return fEnergyModel; }
+	inline void SetEnergyModel(const EnergyModel* model) { fEnergyModel = model; }
+
+	uint32 EstimatePackagePower(int32 totalLoad) const;
 	inline CoreEntry* GetCore(int32 index) const;
 	inline SchedulerNode* Node() const { return fNode; }
 	inline int32 NodeIndex() const { return fNodeIndex; }
@@ -481,6 +503,8 @@ private:
 	int32 fRegisteredCoreCount;
 	int32 fMaxAttempts;
 
+	const EnergyModel* fEnergyModel;
+
 public:
 	inline int32 CoreCount() const { return fCoreCount; }
 
@@ -504,6 +528,15 @@ extern int32 gPackageCount;
 extern SchedulerNode* gSchedulerNodes;
 extern CPUSet gIdleNodeMask;
 extern int32 gNodeCount;
+
+// Layered Flat Bitmask for O(1) idle core discovery (supports up to 4096 cores)
+extern uint64 gIdleNodeSummary __attribute__((aligned(64)));
+extern uint64 gIdleCoresInNode[64] __attribute__((aligned(64)));
+
+// Mapping table for O(1) CoreEntry retrieval from node-local index
+extern CoreEntry* gNodeCoreMap[64][64] __attribute__((aligned(64)));
+
+void UpdateIdleCoreLFB(CoreEntry* core, bool idle);
 
 inline void CPUEntry::LockRunQueue() {
 	SCHEDULER_ENTER_FUNCTION();
@@ -552,7 +585,7 @@ inline int32 CPUEntry::GetLoad() const {
 
 	// Penalize SMT siblings to prefer physical cores
 	CoreEntry* core =
-		atomic_pointer_get<CoreEntry>(const_cast<CoreEntry* volatile*>(&fCore));
+		AtomicPointerGet<CoreEntry>(const_cast<CoreEntry* volatile*>(&fCore));
 	if (core != NULL && core->CPUCount() > 1) {
 		// If at least one other thread is running on this core
 		if (core->ThreadCount() > 1)
@@ -590,8 +623,7 @@ inline CPUPriorityHeap* CoreEntry::CPUHeap() {
 
 inline void CoreEntry::IncreaseActiveTime(bigtime_t activeTime) {
 	SCHEDULER_ENTER_FUNCTION();
-	AddRelease64(fActiveTime,
-				 (int64)activeTime);
+	AddRelease64(fActiveTime, (int64)activeTime);
 }
 
 inline bigtime_t CoreEntry::GetActiveTime() const {
@@ -611,8 +643,7 @@ inline void CoreEntry::AddLoad(int32 load, uint32 epoch, bool updateLoad,
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = AddAcquireRelease64(fCombinedLoad,
-		(int64)load << 32);
+	int64 oldCombined = AddRelease64(fCombinedLoad, (int64)load << 32);
 	if ((uint32)oldCombined != epoch)
 		AddRelease(fLoad, load);
 
@@ -626,8 +657,7 @@ inline uint32 CoreEntry::RemoveLoad(int32 load, bool force, bigtime_t now) {
 	ASSERT(gTrackCoreLoad);
 	ASSERT(load >= 0 && load <= kMaxLoad);
 
-	int64 oldCombined = AddAcquireRelease64(fCombinedLoad,
-		(int64)(-load) << 32);
+	int64 oldCombined = AddRelease64(fCombinedLoad, (int64)(-load) << 32);
 	if (force) {
 		AddRelease(fLoad, -load);
 
@@ -646,8 +676,7 @@ inline void CoreEntry::ChangeLoad(int32 delta, bigtime_t now) {
 	ASSERT(delta >= -kMaxLoad && delta <= kMaxLoad);
 
 	if (delta != 0) {
-		AddRelease64(fCombinedLoad,
-			(int64)delta << 32);
+		AddRelease64(fCombinedLoad, (int64)delta << 32);
 		AddRelease(fLoad, delta);
 	}
 
@@ -673,6 +702,7 @@ inline void PackageEntry::CoreGoesIdle(CoreEntry* core) {
 		if (fNode != NULL)
 			fNode->PackageGoesIdle(this);
 	}
+	UpdateIdleCoreLFB(core, true);
 }
 
 inline void PackageEntry::CoreWakesUp(CoreEntry* core) {
@@ -695,6 +725,7 @@ inline void PackageEntry::CoreWakesUp(CoreEntry* core) {
 		if (fNode != NULL)
 			fNode->PackageWakesUp(this);
 	}
+	UpdateIdleCoreLFB(core, false);
 }
 
 inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
@@ -705,7 +736,7 @@ inline void SchedulerNode::PackageGoesIdle(PackageEntry* package) {
 		return;
 
 	// fIdlePackageMask is native_cpu_mask_t (32-bit on 32-bit
-	// systems); atomic_or64 writes 8 bytes over a 4-byte field, corrupting
+	// systems); ::atomic_or64 writes 8 bytes over a 4-byte field, corrupting
 	// adjacent struct memory.  Use cpu_mask_or_atomic throughout.
 	native_cpu_mask_t oldMask = cpu_mask_or_atomic(
 		&fIdlePackageMask, (native_cpu_mask_t)1 << package->NodeIndex());
@@ -767,11 +798,12 @@ inline void CoreEntry::CPUGoesIdle(CPUEntry* cpu) {
 	// barrier between atomic-add(fIdleCPUCount) and atomic-get(fCPUCount),
 	// the CPU could observe fCPUCount before fIdleCPUCount increment is
 	// globally visible, causing a spurious PackageGoesIdle call.
-	int32 newIdleCount = AddAcquireRelease(fIdleCPUCount, 1) + 1;
+	int32 newIdleCount = AddRelease(fIdleCPUCount, 1) + 1;
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
-	if (cpuCount > 0 && newIdleCount >= cpuCount)
+	if (cpuCount > 0 && newIdleCount >= cpuCount) {
 		fPackage->CoreGoesIdle(this);
+	}
 }
 
 inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
@@ -788,8 +820,9 @@ inline void CoreEntry::CPUWakesUp(CPUEntry* cpu) {
 	// fCPUCount before comparing with the old fIdleCPUCount.
 	memory_read_barrier();
 	int32 cpuCount = LoadAcquire(fCPUCount);
-	if (AddAcquireRelease(fIdleCPUCount, -1) == cpuCount)
+	if (AddRelease(fIdleCPUCount, -1) == cpuCount) {
 		fPackage->CoreWakesUp(this);
+	}
 }
 
 /* static */ inline CoreEntry* CoreEntry::GetCore(int32 cpu) {
