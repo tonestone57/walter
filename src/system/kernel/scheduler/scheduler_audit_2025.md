@@ -77,6 +77,7 @@
 - [x] **Task 6: Core-Local Topology Iteration Optimization**
 - [x] **Task 7: Layered Flat Bitmask (LFB) for O(1) Idle Discovery**
 - [x] **Task 8: Directed Quantum Handoff (DQH) for Message Chains**
+- [x] **Task 9: Extensive 2025 Final Audit & Bug Squash**
 
 ## 5. Performance Bottlenecks & Future Scalability
 
@@ -102,3 +103,19 @@ Updating the EEVDF matrix resolution (via `update_quantum_lengths_dpc`) requires
 ### E. Message-Driven UI Latency
 Coupled threads (e.g., `app_server` and UI looper) frequently block on each other, leading to repeated "GoesAway/Enqueue" cycles that incur full selection matrix search costs.
 *   **Mitigation**: Implemented **Directed Quantum Handoff (DQH)**. Interacting threads can now donate their remaining timeslice and trigger an immediate context switch to the partner thread, bypassing the run-queue selection logic entirely for message chains.
+
+## 6. 2025 Extensive Audit Findings & Fixes
+
+During the final extensive audit in 2025, several critical bugs and logic errors were identified and resolved:
+
+### A. 32-bit Memory Corruption in RunQueue
+- **Problem**: `RunQueue::Remove` utilized a raw `AtomicAnd64` on a `native_cpu_mask_t` field. On 32-bit systems, where the mask is only 32 bits, this caused a 4-byte out-of-bounds write, corrupting adjacent scheduler metadata.
+- **Solution**: Replaced raw atomic calls with the architecture-aware `cpu_mask_and_atomic` helper.
+
+### B. Fixed-Point Urgency Logic Error
+- **Problem**: `ThreadData::_ComputeEffectivePriority` failed to handle overdue threads (`diff <= 0`) before entering the fixed-point math block. This caused unsigned overflow/wrap, resulting in overdue threads receiving minimum instead of maximum urgency.
+- **Solution**: Added an explicit check for overdue threads to assign maximum dynamic priority immediately.
+
+### C. Atomic Standardization
+- **Problem**: Inconsistent use of raw `atomic_get64` versus standardized `LoadAcquire64` wrappers across different modules.
+- **Solution**: Standardized all atomic accesses in the hot path to use the `LoadAcquire`/`StoreRelease` wrappers, ensuring proper memory barriers on weakly-ordered architectures.

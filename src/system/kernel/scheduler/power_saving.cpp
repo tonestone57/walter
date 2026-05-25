@@ -387,7 +387,7 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	}
 
 	if (nodeID >= 0 && nodeID < gNodeCount) {
-		uint64 nodeMask = atomic_get64(gIdleCoresInNode[nodeID]);
+		uint64 nodeMask = (uint64)LoadAcquire64(gIdleCoresInNode[nodeID]);
 		while (nodeMask != 0) {
 			int32 localIdx = scheduler_ctz(nodeMask);
 			nodeMask &= ~(1ULL << localIdx);
@@ -399,14 +399,14 @@ static CoreEntry* choose_idle_core(CPUEntry* cpu, const CPUSet* mask = NULL) {
 	}
 
 	// Step 2: Global LFB Discovery (O(1) summary scan)
-	uint64 summary = atomic_get64(gIdleNodeSummary);
+	uint64 summary = (uint64)LoadAcquire64(gIdleNodeSummary);
 	while (summary != 0) {
 		int32 nIdx = scheduler_ctz(summary);
 		summary &= ~(1ULL << nIdx);
 
 		if (nIdx == nodeID || nIdx >= gNodeCount) continue;
 
-		uint64 nodeMask = atomic_get64(gIdleCoresInNode[nIdx]);
+		uint64 nodeMask = (uint64)LoadAcquire64(gIdleCoresInNode[nIdx]);
 		while (nodeMask != 0) {
 			int32 localIdx = scheduler_ctz(nodeMask);
 			nodeMask &= ~(1ULL << localIdx);

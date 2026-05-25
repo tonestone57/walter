@@ -379,7 +379,7 @@ void RUN_QUEUE_CLASS_NAME::Remove(Element* element)
 		if (fQueues[lane].IsEmpty()) {
 			int word = lane / (sizeof(native_cpu_mask_t) * 8);
 			int bit = lane % (sizeof(native_cpu_mask_t) * 8);
-			AtomicAnd64(fBitmap[word], ~((native_cpu_mask_t)1 << bit));
+			cpu_mask_and_atomic(&fBitmap[word], ~((native_cpu_mask_t)1 << bit));
 		}
 	}
 

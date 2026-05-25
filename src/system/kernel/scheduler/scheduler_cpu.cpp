@@ -63,7 +63,7 @@ UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 			uint64 summary = (uint64)LoadAcquire64(gIdleNodeSummary);
 			if (!(summary & (1ULL << nodeID))) break;
 
-			if (AtomicTestAndSet64(gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == (int64)summary)
+			if ((uint64)AtomicTestAndSet64(gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == summary)
 				break;
 		}
 	}
@@ -586,7 +586,7 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 							   tempLoad, now);
 		if (oldLoad < 0)
 			break;
-		if ((bigtime_t)AtomicTestAndSet64(fMeasureActiveTime, tempMeasureActiveTime, measureActiveTime) == measureActiveTime) {
+		if ((bigtime_t)AtomicTestAndSet64(fMeasureActiveTime, (int64)tempMeasureActiveTime, (int64)measureActiveTime) == measureActiveTime) {
 			StoreRelease64(fMeasureTime, tempMeasureTime);
 			currentLoad = tempLoad;
 			break;
