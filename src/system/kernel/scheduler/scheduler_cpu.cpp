@@ -40,7 +40,7 @@ uint64 gIdleCoresInNode[64] __attribute__((aligned(64)));
 CoreEntry* gNodeCoreMap[64][64] __attribute__((aligned(64)));
 
 void
-Scheduler::UpdateIdleCoreLFB(CoreEntry* core, bool idle)
+UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 {
 	int32 nodeID = core->Package()->Node()->NodeIndex();
 	int32 localIndex = core->NodeLocalIndex();

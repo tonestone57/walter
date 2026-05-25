@@ -30,11 +30,10 @@
 namespace Scheduler {
 
 // Type-safe atomic wrappers with Acquire/Release semantics.
-// These eliminate manual pointer casts and ensure memory barriers
-// are applied correctly across all architectures.
 
 template <typename T>
 inline int32 LoadAcquire(const T volatile& value) {
+	static_assert(sizeof(T) == 4, "LoadAcquire requires a 32-bit type");
 	int32 v = ::atomic_get((int32 volatile*)&value);
 	memory_read_barrier();
 	return v;
@@ -42,12 +41,14 @@ inline int32 LoadAcquire(const T volatile& value) {
 
 template <typename T>
 inline void StoreRelease(T volatile& value, int32 v) {
+	static_assert(sizeof(T) == 4, "StoreRelease requires a 32-bit type");
 	memory_write_barrier();
 	::atomic_set((int32 volatile*)&value, v);
 }
 
 template <typename T>
 inline int32 AddRelease(T volatile& value, int32 v) {
+	static_assert(sizeof(T) == 4, "AddRelease requires a 32-bit type");
 	memory_write_barrier();
 	int32 old = ::atomic_add((int32 volatile*)&value, v);
 	memory_read_barrier();
@@ -56,23 +57,27 @@ inline int32 AddRelease(T volatile& value, int32 v) {
 
 template <typename T>
 inline int32 AtomicOr(T volatile& value, int32 orValue) {
+	static_assert(sizeof(T) == 4, "AtomicOr requires a 32-bit type");
 	return ::atomic_or((int32 volatile*)&value, orValue);
 }
 
 template <typename T>
 inline int32 AtomicAnd(T volatile& value, int32 andValue) {
+	static_assert(sizeof(T) == 4, "AtomicAnd requires a 32-bit type");
 	return ::atomic_and((int32 volatile*)&value, andValue);
 }
 
 template <typename T>
 inline int32 AtomicTestAndSet(T volatile& value, int32 newValue,
 							  int32 expectedValue) {
+	static_assert(sizeof(T) == 4, "AtomicTestAndSet requires a 32-bit type");
 	return ::atomic_test_and_set((int32 volatile*)&value, newValue,
 								 expectedValue);
 }
 
 template <typename T>
 inline int32 AtomicGetAndSet(T volatile& value, int32 newValue) {
+	static_assert(sizeof(T) == 4, "AtomicGetAndSet requires a 32-bit type");
 	return ::atomic_get_and_set((int32 volatile*)&value, newValue);
 }
 
@@ -80,6 +85,7 @@ inline int32 AtomicGetAndSet(T volatile& value, int32 newValue) {
 
 template <typename T>
 inline int64 LoadAcquire64(const T volatile& value) {
+	static_assert(sizeof(T) == 8, "LoadAcquire64 requires a 64-bit type");
 	int64 v = ::atomic_get64((int64 volatile*)&value);
 	memory_read_barrier();
 	return v;
@@ -87,12 +93,14 @@ inline int64 LoadAcquire64(const T volatile& value) {
 
 template <typename T>
 inline void StoreRelease64(T volatile& value, int64 v) {
+	static_assert(sizeof(T) == 8, "StoreRelease64 requires a 64-bit type");
 	memory_write_barrier();
 	::atomic_set64((int64 volatile*)&value, v);
 }
 
 template <typename T>
 inline int64 AddRelease64(T volatile& value, int64 v) {
+	static_assert(sizeof(T) == 8, "AddRelease64 requires a 64-bit type");
 	memory_write_barrier();
 	int64 old = ::atomic_add64((int64 volatile*)&value, v);
 	memory_read_barrier();
@@ -101,17 +109,20 @@ inline int64 AddRelease64(T volatile& value, int64 v) {
 
 template <typename T>
 inline int64 AtomicOr64(T volatile& value, int64 orValue) {
+	static_assert(sizeof(T) == 8, "AtomicOr64 requires a 64-bit type");
 	return ::atomic_or64((int64 volatile*)&value, orValue);
 }
 
 template <typename T>
 inline int64 AtomicAnd64(T volatile& value, int64 andValue) {
+	static_assert(sizeof(T) == 8, "AtomicAnd64 requires a 64-bit type");
 	return ::atomic_and64((int64 volatile*)&value, andValue);
 }
 
 template <typename T>
 inline int64 AtomicTestAndSet64(T volatile& value, int64 newValue,
 								int64 expectedValue) {
+	static_assert(sizeof(T) == 8, "AtomicTestAndSet64 requires a 64-bit type");
 	return ::atomic_test_and_set64((int64 volatile*)&value, newValue,
 								   expectedValue);
 }
