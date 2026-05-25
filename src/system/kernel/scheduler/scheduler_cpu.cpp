@@ -1466,6 +1466,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 					AddRelease(fLoad, delta);
 					break;
 				}
+				cpu_pause();
 			}
 			break;
 		}

@@ -79,6 +79,7 @@ static void _LoadavgUpdate(void* data, int iteration) {
 						   (int32)newLoad, (int32)oldLoad) == (int32)oldLoad) {
 				break;
 			}
+			cpu_pause();
 		}
 	}
 }
