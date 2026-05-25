@@ -63,8 +63,13 @@ UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 			uint64 summary = (uint64)LoadAcquire64(gIdleNodeSummary);
 			if (!(summary & (1ULL << nodeID))) break;
 
-			if ((uint64)AtomicTestAndSet64(gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == summary)
+			if ((uint64)AtomicTestAndSet64(gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == summary) {
+				// Race check: if a core in this node went idle between our
+				// LoadAcquire and the CAS, the summary bit must be restored.
+				if ((uint64)LoadAcquire64(gIdleCoresInNode[nodeID]) != 0)
+					AtomicOr64(gIdleNodeSummary, (int64)(1ULL << nodeID));
 				break;
+			}
 		}
 	}
 }
