@@ -362,9 +362,16 @@ inline bigtime_t ThreadData::GetQuantumLeft() {
 	SCHEDULER_ENTER_FUNCTION();
 
 	bigtime_t stolenTime __attribute__((aligned(8)));
+	int retry = 0;
+	const int kMaxRetries = 32;
 	do {
 		stolenTime = (bigtime_t)LoadAcquire64(fStolenTime);
-	} while ((bigtime_t)AtomicTestAndSet64(fStolenTime,  0,  (int64)stolenTime) != stolenTime);
+		if ((bigtime_t)AtomicTestAndSet64(fStolenTime, 0, (int64)stolenTime) == stolenTime)
+			break;
+		if (++retry >= kMaxRetries)
+			break;
+		cpu_pause();
+	} while (true);
 
 	bigtime_t quantum =
 		ComputeQuantum() - (bigtime_t)LoadAcquire64(fTimeUsed);
@@ -751,6 +758,8 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 	// result itself as the authoritative source of the current value to
 	// ensure the update loop never operates on a torn snapshot.
 	bigtime_t vRuntime = (bigtime_t)LoadAcquire64(fThread->virtual_runtime);
+	int retry = 0;
+	const int kMaxRetries = 64;
 	while (vRuntime < ceiling) {
 		bigtime_t next = (vRuntime < ceiling - delta) ? vRuntime + delta : ceiling;
 
@@ -763,6 +772,10 @@ inline void ThreadData::UpdateVirtualRuntime(bigtime_t delta, bigtime_t svt,
 		// On 32-bit targets, if the first ::atomic_get64 was torn, this
 		// assignment from 'old' corrects it for the next iteration.
 		vRuntime = old;
+
+		if (++retry >= kMaxRetries)
+			break;
+		cpu_pause();
 	}
 }
 

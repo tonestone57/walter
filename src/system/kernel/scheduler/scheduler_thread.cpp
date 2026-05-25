@@ -115,7 +115,8 @@ inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 	int32 bestKey = B_INT32_MAX;
 
 	int32 index = 0;
-	while (true) {
+	int retry = 0;
+	while (retry++ < 64) {
 		CPUEntry* cpu = core->CPUHeap()->PeekRoot(index++);
 		if (cpu == NULL)
 			break;
@@ -168,7 +169,10 @@ void ThreadData::Init(bigtime_t now) {
 			homeA = LoadAcquire(currentThreadData->fHomePackage);
 			vrt = (bigtime_t)LoadAcquire64(currentThread->virtual_runtime);
 			homeB = LoadAcquire(currentThreadData->fHomePackage);
-		} while (homeA != homeB && ++retries < 8);
+			if (homeA == homeB)
+				break;
+			cpu_pause();
+		} while (++retries < 8);
 
 		if (homeA != homeB) {
 			// failed to get consistent snapshot, fallback to safe defaults

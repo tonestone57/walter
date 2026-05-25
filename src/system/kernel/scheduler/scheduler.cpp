@@ -328,6 +328,8 @@ void scheduler_update_interaction_state(bigtime_t now) {
 							  ? snapMode->minimal_quantum
 							  : 1200;  // fallback: 1.2ms minimal quantum
 
+	int retry = 0;
+	const int kMaxRetries = 10;
 	while (now - lastTime >= threshold) {
 		if ((bigtime_t)AtomicTestAndSet64(sInteractivityState.lastInteractionTime, (int64)now, (int64)lastTime) == lastTime) {
 			lastTime = now;
@@ -335,8 +337,9 @@ void scheduler_update_interaction_state(bigtime_t now) {
 		}
 
 		lastTime = (bigtime_t)LoadAcquire64(sInteractivityState.lastInteractionTime);
-		if (now - lastTime < threshold)
+		if (now - lastTime < threshold || ++retry >= kMaxRetries)
 			return;
+		cpu_pause();
 	}
 
 	// Resolution Dampening Cooldown (50ms).  EEVDF matrix updates require
