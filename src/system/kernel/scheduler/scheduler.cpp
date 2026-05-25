@@ -328,6 +328,8 @@ void scheduler_update_interaction_state(bigtime_t now) {
 							  ? snapMode->minimal_quantum
 							  : 1200;  // fallback: 1.2ms minimal quantum
 
+	int retry = 0;
+	const int kMaxRetries = 10;
 	while (now - lastTime >= threshold) {
 		if ((bigtime_t)AtomicTestAndSet64(sInteractivityState.lastInteractionTime, (int64)now, (int64)lastTime) == lastTime) {
 			lastTime = now;
@@ -335,8 +337,9 @@ void scheduler_update_interaction_state(bigtime_t now) {
 		}
 
 		lastTime = (bigtime_t)LoadAcquire64(sInteractivityState.lastInteractionTime);
-		if (now - lastTime < threshold)
+		if (now - lastTime < threshold || ++retry >= kMaxRetries)
 			return;
+		cpu_pause();
 	}
 
 	// Resolution Dampening Cooldown (50ms).  EEVDF matrix updates require
@@ -1353,7 +1356,18 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 					threadData = cpu->PeekThread();
 					if (threadData == NULL || threadData->IsIdle())
 						break;
+
+					Thread* const thread = threadData->GetThread();
+					// Acquire thread lock while holding runqueue lock to safely
+					// move the thread.
+					if (!try_acquire_spinlock(&thread->scheduler_lock)) {
+						locker.Unlock();
+						cpu_pause();
+						continue;
+					}
+
 					cpu->Remove(threadData);
+					release_spinlock(&thread->scheduler_lock);
 				}
 
 				enqueuer(threadData);

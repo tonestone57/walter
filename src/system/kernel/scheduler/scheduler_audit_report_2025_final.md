@@ -34,6 +34,13 @@ The Haiku scheduler has been extensively audited for correctness, accuracy, and 
 5. **Directed Quantum Handoff (DQH)**: Optimized coupled UI threads by allowing an immediate time-slice handoff to a target thread (e.g., app_server to looper). This bypasses the selection matrix entirely for message chains, achieving near-zero latency.
 6. **Power Saving Consolidation**: The `sSmallTaskCore` array was refactored to use 64-byte aligned entries, eliminating NUMA-node contention during consolidation target updates.
 7. **Resolution Dampening**: Implemented a 50ms cooldown for EEVDF matrix resolution changes to mitigate system-wide jitter from frequent ICI broadcasts.
+8. **Overdue Thread Urgency**: Fixed a logic error where overdue threads could receive minimum urgency; they now correctly receive maximum dynamic priority.
+9. **32-bit Memory Safety**: Resolved a potential memory corruption in the 32-bit `RunQueue` implementation by standardizing atomic bitmask operations.
+10. **LFB Stability**: Eliminated a race condition in node summary updates by adding a post-CAS re-verification check.
+11. **Deadlock Prevention**: Migrated the timeslice donation path to bounded try-locking to prevent circular deadlocks during priority inheritance.
+12. **Synchronization Refinements**: Added retry limits and `cpu_pause()` hints to all critical CAS and search loops across the scheduler subsystem to prevent livelocks and reduce interconnect contention.
+13. **Iterator Progress Guarantees**: Fixed a potential infinite loop in `RunQueue::ConstIterator` by ensuring search progress even when priority bins are emptied concurrently.
+14. **Hot-Unplug Concurrency**: Improved synchronization in `scheduler_set_cpu_enabled` and `_UnassignThread` by adding proper thread-lock acquisition during migration, preventing state races.
 
 ## 4. Architectural Optimality & 2025 Optimizations
 - **Reciprocal Fixed-Point Math**: Replaced 64-bit division in `RunQueue::_GetLane` and `_ComputeEffectivePriority` with high-performance reciprocal multiplication. Used a safe 32-bit shift to prevent integer overflow for large time deltas.

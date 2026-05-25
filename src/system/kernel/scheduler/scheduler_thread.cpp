@@ -115,7 +115,8 @@ inline CPUEntry* ThreadData::_ChooseCPU(CoreEntry* core,
 	int32 bestKey = B_INT32_MAX;
 
 	int32 index = 0;
-	while (true) {
+	int retry = 0;
+	while (retry++ < 64) {
 		CPUEntry* cpu = core->CPUHeap()->PeekRoot(index++);
 		if (cpu == NULL)
 			break;
@@ -168,7 +169,10 @@ void ThreadData::Init(bigtime_t now) {
 			homeA = LoadAcquire(currentThreadData->fHomePackage);
 			vrt = (bigtime_t)LoadAcquire64(currentThread->virtual_runtime);
 			homeB = LoadAcquire(currentThreadData->fHomePackage);
-		} while (homeA != homeB && ++retries < 8);
+			if (homeA == homeB)
+				break;
+			cpu_pause();
+		} while (++retries < 8);
 
 		if (homeA != homeB) {
 			// failed to get consistent snapshot, fallback to safe defaults
@@ -606,8 +610,22 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 	// Use plain SpinLocker (no interrupt manipulation) since interrupts
 	// are already disabled by the caller's contract.
 	ASSERT(!are_interrupts_enabled());
-	SpinLocker locker(beneficiary->scheduler_lock);
-	DonateTimesliceToLocked(beneficiary, now);
+
+	// Use bounded try-locking to avoid deadlocks in case of circular
+	// dependencies between blocking threads.
+	int retry = 0;
+	const int kMaxRetries = 10;
+	while (retry++ < kMaxRetries) {
+		if (try_acquire_spinlock(&beneficiary->scheduler_lock)) {
+			DonateTimesliceToLocked(beneficiary, now);
+			release_spinlock(&beneficiary->scheduler_lock);
+			return;
+		}
+		cpu_pause();
+	}
+
+	// Failed to acquire beneficiary lock; skip donation to maintain system
+	// progress.
 }
 
 
@@ -621,6 +639,8 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int32 oldLoad;
 	int32 currentLoad = fNeededLoad;
+	int retry = 0;
+	const int kMaxRetries = 32;
 	do {
 		bigtime_t lastMeasureTime =
 			(bigtime_t)LoadAcquire64(fLastMeasureAvailableTime);
@@ -639,6 +659,9 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 			fNeededLoad = tempLoad;
 			break;
 		}
+		if (++retry >= kMaxRetries)
+			break;
+		cpu_pause();
 	} while (true);
 	// Note: compute_load updates fLastMeasureAvailableTime (advancing
 	// the measurement window) even when it returns -1 (insufficient elapsed
@@ -785,13 +808,17 @@ void ThreadData::_ComputeEffectivePriority(bigtime_t now) const {
 		static_assert(kMaxDynamicPriority <= THREAD_MAX_SET_PRIORITY,
 					  "kMaxDynamicPriority exceeds maximum thread priority");
 
-		uint64 reciprocal = LoadAcquire64(Scheduler::gDeadlineBucketReciprocal);
 		bigtime_t urgency;
-		if (reciprocal > 0) {
-			int32 shift = LoadAcquire(Scheduler::gDeadlineBucketShift);
-			urgency = kMaxDynamicPriority - (bigtime_t)(((uint64)diff * reciprocal) >> shift);
+		if (diff <= 0) {
+			urgency = kMaxDynamicPriority;
 		} else {
-			urgency = kMaxDynamicPriority - diff / bucketSize;
+			uint64 reciprocal = LoadAcquire64(Scheduler::gDeadlineBucketReciprocal);
+			if (reciprocal > 0) {
+				int32 shift = LoadAcquire(Scheduler::gDeadlineBucketShift);
+				urgency = kMaxDynamicPriority - (bigtime_t)(((uint64)diff * reciprocal) >> shift);
+			} else {
+				urgency = kMaxDynamicPriority - diff / bucketSize;
+			}
 		}
 		if (urgency < 0)
 			urgency = 0;
