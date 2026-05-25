@@ -39,6 +39,8 @@ The Haiku scheduler has been extensively audited for correctness, accuracy, and 
 10. **LFB Stability**: Eliminated a race condition in node summary updates by adding a post-CAS re-verification check.
 11. **Deadlock Prevention**: Migrated the timeslice donation path to bounded try-locking to prevent circular deadlocks during priority inheritance.
 12. **Synchronization Refinements**: Added retry limits and `cpu_pause()` hints to all critical CAS and search loops across the scheduler subsystem to prevent livelocks and reduce interconnect contention.
+13. **Iterator Progress Guarantees**: Fixed a potential infinite loop in `RunQueue::ConstIterator` by ensuring search progress even when priority bins are emptied concurrently.
+14. **Hot-Unplug Concurrency**: Improved synchronization in `scheduler_set_cpu_enabled` and `_UnassignThread` by adding proper thread-lock acquisition during migration, preventing state races.
 
 ## 4. Architectural Optimality & 2025 Optimizations
 - **Reciprocal Fixed-Point Math**: Replaced 64-bit division in `RunQueue::_GetLane` and `_ComputeEffectivePriority` with high-performance reciprocal multiplication. Used a safe 32-bit shift to prevent integer overflow for large time deltas.

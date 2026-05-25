@@ -1356,7 +1356,18 @@ void scheduler_set_cpu_enabled(int32 cpuID, bool enabled) {
 					threadData = cpu->PeekThread();
 					if (threadData == NULL || threadData->IsIdle())
 						break;
+
+					Thread* const thread = threadData->GetThread();
+					// Acquire thread lock while holding runqueue lock to safely
+					// move the thread.
+					if (!try_acquire_spinlock(&thread->scheduler_lock)) {
+						locker.Unlock();
+						cpu_pause();
+						continue;
+					}
+
 					cpu->Remove(threadData);
+					release_spinlock(&thread->scheduler_lock);
 				}
 
 				enqueuer(threadData);

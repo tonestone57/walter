@@ -209,6 +209,12 @@ public:
 					fLane = word * (sizeof(native_cpu_mask_t) * 8) + nextBit;
 					fCurrent = fQueue->fQueues[fLane].Head();
 					if (fCurrent != NULL) return;
+
+					// Bit was set but queue is empty (concurrent remove).
+					// Clear the bit in our local mask to continue searching this word.
+					mask &= ~((native_cpu_mask_t)1 << nextBit);
+					if (mask != 0)
+						continue;
 				}
 
 				// Skip to next word

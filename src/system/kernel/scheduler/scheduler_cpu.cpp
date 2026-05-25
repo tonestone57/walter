@@ -1491,6 +1491,7 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 			return;
 		}
 		oldCombined = actual;
+		cpu_pause();
 	}
 
 	if (cpuCount > 0) {
@@ -1506,8 +1507,11 @@ void CoreEntry::_UpdateLoad(bool forceUpdate, bigtime_t now) {
 	CoreEntry* core = static_cast<CoreEntry*>(data);
 	ThreadData* threadData = thread->scheduler_data;
 
-	if (threadData->Core() == core)
-		threadData->UnassignCore();
+	if (threadData->Core() == core) {
+		InterruptsSpinLocker locker(thread->scheduler_lock);
+		if (threadData->Core() == core)
+			threadData->UnassignCore();
+	}
 }
 
 SchedulerNode::SchedulerNode()

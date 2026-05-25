@@ -58,9 +58,10 @@ static void _LoadavgUpdate(void* data, int iteration) {
 		threadCount = 0;
 
 	for (int i = 0; i < 3; i++) {
-		while (true) {
-			uint32 oldLoad = (uint32)atomic_get(
-				(int32 volatile*)&sAverageRunnable.ldavg[i]);
+		int retry = 0;
+		const int kMaxRetries = 32;
+		while (retry++ < kMaxRetries) {
+			int32 oldLoad = LoadAcquire(sAverageRunnable.ldavg[i]);
 
 			// Note: the 128-bit intermediate is correct, but the final
 			// uint64 truncation can overflow for pathological thread counts or
@@ -69,14 +70,13 @@ static void _LoadavgUpdate(void* data, int iteration) {
 			// 2^31 runnable threads).  The FreeBSD algorithm assumes the same
 			// practical bound.
 			// Modern GCC optimization: use uint64; intermediate fits in 64 bits.
-			uint64 acc = (uint64)sCExp[i] * oldLoad +
+			uint64 acc = (uint64)sCExp[i] * (uint32)oldLoad +
 						 (uint64)threadCount * (kFScale - sCExp[i]) * kFScale;
 			uint64 result = (uint64)(acc >> kFShift);
 			const uint64 kMaxLdAvg = (uint64)B_INT32_MAX;
-			uint32 newLoad = (uint32)((result < kMaxLdAvg) ? result : kMaxLdAvg);
+			int32 newLoad = (int32)((result < kMaxLdAvg) ? result : kMaxLdAvg);
 
-			if (atomic_test_and_set((int32 volatile*)&sAverageRunnable.ldavg[i],
-						   (int32)newLoad, (int32)oldLoad) == (int32)oldLoad) {
+			if (AtomicTestAndSet(sAverageRunnable.ldavg[i], newLoad, oldLoad) == oldLoad) {
 				break;
 			}
 			cpu_pause();
@@ -104,10 +104,9 @@ status_t _user_get_loadavg(struct loadavg* userInfo, size_t size) {
 
 	struct loadavg loadAvg;
 	for (int i = 0; i < 3; i++) {
-		loadAvg.ldavg[i] = (uint32)atomic_get(
-			(int32 volatile*)&sAverageRunnable.ldavg[i]);
+		loadAvg.ldavg[i] = (uint32)LoadAcquire(sAverageRunnable.ldavg[i]);
 	}
-	loadAvg.fscale = atomic_get((int32 volatile*)&sAverageRunnable.fscale);
+	loadAvg.fscale = LoadAcquire(sAverageRunnable.fscale);
 
 	if (user_memcpy(userInfo, &loadAvg, sizeof(struct loadavg)) < B_OK)
 		return B_BAD_ADDRESS;
