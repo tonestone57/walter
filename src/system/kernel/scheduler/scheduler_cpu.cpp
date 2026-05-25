@@ -42,6 +42,9 @@ CoreEntry* gNodeCoreMap[64][64] __attribute__((aligned(64)));
 void
 UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 {
+	if (core == NULL || core->Package() == NULL || core->Package()->Node() == NULL)
+		return;
+
 	int32 nodeID = core->Package()->Node()->NodeIndex();
 	int32 localIndex = core->NodeLocalIndex();
 
@@ -56,7 +59,9 @@ UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 		AtomicAnd64(gIdleCoresInNode[nodeID], (int64)~mask);
 		// Double-check: if the entire node is now active, clear summary bit.
 		// Using a loop to handle potential race between cores.
-		while (true) {
+		int retry = 0;
+		const int kMaxRetries = 64;
+		while (retry++ < kMaxRetries) {
 			uint64 cores = (uint64)LoadAcquire64(gIdleCoresInNode[nodeID]);
 			if (cores != 0) break;
 
@@ -70,6 +75,7 @@ UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 					AtomicOr64(gIdleNodeSummary, (int64)(1ULL << nodeID));
 				break;
 			}
+			cpu_pause();
 		}
 	}
 }
@@ -581,6 +587,8 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 	int32 currentLoad = LoadAcquire(fLoad);
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int oldLoad;
+	int retry = 0;
+	const int kMaxRetries = 32;
 	do {
 		bigtime_t measureTime = LoadAcquire64(fMeasureTime);
 		measureActiveTime = LoadAcquire64(fMeasureActiveTime);
@@ -596,6 +604,9 @@ void CPUEntry::ComputeLoad(bigtime_t now) {
 			currentLoad = tempLoad;
 			break;
 		}
+		if (++retry >= kMaxRetries)
+			break;
+		cpu_pause();
 	} while (true);
 	if (oldLoad < 0)
 		return;
@@ -1217,6 +1228,7 @@ void CoreEntry::AddCPU(CPUEntry* cpu) {
 		if (cpu_mask_test_and_set_atomic(&fLocalIndices, mask | ((native_cpu_mask_t)1 << localIndex), mask) == mask) {
 			break;
 		}
+		cpu_pause();
 	}
 	cpu->fCoreLocalIndex = localIndex;
 	fLogicalCPUs[localIndex] = cpu;

@@ -606,8 +606,22 @@ void ThreadData::DonateTimesliceTo(Thread* beneficiary, bigtime_t now) {
 	// Use plain SpinLocker (no interrupt manipulation) since interrupts
 	// are already disabled by the caller's contract.
 	ASSERT(!are_interrupts_enabled());
-	SpinLocker locker(beneficiary->scheduler_lock);
-	DonateTimesliceToLocked(beneficiary, now);
+
+	// Use bounded try-locking to avoid deadlocks in case of circular
+	// dependencies between blocking threads.
+	int retry = 0;
+	const int kMaxRetries = 10;
+	while (retry++ < kMaxRetries) {
+		if (try_acquire_spinlock(&beneficiary->scheduler_lock)) {
+			DonateTimesliceToLocked(beneficiary, now);
+			release_spinlock(&beneficiary->scheduler_lock);
+			return;
+		}
+		cpu_pause();
+	}
+
+	// Failed to acquire beneficiary lock; skip donation to maintain system
+	// progress.
 }
 
 
@@ -621,6 +635,8 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 	bigtime_t measureActiveTime __attribute__((aligned(8)));
 	int32 oldLoad;
 	int32 currentLoad = fNeededLoad;
+	int retry = 0;
+	const int kMaxRetries = 32;
 	do {
 		bigtime_t lastMeasureTime =
 			(bigtime_t)LoadAcquire64(fLastMeasureAvailableTime);
@@ -639,6 +655,9 @@ void ThreadData::_ComputeNeededLoad(bigtime_t now) {
 			fNeededLoad = tempLoad;
 			break;
 		}
+		if (++retry >= kMaxRetries)
+			break;
+		cpu_pause();
 	} while (true);
 	// Note: compute_load updates fLastMeasureAvailableTime (advancing
 	// the measurement window) even when it returns -1 (insufficient elapsed

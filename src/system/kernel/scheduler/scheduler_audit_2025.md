@@ -78,6 +78,7 @@
 - [x] **Task 7: Layered Flat Bitmask (LFB) for O(1) Idle Discovery**
 - [x] **Task 8: Directed Quantum Handoff (DQH) for Message Chains**
 - [x] **Task 9: Extensive 2025 Final Audit & Bug Squash**
+- [x] **Task 10: Final Synchronization Audit & LFB Stability**
 
 ## 5. Performance Bottlenecks & Future Scalability
 
@@ -119,3 +120,11 @@ During the final extensive audit in 2025, several critical bugs and logic errors
 ### C. Atomic Standardization
 - **Problem**: Inconsistent use of raw `atomic_get64` versus standardized `LoadAcquire64` wrappers across different modules.
 - **Solution**: Standardized all atomic accesses in the hot path to use the `LoadAcquire`/`StoreRelease` wrappers, ensuring proper memory barriers on weakly-ordered architectures.
+
+### D. Deadlock & Livelock Mitigation
+- **Problem**: Identified potential for kernel deadlock in `DonateTimesliceTo` when threads block in a circular chain. Also found several unbounded `while(true)` CAS loops that could livelock under extreme contention.
+- **Solution**: Replaced blocking locks with bounded try-locking in donation paths. Added retry limits and `cpu_pause()` to all critical CAS loops to ensure system progress.
+
+### E. LFB Summary Stability
+- **Problem**: A race condition in `UpdateIdleCoreLFB` could lead to a permanent loss of the node-idle summary bit if a core became idle exactly when the bit was being cleared by another CPU.
+- **Solution**: Added a post-CAS race check to re-verify node idleness and restore the summary bit if needed.
