@@ -662,27 +662,37 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		(threadPriority == heapPriority && rescheduleNeeded) ||
 		wasRunQueueEmpty || requestPreemption || isRT) {
 
-		// Note: Dynamic Preemption Granularity.
-		// Only trigger IPI if Delta(deadline) > epsilon.
-		// A more urgent thread (earlier deadline) only preempts if it is
-		// significantly more urgent (Delta > epsilon).
-		if (!isRT && targetCPU->ID() != smp_get_current_cpu()) {
-			bigtime_t epsilon = targetCPU->PreemptionThreshold();
+		// Refined Preemption Hysteresis:
+		// Strengthen the architectural boundary on preemption to guard against
+		// "quantum shredding" and unnecessary context switches.
+		if (!isRT) {
 			Thread* running = gCPU[targetCPU->ID()].running_thread;
 			ThreadData* runningData = (running != NULL) ? running->scheduler_data : NULL;
+
 			if (runningData != NULL && !runningData->IsIdle() && !runningData->IsRealTime()) {
-				// EEVDF Preemption: scale real-time epsilon to virtual time.
-				// vEpsilon = (epsilon * kFairShareReferenceWeight) / weight
+				// 1. Execution Floor Check: ensure the running thread has executed
+				// for at least MinimalQuantum() before allowing immediate preemption.
+				bigtime_t runtime = now - runningData->QuantumStart();
+				if (runtime < Scheduler::MinimalQuantum()) {
+					gCPU[targetCPU->ID()].invoke_scheduler = true;
+					return true;
+				}
+
+				// 2. Preemption Threshold Delta Check:
+				// A waking thread only preempts if VD_waking < VD_running - delta.
+				bigtime_t epsilon = targetCPU->PreemptionThreshold();
 				int64 weight = runningData->GetWeight();
 				if (weight <= 0)
 					weight = 1;
+
+				// EEVDF Preemption: scale real-time epsilon to virtual time.
+				// Consistent with _ComputeEffectivePriority, we use a reference
+				// scale of 1000 for virtual conversion.
 				bigtime_t vEpsilon = (epsilon * 1000) / weight;
 
-				// Preempt only if runningData->Deadline - threadData->Deadline > vEpsilon
 				if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {
-					// Not urgent enough to justify immediate preemption via IPI;
-					// use lazy flagging instead. The remote CPU will pick this
-					// up on its next kernel exit.
+					// Not urgent enough to justify immediate preemption;
+					// use lazy flagging instead.
 					gCPU[targetCPU->ID()].invoke_scheduler = true;
 					return true;
 				}

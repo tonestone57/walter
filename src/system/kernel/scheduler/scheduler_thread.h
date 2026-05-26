@@ -113,6 +113,10 @@ public:
 		return (bigtime_t)LoadAcquire64(fWentSleepActive);
 	}
 
+	SCHEDULER_INLINE bigtime_t QuantumStart() const {
+		return (bigtime_t)LoadAcquire64(fQuantumStart);
+	}
+
 	SCHEDULER_INLINE void PutBack(bigtime_t now = 0);
 	SCHEDULER_INLINE status_t CheckCapacity(CPUEntry* targetCPU);
 	SCHEDULER_INLINE bool Enqueue(CPUEntry* targetCPU, bool& wasRunQueueEmpty,
