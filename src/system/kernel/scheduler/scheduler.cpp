@@ -684,10 +684,11 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 					if (weight <= 0)
 						weight = 1;
 
-					// EEVDF Preemption: scale real-time epsilon to virtual time.
-					// We use a scale of 1000 for consistency with existing
-					// nanosecond-based lag math and _ComputeEffectivePriority.
-					bigtime_t vEpsilon = (epsilon * 1000) / weight;
+					// EEVDF Preemption: scale real-time epsilon (nanoseconds) to
+					// virtual time. Virtual time units in this scheduler are
+					// (microseconds * kReferenceWeight) / weight.
+					// vEpsilon = ( (epsilon_ns / 1000) * kReferenceWeight ) / weight
+					bigtime_t vEpsilon = (epsilon * (kReferenceWeight / 1000)) / weight;
 
 					if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {
 						suppressPreemption = true;
@@ -720,6 +721,9 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 			// Use "lazy flagging" for remote CPUs: flag the CPU so it
 			// reschedules at its next natural kernel boundary, but don't
 			// send a disruptive IPI.
+			// For the local CPU, we skip setting invoke_scheduler entirely
+			// to avoid immediate reschedule from wakers using
+			// scheduler_reschedule_if_necessary().
 			if (targetCPU->ID() != smp_get_current_cpu()) {
 				gCPU[targetCPU->ID()].invoke_scheduler = true;
 			}
