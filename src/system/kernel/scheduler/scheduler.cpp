@@ -666,7 +666,7 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		// Strengthen the architectural boundary on preemption to guard against
 		// "quantum shredding" and unnecessary context switches.
 		bool suppressPreemption = false;
-		if (!isRT && !wasRunQueueEmpty) {
+		if (!isRT) {
 			Thread* running = gCPU[targetCPU->ID()].running_thread;
 			ThreadData* runningData = (running != NULL) ? running->scheduler_data : NULL;
 
@@ -685,8 +685,8 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 						weight = 1;
 
 					// EEVDF Preemption: scale real-time epsilon to virtual time.
-					// Consistent with _ComputeEffectivePriority, we use a reference
-					// scale of 1000 for virtual conversion.
+					// We use a scale of 1000 for consistency with existing
+					// nanosecond-based lag math and _ComputeEffectivePriority.
 					bigtime_t vEpsilon = (epsilon * 1000) / weight;
 
 					if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {
