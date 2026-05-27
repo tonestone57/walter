@@ -665,49 +665,69 @@ static bool enqueue(Thread* thread, bool newOne, Thread* waker, bigtime_t now) {
 		(threadPriority == heapPriority && rescheduleNeeded) ||
 		wasRunQueueEmpty || requestPreemption || isRT) {
 
-		// Note: Dynamic Preemption Granularity.
-		// Only trigger IPI if Delta(deadline) > epsilon.
-		// A more urgent thread (earlier deadline) only preempts if it is
-		// significantly more urgent (Delta > epsilon).
-		if (!isRT && targetCPU->ID() != smp_get_current_cpu()) {
-			bigtime_t epsilon = targetCPU->PreemptionThreshold();
+		// Refined Preemption Hysteresis:
+		// Strengthen the architectural boundary on preemption to guard against
+		// "quantum shredding" and unnecessary context switches.
+		bool suppressPreemption = false;
+		if (!isRT) {
 			Thread* running = gCPU[targetCPU->ID()].running_thread;
 			ThreadData* runningData = (running != NULL) ? running->scheduler_data : NULL;
-			if (runningData != NULL && !runningData->IsIdle() && !runningData->IsRealTime()) {
-				// EEVDF Preemption: scale real-time epsilon to virtual time.
-				// vEpsilon = (epsilon * kFairShareReferenceWeight) / weight
-				int64 weight = runningData->GetWeight();
-				if (weight <= 0)
-					weight = 1;
-				bigtime_t vEpsilon = (epsilon * 1000) / weight;
 
-				// Preempt only if runningData->Deadline - threadData->Deadline > vEpsilon
-				if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {
-					// Not urgent enough to justify immediate preemption via IPI;
-					// use lazy flagging instead. The remote CPU will pick this
-					// up on its next kernel exit.
-					gCPU[targetCPU->ID()].invoke_scheduler = true;
-					return true;
+			if (runningData != NULL && !runningData->IsIdle() && !runningData->IsRealTime()) {
+				// 1. Execution Floor Check: ensure the running thread has executed
+				// for at least MinimalQuantum() before allowing preemption.
+				bigtime_t runtime = now - runningData->QuantumStart();
+				if (runtime < Scheduler::MinimalQuantum()) {
+					suppressPreemption = true;
+				} else {
+					// 2. Preemption Threshold Delta Check:
+					// A waking thread only preempts if VD_waking < VD_running - delta.
+					bigtime_t epsilon = targetCPU->PreemptionThreshold();
+					int64 weight = runningData->GetWeight();
+					if (weight <= 0)
+						weight = 1;
+
+					// EEVDF Preemption: scale real-time epsilon (nanoseconds) to
+					// virtual time. Virtual time units in this scheduler are
+					// (microseconds * kReferenceWeight) / weight.
+					// vEpsilon = ( (epsilon_ns / 1000) * kReferenceWeight ) / weight
+					bigtime_t vEpsilon = (epsilon * (kReferenceWeight / 1000)) / weight;
+
+					if (runningData->GetVirtualDeadline() - threadData->GetVirtualDeadline() < vEpsilon) {
+						suppressPreemption = true;
+					}
 				}
 			}
 		}
 
-		if (targetCPU->ID() == smp_get_current_cpu()) {
-			gCPU[targetCPU->ID()].invoke_scheduler = true;
-		} else {
-			// Note: this IPI dispatch was unreachable before; now
-			// correctly wakes the target CPU when a thread is enqueued.
-			if (ShouldReschedule(now,
-								 (bigtime_t)LoadAcquire64(targetCPU->fLastReschedule),
-								 kRescheduleCooldown)) {
-				if (targetCPU->SetReschedulePending()) {
-					StoreRelease64(targetCPU->fLastReschedule, (int64)now);
-					smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
-								 NULL, SMP_MSG_FLAG_ASYNC);
-				}
+		if (!suppressPreemption) {
+			if (targetCPU->ID() == smp_get_current_cpu()) {
+				gCPU[targetCPU->ID()].invoke_scheduler = true;
 			} else {
-				// Coalesced preemption: if we are within the cooldown period
-				// for IPIs, use lazy flagging.
+				// Note: correctly wakes the target CPU when a thread is enqueued.
+				if (ShouldReschedule(now,
+									 (bigtime_t)LoadAcquire64(targetCPU->fLastReschedule),
+									 kRescheduleCooldown)) {
+					if (targetCPU->SetReschedulePending()) {
+						StoreRelease64(targetCPU->fLastReschedule, (int64)now);
+						smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
+									 NULL, SMP_MSG_FLAG_ASYNC);
+					}
+				} else {
+					// Coalesced preemption: if we are within the cooldown period
+					// for IPIs, use lazy flagging.
+					gCPU[targetCPU->ID()].invoke_scheduler = true;
+				}
+			}
+		} else {
+			// Hysteresis suppressed immediate preemption.
+			// Use "lazy flagging" for remote CPUs: flag the CPU so it
+			// reschedules at its next natural kernel boundary, but don't
+			// send a disruptive IPI.
+			// For the local CPU, we skip setting invoke_scheduler entirely
+			// to avoid immediate reschedule from wakers using
+			// scheduler_reschedule_if_necessary().
+			if (targetCPU->ID() != smp_get_current_cpu()) {
 				gCPU[targetCPU->ID()].invoke_scheduler = true;
 			}
 		}
