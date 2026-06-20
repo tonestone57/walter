@@ -28,7 +28,7 @@ typedef struct fork_hook {
 
 static fork_hook *sPrepareHooks, *sParentHooks, *sChildHooks;
 static fork_hook *sLastParentHook, *sLastChildHook;
-static mutex sForkLock = MUTEX_INITIALIZER(FORK_LOCK_NAME);
+static recursive_lock sForkLock = RECURSIVE_LOCK_INITIALIZER(FORK_LOCK_NAME);
 
 extern thread_id __main_thread_id;
 
@@ -110,7 +110,7 @@ __register_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(voi
 
 	defer_signals();
 
-	status = mutex_lock(&sForkLock);
+	status = recursive_lock_lock(&sForkLock);
 	if (status != B_OK) {
 		undefer_signals();
 		return status;
@@ -125,7 +125,7 @@ __register_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(voi
 	if (status == B_OK && child)
 		status = add_fork_hook(&sChildHooks, &sLastChildHook, child);
 
-	mutex_unlock(&sForkLock);
+	recursive_lock_unlock(&sForkLock);
 
 	undefer_signals();
 
@@ -141,7 +141,7 @@ fork(void)
 
 	defer_signals();
 
-	status = mutex_lock(&sForkLock);
+	status = recursive_lock_lock(&sForkLock);
 	if (status != B_OK) {
 		undefer_signals();
 		return status;
@@ -157,7 +157,7 @@ fork(void)
 		__main_thread_id = find_thread(NULL);
 		pthread_self()->id = __main_thread_id;
 
-		mutex_init(&sForkLock, FORK_LOCK_NAME);
+		recursive_lock_init(&sForkLock, FORK_LOCK_NAME);
 		__gRuntimeLoader->reinit_after_fork();
 		__heap_after_fork_child();
 		__reinit_pwd_backend_after_fork();
@@ -167,7 +167,7 @@ fork(void)
 		// we are the parent
 		__heap_after_fork_parent();
 		call_fork_hooks(sParentHooks);
-		mutex_unlock(&sForkLock);
+		recursive_lock_unlock(&sForkLock);
 	}
 
 	undefer_signals();

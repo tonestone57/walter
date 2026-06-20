@@ -15,7 +15,7 @@ common_pipe(int streams[2], int flags)
 {
 	status_t error = _kern_create_pipe(streams, flags);
 	if (error != B_OK) {
-		__set_errno(error);
+		__set_errno(_to_positive_error(error));
 		return -1;
 	}
 

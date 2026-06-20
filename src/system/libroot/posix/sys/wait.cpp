@@ -31,8 +31,6 @@ _waitpid(pid_t pid, int* _status, int options, team_usage_info *usage_info)
 	pid_t child = _kern_wait_for_child(pid, options | WEXITED, &info,
 		usage_info);
 
-	pthread_testcancel();
-
 	if (child < 0) {
 		// When not getting a child status when WNOHANG was specified, don't
 		// fail.
@@ -103,24 +101,29 @@ waitid(idtype_t idType, id_t id, siginfo_t* info, int options)
 
 		case P_PID:
 			// the child with the given ID
-			if (id <= 0)
-				RETURN_AND_SET_ERRNO_TEST_CANCEL(EINVAL);
+			if (id <= 0) {
+				__set_errno(EINVAL);
+				return -1;
+			}
 			break;
 
 		case P_PGID:
 			// any child in the given process group
-			if (id <= 1)
-				RETURN_AND_SET_ERRNO_TEST_CANCEL(EINVAL);
+			if (id <= 1) {
+				__set_errno(EINVAL);
+				return -1;
+			}
 			id = -id;
 			break;
 
 		default:
-			RETURN_AND_SET_ERRNO_TEST_CANCEL(EINVAL);
+			__set_errno(EINVAL);
+			return -1;
 	}
 
 	pid_t child = _kern_wait_for_child(id, options, info, NULL);
 	if (child >= 0 || child == B_WOULD_BLOCK)
 		return 0;
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(child);
+	RETURN_AND_SET_ERRNO(child);
 }

@@ -62,6 +62,11 @@ fchown(int fd, uid_t owner, gid_t group)
 int
 fchownat(int fd, const char* path, uid_t owner, gid_t group, int flag)
 {
+	if ((flag & ~AT_SYMLINK_NOFOLLOW) != 0) {
+		__set_errno(EINVAL);
+		return -1;
+	}
+
 	return common_chown(fd, path, (flag & AT_SYMLINK_NOFOLLOW) == 0, owner,
 		group);
 }

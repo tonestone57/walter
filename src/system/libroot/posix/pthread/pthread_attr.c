@@ -28,11 +28,11 @@ pthread_attr_init(pthread_attr_t *_attr)
 	pthread_attr *attr;
 
 	if (_attr == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr = (pthread_attr *)malloc(sizeof(pthread_attr));
 	if (attr == NULL)
-		return B_NO_MEMORY;
+		return ENOMEM;
 
 	attr->detach_state = PTHREAD_CREATE_JOINABLE;
 	attr->sched_priority = B_NORMAL_PRIORITY;
@@ -41,7 +41,7 @@ pthread_attr_init(pthread_attr_t *_attr)
 	attr->stack_address = NULL;
 
 	*_attr = attr;
-	return B_OK;
+	return 0;
 }
 
 
@@ -51,12 +51,12 @@ pthread_attr_destroy(pthread_attr_t *_attr)
 	pthread_attr *attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*_attr = NULL;
 	free(attr);
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -66,11 +66,11 @@ pthread_attr_getdetachstate(const pthread_attr_t *_attr, int *state)
 	pthread_attr *attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL || state == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*state = attr->detach_state;
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -80,14 +80,14 @@ pthread_attr_setdetachstate(pthread_attr_t *_attr, int state)
 	pthread_attr *attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	if (state != PTHREAD_CREATE_JOINABLE && state != PTHREAD_CREATE_DETACHED)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr->detach_state = state;
 
-	return B_OK;
+	return 0;
 }
 
 
@@ -97,7 +97,7 @@ pthread_attr_getstacksize(const pthread_attr_t *_attr, size_t *stacksize)
 	pthread_attr *attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL || stacksize == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*stacksize = attr->stack_size;
 
@@ -111,12 +111,12 @@ pthread_attr_setstacksize(pthread_attr_t *_attr, size_t stacksize)
 	pthread_attr *attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	STATIC_ASSERT(PTHREAD_STACK_MIN >= MIN_USER_STACK_SIZE
 		&& PTHREAD_STACK_MIN <= MAX_USER_STACK_SIZE);
 	if (stacksize < PTHREAD_STACK_MIN || stacksize > MAX_USER_STACK_SIZE)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr->stack_size = stacksize;
 
@@ -180,7 +180,7 @@ pthread_attr_getguardsize(const pthread_attr_t *_attr, size_t *guardsize)
 	pthread_attr *attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL || guardsize == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	*guardsize = attr->guard_size;
 
@@ -194,7 +194,7 @@ pthread_attr_setguardsize(pthread_attr_t *_attr, size_t guardsize)
 	pthread_attr *attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr->guard_size = guardsize;
 
@@ -210,7 +210,7 @@ pthread_attr_getstack(const pthread_attr_t *_attr, void **stackaddr,
 
 	if (_attr == NULL || (attr = *_attr) == NULL || stackaddr == NULL
 		|| stacksize == NULL) {
-		return B_BAD_VALUE;
+		return EINVAL;
 	}
 
 	*stacksize = attr->stack_size;
@@ -227,12 +227,12 @@ pthread_attr_setstack(pthread_attr_t *_attr, void *stackaddr,
 	pthread_attr *attr;
 
 	if (_attr == NULL || (attr = *_attr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	STATIC_ASSERT(PTHREAD_STACK_MIN >= MIN_USER_STACK_SIZE
 		&& PTHREAD_STACK_MIN <= MAX_USER_STACK_SIZE);
 	if (stacksize < PTHREAD_STACK_MIN || stacksize > MAX_USER_STACK_SIZE)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	attr->stack_size = stacksize;
 	attr->stack_address = stackaddr;
@@ -249,7 +249,7 @@ __pthread_attr_get_np(pthread_t thread, pthread_attr_t *_attr)
 	thread_info info;
 
 	if (_attr == NULL || (attr = *_attr) == NULL)
-		return B_BAD_VALUE;
+		return EINVAL;
 
 	status = _kern_get_thread_info(thread->id, &info);
 	if (status == B_BAD_THREAD_ID)

@@ -176,21 +176,26 @@ mprotect(void* address, size_t length, int protection)
 int
 msync(void* address, size_t length, int flags)
 {
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_sync_memory(address, length, flags));
+	RETURN_AND_SET_ERRNO(_kern_sync_memory(address, length, flags));
 }
 
 
 int
 madvise(void* address, size_t length, int advice)
 {
-	RETURN_AND_SET_ERRNO(_kern_memory_advice(address, length, advice));
+	status_t error = _kern_memory_advice(address, length, advice);
+	if (error != B_OK) {
+		__set_errno(_to_positive_error(error));
+		return -1;
+	}
+	return 0;
 }
 
 
 int
 posix_madvise(void* address, size_t length, int advice)
 {
-	return madvise(address, length, advice);
+	return _to_positive_error(_kern_memory_advice(address, length, advice));
 }
 
 

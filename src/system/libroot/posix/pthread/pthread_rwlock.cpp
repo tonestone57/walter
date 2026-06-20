@@ -55,14 +55,14 @@ struct SharedRWLock {
 		owner = -1;
 		sem = create_sem(MAX_READER_COUNT, "pthread rwlock");
 
-		return sem >= 0 ? B_OK : EAGAIN;
+		return sem >= 0 ? 0 : EAGAIN;
 	}
 
 	status_t Destroy()
 	{
 		if (sem < 0)
-			return B_BAD_VALUE;
-		return delete_sem(sem) == B_OK ? B_OK : B_BAD_VALUE;
+			return EINVAL;
+		return delete_sem(sem) == B_OK ? 0 : EINVAL;
 	}
 
 	status_t ReadLock(uint32 flags, bigtime_t timeout)
@@ -117,7 +117,7 @@ struct LocalRWLock {
 		writer_count = 0;
 		new(&waiters) WaiterList;
 
-		return B_OK;
+		return 0;
 	}
 
 	status_t Destroy()
@@ -125,7 +125,7 @@ struct LocalRWLock {
 		Locker locker(this);
 		if (reader_count > 0 || waiters.Head() != NULL || writer_count > 0)
 			return EBUSY;
-		return B_OK;
+		return 0;
 	}
 
 	bool StructureLock()
@@ -158,7 +158,7 @@ struct LocalRWLock {
 
 		if (writer_count == 0) {
 			reader_count++;
-			return B_OK;
+			return 0;
 		}
 
 		return _Wait(false, flags, timeout);
@@ -171,7 +171,7 @@ struct LocalRWLock {
 		if (reader_count == 0 && writer_count == 0) {
 			writer_count++;
 			owner = find_thread(NULL);
-			return B_OK;
+			return 0;
 		}
 
 		return _Wait(true, flags, timeout);
@@ -189,7 +189,7 @@ struct LocalRWLock {
 
 		_Unblock();
 
-		return B_OK;
+		return 0;
 	}
 
 private:
@@ -242,7 +242,7 @@ private:
 		// writer at head of queue?
 		if (waiter->writer) {
 			if (reader_count == 0) {
-				waiter->status = B_OK;
+				waiter->status = 0;
 				waiter->queued = false;
 				waiters.Remove(waiter);
 				owner = waiter->thread;
@@ -263,7 +263,7 @@ private:
 			while (readerCount < kMaxReaderUnblockCount
 					&& (waiter = waiters.Head()) != NULL
 					&& !waiter->writer) {
-				waiter->status = B_OK;
+				waiter->status = 0;
 				waiter->queued = false;
 				waiters.Remove(waiter);
 
@@ -479,7 +479,7 @@ pthread_rwlockattr_init(pthread_rwlockattr_t* _attr)
 	pthread_rwlockattr* attr = (pthread_rwlockattr*)malloc(
 		sizeof(pthread_rwlockattr));
 	if (attr == NULL)
-		return B_NO_MEMORY;
+		return ENOMEM;
 
 	attr->flags = 0;
 	*_attr = attr;

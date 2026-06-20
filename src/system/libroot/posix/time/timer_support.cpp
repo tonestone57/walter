@@ -88,8 +88,10 @@ timer_create(clockid_t clockID, struct sigevent* event, timer_t* _timer)
 {
 	// create a timer object
 	__timer_t* timer = new(std::nothrow) __timer_t;
-	if (timer == NULL)
-		RETURN_AND_SET_ERRNO(ENOMEM);
+	if (timer == NULL) {
+		__set_errno(ENOMEM);
+		return -1;
+	}
 	ObjectDeleter<__timer_t> timerDeleter(timer);
 
 	// If the notification method is SIGEV_THREAD, initialize thread creation
@@ -154,8 +156,10 @@ timer_settime(timer_t timer, int flags, const struct itimerspec* value,
 	// translate new value
 	bigtime_t nextTime;
 	bigtime_t interval;
-	if (!itimerspec_to_bigtimes(*value, nextTime, interval))
-		RETURN_AND_SET_ERRNO(EINVAL);
+	if (!itimerspec_to_bigtimes(*value, nextTime, interval)) {
+		__set_errno(EINVAL);
+		return -1;
+	}
 
 	uint32 timeoutFlags = (flags & TIMER_ABSTIME) != 0
 		? B_ABSOLUTE_TIMEOUT : B_RELATIVE_TIMEOUT;

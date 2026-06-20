@@ -13,6 +13,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <errno_private.h>
 #include <libroot_private.h>
 #include <signal_defs.h>
 #include <syscalls.h>
@@ -569,7 +570,7 @@ spawn_using_load_image(pid_t *_pid, const char *_path,
 		char* buffer = (char*)alloca(B_PATH_NAME_LENGTH);
 		status_t status = __look_up_in_path(_path, buffer);
 		if (status != B_OK)
-			return status;
+			return _to_positive_error(status);
 		path = buffer;
 	}
 
@@ -581,10 +582,10 @@ spawn_using_load_image(pid_t *_pid, const char *_path,
 	thread_id thread = __load_image_at_path(path, argCount, (const char**)argv,
 		(const char**)(envp != NULL ? envp : environ));
 	if (thread < 0)
-		return thread;
+		return _to_positive_error(thread);
 
 	*_pid = thread;
-	return resume_thread(thread);
+	return _to_positive_error(resume_thread(thread));
 }
 
 

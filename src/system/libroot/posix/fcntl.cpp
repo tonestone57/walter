@@ -22,7 +22,7 @@
 int
 creat(const char *path, mode_t mode)
 {
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(
+	RETURN_AND_SET_ERRNO(
 		_kern_open(AT_FDCWD, path, O_CREAT | O_TRUNC | O_WRONLY, mode & ~__gUmask));
 		// adapt the permissions as required by POSIX
 }
@@ -40,7 +40,7 @@ open(const char *path, int openMode, ...)
 		va_end(args);
 	}
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_open(AT_FDCWD, path, openMode, perms));
+	RETURN_AND_SET_ERRNO(_kern_open(AT_FDCWD, path, openMode, perms));
 }
 
 
@@ -56,7 +56,7 @@ openat(int fd, const char *path, int openMode, ...)
 		va_end(args);
 	}
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_open(fd, path, openMode, perms));
+	RETURN_AND_SET_ERRNO(_kern_open(fd, path, openMode, perms));
 }
 
 
@@ -87,7 +87,7 @@ posix_fadvise(int fd, off_t offset, off_t len, int advice)
 
 	struct stat stat;
 	if (fstat(fd, &stat) < 0)
-		return EBADF;
+		return errno;
 	if (S_ISFIFO(stat.st_mode))
 		return ESPIPE;
 
@@ -102,7 +102,7 @@ posix_fallocate(int fd, off_t offset, off_t len)
 	if (len == 0 || offset < 0)
 		return EINVAL;
 
-	int error = _kern_preallocate(fd, offset, len);
+	status_t error = _kern_preallocate(fd, offset, len);
 	if (error == B_UNSUPPORTED) {
 		// While the official specification for this function does not
 		// prescribe which error code to use when the underlying file system
@@ -110,5 +110,5 @@ posix_fallocate(int fd, off_t offset, off_t len)
 		// EOPNOTSUPP for better compatibility with existing applications.
 		return EOPNOTSUPP;
 	}
-	return error;
+	return _to_positive_error(error);
 }

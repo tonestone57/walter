@@ -13,6 +13,7 @@
 
 #include <syscalls.h>
 
+#include <errno_private.h>
 #include <signal_private.h>
 
 
@@ -39,10 +40,10 @@ __sigwait(const sigset_t* set, int* _signal)
 	siginfo_t info;
 	status_t error = _kern_sigwait(set, &info, 0, 0);
 
-	pthread_testcancel();
-
-	if (error != B_OK)
-		return error;
+	if (error != B_OK) {
+		pthread_testcancel();
+		return _to_positive_error(error);
+	}
 
 	*_signal = info.si_signo;
 	return 0;
