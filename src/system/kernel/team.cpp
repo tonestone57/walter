@@ -43,6 +43,7 @@
 #include <port.h>
 #include <posix/realtime_sem.h>
 #include <posix/xsi_semaphore.h>
+#include <posix/xsi_shared_memory.h>
 #include <safemode.h>
 #include <sem.h>
 #include <syscall_process_info.h>
@@ -444,6 +445,7 @@ Team::Team(team_id id, bool kernel)
 	user_mutex_context = NULL;
 	realtime_sem_context = NULL;
 	xsi_sem_context = NULL;
+	xsi_shm_context = NULL;
 	death_entry = NULL;
 
 	dead_children.condition_variable.Init(&dead_children, "team children");
@@ -1993,6 +1995,7 @@ exec_team(const char* path, char**& _flatArgs, size_t flatArgsSize,
 	delete_team_user_data(team);
 	vm_delete_areas(team->address_space, false);
 	xsi_sem_undo(team);
+	xsi_shm_exec_team(team);
 	delete_owned_ports(team);
 	sem_delete_owned_sems(team);
 	remove_images(team);
@@ -2146,6 +2149,8 @@ fork_team(void)
 		}
 	}
 
+	xsi_shm_fork_team(parentTeam, team);
+
 	// create an address space for this team
 	status = VMAddressSpace::Create(team->id, USER_BASE, USER_SIZE, false,
 		&team->address_space);
@@ -2156,30 +2161,15 @@ fork_team(void)
 	// TODO: should be able to handle stack areas differently (ie. don't have
 	// them copy-on-write)
 
-	areaCookie = 0;
-	while (get_next_area_info(B_CURRENT_TEAM, &areaCookie, &info) == B_OK) {
-		if (info.area == parentTeam->user_data_area) {
-			// don't clone the user area; just create a new one
-			status = create_team_user_data(team, info.address);
-			if (status != B_OK)
-				break;
+	status = create_team_user_data(team, (void*)parentTeam->user_data);
+	if (status != B_OK)
+		goto err4;
 
-			thread->user_thread = team_allocate_user_thread(team);
-		} else {
-			void* address;
-			area_id area = vm_copy_area(team->address_space->ID(), info.name,
-				&address, B_CLONE_ADDRESS, info.area);
-			if (area < B_OK) {
-				status = area;
-				break;
-			}
+	thread->user_thread = team_allocate_user_thread(team);
 
-			if (info.area == parentThread->user_stack_area)
-				thread->user_stack_area = area;
-		}
-	}
-
-	if (status < B_OK)
+	status = vm_clone_address_space(parentTeam->id, team->id,
+		parentTeam->user_data_area);
+	if (status != B_OK)
 		goto err4;
 
 	if (thread->user_thread == NULL) {
@@ -2189,6 +2179,15 @@ fork_team(void)
 #endif
 		status = B_ERROR;
 		goto err4;
+	}
+
+	if (parentThread->user_stack_area >= 0) {
+		team->address_space->ReadLock();
+		VMArea* area = team->address_space->LookupArea(
+			parentThread->user_stack_base);
+		if (area != NULL)
+			thread->user_stack_area = area->id;
+		team->address_space->ReadUnlock();
 	}
 
 	thread->user_stack_base = parentThread->user_stack_base;
@@ -2279,6 +2278,7 @@ err4:
 	team->address_space->RemoveAndPut();
 err3:
 	delete_realtime_sem_context(team->realtime_sem_context);
+	xsi_shm_exit_team(team);
 err2:
 	free(forkArgs);
 err1:
@@ -3411,6 +3411,7 @@ team_delete_team(Team* team, port_id debuggerPort)
 	delete_user_mutex_context(team->user_mutex_context);
 	delete_realtime_sem_context(team->realtime_sem_context);
 	xsi_sem_undo(team);
+	xsi_shm_exit_team(team);
 	remove_images(team);
 	team->address_space->RemoveAndPut();
 

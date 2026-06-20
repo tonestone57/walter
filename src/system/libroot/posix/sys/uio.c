@@ -28,6 +28,13 @@ readv(int fd, const struct iovec *vecs, int count)
 
 
 ssize_t
+preadv(int fd, const struct iovec *vecs, int count, off_t pos)
+{
+	return readv_pos(fd, pos, vecs, count);
+}
+
+
+ssize_t
 readv_pos(int fd, off_t pos, const struct iovec *vecs, int count)
 {
 	ssize_t bytes;
@@ -38,6 +45,13 @@ readv_pos(int fd, off_t pos, const struct iovec *vecs, int count)
 	bytes = _kern_readv(fd, pos, vecs, count);
 
 	RETURN_AND_SET_ERRNO(bytes);
+}
+
+
+ssize_t
+pwritev(int fd, const struct iovec *vecs, int count, off_t pos)
+{
+	return writev_pos(fd, pos, vecs, count);
 }
 
 

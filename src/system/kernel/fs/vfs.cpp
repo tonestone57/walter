@@ -182,6 +182,7 @@ struct advisory_lock : public DoublyLinkedListLinkImpl<advisory_lock> {
 	off_t			start;
 	off_t			end;
 	bool			shared;
+	bool			is_ofd;
 };
 
 typedef DoublyLinkedList<advisory_lock> LockList;
@@ -1599,7 +1600,8 @@ advisory_lock_intersects(struct advisory_lock* lock, struct flock* flock)
 /*!	Tests whether acquiring a lock would block.
 */
 static status_t
-test_advisory_lock(struct vnode* vnode, struct flock* flock)
+test_advisory_lock(struct vnode* vnode, struct file_descriptor* descriptor,
+	struct flock* flock)
 {
 	flock->l_type = F_UNLCK;
 
@@ -1607,13 +1609,36 @@ test_advisory_lock(struct vnode* vnode, struct flock* flock)
 	if (locking == NULL)
 		return B_OK;
 
-	team_id team = team_get_current_team_id();
+	void* boundTo = NULL;
+	team_id team = -1;
+
+	if (descriptor != NULL) {
+		boundTo = descriptor;
+	} else {
+		// POSIX lock
+		boundTo = get_current_io_context(false);
+		team = team_get_current_team_id();
+	}
 
 	LockList::Iterator iterator = locking->locks.GetIterator();
 	while (iterator.HasNext()) {
 		struct advisory_lock* lock = iterator.Next();
 
-		 if (lock->team != team && advisory_lock_intersects(lock, flock)) {
+		bool isOwnLock = false;
+		if ((descriptor != NULL) != lock->is_ofd) {
+			// One is OFD, the other POSIX: they always conflict, even if
+			// from the same team.
+			isOwnLock = false;
+		} else if (descriptor != NULL) {
+			// OFD locks conflict with anything that is not the same file
+			// description.
+			isOwnLock = (lock->bound_to == boundTo);
+		} else {
+			// POSIX locks conflict with locks from other teams.
+			isOwnLock = (lock->team == team && lock->bound_to == boundTo);
+		}
+
+		if (!isOwnLock && advisory_lock_intersects(lock, flock)) {
 			// locks do overlap
 			if (flock->l_type != F_RDLCK || !lock->shared) {
 				// collision
@@ -1621,7 +1646,10 @@ test_advisory_lock(struct vnode* vnode, struct flock* flock)
 				flock->l_whence = SEEK_SET;
 				flock->l_start = lock->start;
 				flock->l_len = lock->end - lock->start + 1;
-				flock->l_pid = lock->team;
+				if (lock->is_ofd)
+					flock->l_pid = -1;
+				else
+					flock->l_pid = lock->team;
 				break;
 			}
 		}
@@ -1645,6 +1673,8 @@ release_advisory_lock(struct vnode* vnode, struct io_context* context,
 	if (locking == NULL)
 		return B_OK;
 
+	void* boundTo = descriptor != NULL ? (void*)descriptor : (void*)context;
+
 	// find matching lock entries
 
 	LockList::Iterator iterator = locking->locks.GetIterator();
@@ -1652,12 +1682,8 @@ release_advisory_lock(struct vnode* vnode, struct io_context* context,
 		struct advisory_lock* lock = iterator.Next();
 		bool removeLock = false;
 
-		if (descriptor != NULL && lock->bound_to == descriptor) {
-			// Remove flock() locks
-			removeLock = true;
-		} else if (lock->bound_to == context
-				&& advisory_lock_intersects(lock, flock)) {
-			// Remove POSIX locks
+		if (lock->bound_to == boundTo && advisory_lock_intersects(lock, flock)) {
+			// Remove POSIX or OFD locks
 			bool endsBeyond = false;
 			bool startsBefore = false;
 			if (flock != NULL) {
@@ -1686,13 +1712,14 @@ release_advisory_lock(struct vnode* vnode, struct io_context* context,
 
 				lock->end = flock->l_start - 1;
 
-				secondLock->bound_to = context;
+				secondLock->bound_to = boundTo;
 				secondLock->team = lock->team;
 				secondLock->session = lock->session;
 				// values must already be normalized when getting here
 				secondLock->start = flock->l_start + flock->l_len;
 				secondLock->end = lock->end;
 				secondLock->shared = lock->shared;
+				secondLock->is_ofd = lock->is_ofd;
 
 				locking->locks.Add(secondLock);
 			}
@@ -1751,7 +1778,8 @@ release_advisory_lock(struct vnode* vnode, struct io_context* context,
 */
 static status_t
 acquire_advisory_lock(struct vnode* vnode, io_context* context,
-	struct file_descriptor* descriptor, struct flock* flock, bool wait)
+	struct file_descriptor* descriptor, struct flock* flock, bool wait,
+	bool isOFD)
 {
 	FUNCTION(("acquire_advisory_lock(vnode = %p, flock = %p, wait = %s)\n",
 		vnode, flock, wait ? "yes" : "no"));
@@ -1780,9 +1808,22 @@ acquire_advisory_lock(struct vnode* vnode, io_context* context,
 		while (iterator.HasNext()) {
 			struct advisory_lock* lock = iterator.Next();
 
+			bool isOwnLock = false;
+			if (isOFD != lock->is_ofd) {
+				// One is OFD, the other POSIX: they always conflict, even if
+				// from the same team.
+				isOwnLock = false;
+			} else if (isOFD) {
+				// OFD locks conflict with anything that is not the same file
+				// description.
+				isOwnLock = (lock->bound_to == boundTo);
+			} else {
+				// POSIX locks conflict with locks from other teams.
+				isOwnLock = (lock->team == team && lock->bound_to == boundTo);
+			}
+
 			// TODO: locks from the same team might be joinable!
-			if ((lock->team != team || lock->bound_to != boundTo)
-					&& advisory_lock_intersects(lock, flock)) {
+			if (!isOwnLock && advisory_lock_intersects(lock, flock)) {
 				// locks do overlap
 				if (!shared || !lock->shared) {
 					// we need to wait
@@ -1826,6 +1867,7 @@ acquire_advisory_lock(struct vnode* vnode, io_context* context,
 	lock->start = flock->l_start;
 	lock->end = flock->l_start - 1 + flock->l_len;
 	lock->shared = shared;
+	lock->is_ofd = isOFD;
 
 	locking->locks.Add(lock);
 	put_advisory_locking(locking);
@@ -5694,6 +5736,9 @@ file_free_fd(struct file_descriptor* descriptor)
 	struct vnode* vnode = descriptor->u.vnode;
 
 	if (vnode != NULL) {
+		// Release OFD locks
+		release_advisory_lock(vnode, NULL, descriptor, NULL);
+
 		FS_CALL(vnode, free_cookie, descriptor->cookie);
 		put_vnode(vnode);
 	}
@@ -6240,7 +6285,8 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 
 	status_t status = B_OK;
 
-	if (op == F_SETLK || op == F_SETLKW || op == F_GETLK) {
+	if (op == F_SETLK || op == F_SETLKW || op == F_GETLK
+		|| op == F_OFD_SETLK || op == F_OFD_SETLKW || op == F_OFD_GETLK) {
 		if (descriptor->ops != &sFileOps)
 			status = B_BAD_VALUE;
 		else if (kernel)
@@ -6326,6 +6372,7 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 		}
 
 		case F_GETLK:
+		case F_OFD_GETLK:
 			if (vnode != NULL) {
 				struct flock normalizedLock;
 
@@ -6334,11 +6381,14 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 				if (status != B_OK)
 					break;
 
-				if (HAS_FS_CALL(vnode, test_lock)) {
+				if (op == F_GETLK && HAS_FS_CALL(vnode, test_lock)) {
 					status = FS_CALL(vnode, test_lock, descriptor->cookie,
 						&normalizedLock);
-				} else
-					status = test_advisory_lock(vnode, &normalizedLock);
+				} else {
+					struct file_descriptor* desc = (op == F_OFD_GETLK)
+						? descriptor.Get() : NULL;
+					status = test_advisory_lock(vnode, desc, &normalizedLock);
+				}
 				if (status == B_OK) {
 					if (normalizedLock.l_type == F_UNLCK) {
 						// no conflicting lock found, copy back the same struct
@@ -6372,6 +6422,8 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 
 		case F_SETLK:
 		case F_SETLKW:
+		case F_OFD_SETLK:
+		case F_OFD_SETLKW:
 			status = normalize_flock(descriptor.Get(), &flock);
 			if (status != B_OK)
 				break;
@@ -6379,11 +6431,15 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 			if (vnode == NULL) {
 				status = B_BAD_VALUE;
 			} else if (flock.l_type == F_UNLCK) {
-				if (HAS_FS_CALL(vnode, release_lock)) {
+				struct file_descriptor* desc = NULL;
+				if (op == F_OFD_SETLK || op == F_OFD_SETLKW)
+					desc = descriptor.Get();
+
+				if (desc == NULL && HAS_FS_CALL(vnode, release_lock)) {
 					status = FS_CALL(vnode, release_lock, descriptor->cookie,
 						&flock);
 				} else {
-					status = release_advisory_lock(vnode, context, NULL,
+					status = release_advisory_lock(vnode, context, desc,
 						&flock);
 				}
 			} else {
@@ -6394,12 +6450,17 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 						&& flock.l_type == F_RDLCK))
 					status = B_FILE_ERROR;
 				else {
-					if (HAS_FS_CALL(vnode, acquire_lock)) {
+					bool isOFD = op == F_OFD_SETLK || op == F_OFD_SETLKW;
+					struct file_descriptor* desc = isOFD
+						? descriptor.Get() : NULL;
+
+					if (!isOFD && HAS_FS_CALL(vnode, acquire_lock)) {
 						status = FS_CALL(vnode, acquire_lock,
 							descriptor->cookie, &flock, op == F_SETLKW);
 					} else {
-						status = acquire_advisory_lock(vnode, context, NULL,
-							&flock, op == F_SETLKW);
+						status = acquire_advisory_lock(vnode, context, desc,
+							&flock, op == F_SETLKW || op == F_OFD_SETLKW,
+							isOFD);
 					}
 				}
 			}
@@ -9320,7 +9381,7 @@ _user_flock(int fd, int operation)
 				(operation & LOCK_NB) == 0);
 		} else {
 			status = acquire_advisory_lock(vnode, NULL, descriptor.Get(), &flock,
-				(operation & LOCK_NB) == 0);
+				(operation & LOCK_NB) == 0, false);
 		}
 	}
 

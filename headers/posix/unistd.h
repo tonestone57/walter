@@ -484,6 +484,9 @@ extern int		getlogin_r(char *name, size_t nameSize);
 extern int		sethostname(const char *hostName, size_t nameSize);
 extern int		gethostname(char *hostName, size_t nameSize);
 
+extern long		gethostid(void);
+extern int		sethostid(long hostid);
+
 /* tty */
 extern int		isatty(int fd);
 extern char		*ttyname(int fd);

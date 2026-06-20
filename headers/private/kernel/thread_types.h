@@ -67,6 +67,7 @@ struct user_thread;				// defined in libroot/user_thread.h
 struct VMAddressSpace;
 struct user_mutex_context;		// defined in user_mutex.cpp
 struct xsi_sem_context;			// defined in xsi_semaphore.cpp
+struct xsi_shm_context;			// defined in xsi_shared_memory.cpp
 
 namespace Scheduler {
 	struct ThreadData;
@@ -469,6 +470,7 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 	struct user_mutex_context *user_mutex_context;
 	struct realtime_sem_context	*realtime_sem_context;
 	struct xsi_sem_context *xsi_sem_context;
+	struct xsi_shm_context *xsi_shm_context;
 	struct team_death_entry *death_entry;	// protected by fLock
 	ThreadDeathEntryList	dead_threads;
 

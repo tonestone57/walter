@@ -335,7 +335,7 @@ __sysconf(int name)
 		case _SC_XOPEN_REALTIME_THREADS:
 			return _XOPEN_REALTIME_THREADS;
 		case _SC_XOPEN_SHM:
-			return _XOPEN_SHM;
+			return 1;
 		case _SC_XOPEN_STREAMS:
 			return _XOPEN_STREAMS;
 		case _SC_XOPEN_UNIX:

@@ -2916,6 +2916,163 @@ vm_copy_on_write_area(VMCache* lowerCache,
 }
 
 
+status_t
+vm_clone_address_space(team_id sourceTeam, team_id targetTeam,
+	area_id areaToSkip)
+{
+	MultiAddressSpaceLocker locker;
+	VMAddressSpace* sourceAddressSpace;
+	VMAddressSpace* targetAddressSpace;
+
+	status_t status = locker.AddTeam(sourceTeam, false, &sourceAddressSpace);
+	if (status != B_OK)
+		return status;
+	status = locker.AddTeam(targetTeam, true, &targetAddressSpace);
+	if (status != B_OK)
+		return status;
+
+	// Acquire the lock
+	status = locker.Lock();
+	if (status != B_OK)
+		return status;
+
+	addr_t nextAddress = 0;
+
+	while (true) {
+		VMArea* source = sourceAddressSpace->FindClosestArea(nextAddress, false);
+		if (source == NULL)
+			break;
+
+		nextAddress = source->Base() + source->Size();
+
+		if (source->id == areaToSkip)
+			continue;
+
+		// Try to handle simple case
+		VMCache* cache = vm_area_get_locked_cache(source);
+		bool complex = false;
+
+		// Check complexity
+		if (cache->WiredPagesCount() > 0) {
+			complex = true;
+		} else {
+			for (VMArea* tempArea = cache->areas.First(); tempArea != NULL;
+					tempArea = cache->areas.GetNext(tempArea)) {
+				if (tempArea->address_space != sourceAddressSpace
+					&& tempArea->address_space != targetAddressSpace) {
+					complex = true;
+					break;
+				}
+			}
+		}
+
+		if (complex) {
+			area_id sourceID = source->id;
+			char name[B_OS_NAME_LENGTH];
+			strlcpy(name, source->name, sizeof(name));
+
+			vm_area_put_locked_cache(cache);
+			locker.Unlock();
+
+			// Fallback to standard copy
+			void* address;
+			area_id clonedArea = vm_copy_area(targetTeam, name, &address,
+				B_CLONE_ADDRESS, sourceID);
+
+			if (clonedArea < 0) {
+				return clonedArea;
+			}
+
+			// Relock and continue
+			status = locker.Lock();
+			if (status != B_OK)
+				return status;
+			continue;
+		}
+
+		// Simple case: proceed with copy
+		bool sharedArea = (source->protection & B_SHARED_AREA) != 0;
+		bool writableCopy = (source->protection
+			& (B_KERNEL_WRITE_AREA | B_WRITE_AREA)) != 0;
+
+		uint8* targetPageProtections = NULL;
+		if (source->page_protections != NULL) {
+			const size_t bytes = area_page_protections_size(source->Size());
+			targetPageProtections = (uint8*)malloc_etc(bytes, 0);
+			if (targetPageProtections != NULL) {
+				memcpy(targetPageProtections, source->page_protections, bytes);
+				if (!writableCopy) {
+					for (size_t i = 0; i < bytes; i++) {
+						if ((targetPageProtections[i] & (B_WRITE_AREA
+								| (B_WRITE_AREA << 4))) != 0) {
+							writableCopy = true;
+							break;
+						}
+					}
+				}
+			} else {
+				vm_area_put_locked_cache(cache);
+				locker.Unlock();
+				return B_NO_MEMORY;
+			}
+		}
+
+		VMArea* target;
+		virtual_address_restrictions addressRestrictions = {};
+		addressRestrictions.address = (void*)source->Base();
+		addressRestrictions.address_specification = B_EXACT_ADDRESS;
+
+		void* address = (void*)source->Base();
+
+		status = map_backing_store(targetAddressSpace, cache, source->cache_offset,
+			source->name, source->Size(), source->wiring, source->protection,
+			source->protection_max,
+			sharedArea ? REGION_NO_PRIVATE_MAP : REGION_PRIVATE_MAP,
+			writableCopy ? 0 : CREATE_AREA_DONT_COMMIT_MEMORY,
+			&addressRestrictions, true, &target, &address);
+
+		if (status < B_OK) {
+			free(targetPageProtections);
+			vm_area_put_locked_cache(cache);
+			locker.Unlock();
+			return status;
+		}
+
+		if (targetPageProtections != NULL) {
+			target->page_protections = targetPageProtections;
+			if (!sharedArea) {
+				AreaCacheLocker targetCacheLocker(target);
+				const size_t newPageCommitment
+					= compute_area_page_commitment(target);
+				target->cache->Commit(newPageCommitment * B_PAGE_SIZE,
+					VM_PRIORITY_USER);
+			}
+		}
+
+		if (sharedArea) {
+			cache->AcquireRefLocked();
+		}
+
+		if (!sharedArea && writableCopy) {
+			status = vm_copy_on_write_area(cache, NULL);
+			if (status != B_OK) {
+				// We should try to cleanup, but it is hard here as we hold locks
+				// and created the area.
+				// For now we just return error, fork will fail and cleanup team.
+				vm_area_put_locked_cache(cache);
+				locker.Unlock();
+				return status;
+			}
+		}
+
+		vm_area_put_locked_cache(cache);
+	}
+
+	locker.Unlock();
+	return B_OK;
+}
+
+
 area_id
 vm_copy_area(team_id team, const char* name, void** _address,
 	uint32 addressSpec, area_id sourceID)
