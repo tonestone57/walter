@@ -442,12 +442,14 @@ struct RunQueueScanner {
 	}
 };
 
+static const int32 kFallbackL3ClusterSize = 8;
+
 struct TopologyComparator {
 	bool distinctTopology;
 	TopologyComparator(bool distinct) : distinctTopology(distinct) {}
 
 	int32 GetTopoKey(int32 cpu) const {
-		return distinctTopology ? get_topology_id(cpu) : (cpu / 16);
+		return distinctTopology ? get_topology_id(cpu) : (cpu / kFallbackL3ClusterSize);
 	}
 
 	bool operator()(int32 a, int32 b) const {
@@ -455,6 +457,13 @@ struct TopologyComparator {
 		int32 topoB = GetTopoKey(b);
 		if (topoA != topoB)
 			return topoA < topoB;
+
+		// SMT Sibling Co-Location: Keep physical core siblings clustered together
+		int32 coreA = gCPU[a].topology_id[CPU_TOPOLOGY_CORE];
+		int32 coreB = gCPU[b].topology_id[CPU_TOPOLOGY_CORE];
+		if (coreA != coreB)
+			return coreA < coreB;
+
 		return a < b;
 	}
 };
@@ -1591,13 +1600,13 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 	int32 l3Start = 0;
 	while (l3Start < cpuCount) {
 		int32 topologyID = distinctTopology ? get_topology_id(cpuList[l3Start])
-											: (cpuList[l3Start] / 8);
+											: (cpuList[l3Start] / kFallbackL3ClusterSize);
 		int32 l3End = l3Start + 1;
 
 		// Find end of current L3 domain
 		while (l3End < cpuCount) {
 			int32 nextTopo = distinctTopology ? get_topology_id(cpuList[l3End])
-											  : (cpuList[l3End] / 8);
+											  : (cpuList[l3End] / kFallbackL3ClusterSize);
 			if (nextTopo != topologyID)
 				break;
 			l3End++;
