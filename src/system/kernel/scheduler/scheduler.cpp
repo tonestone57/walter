@@ -1591,13 +1591,13 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 	int32 l3Start = 0;
 	while (l3Start < cpuCount) {
 		int32 topologyID = distinctTopology ? get_topology_id(cpuList[l3Start])
-											: (cpuList[l3Start] / 16);
+											: (cpuList[l3Start] / 8);
 		int32 l3End = l3Start + 1;
 
 		// Find end of current L3 domain
 		while (l3End < cpuCount) {
 			int32 nextTopo = distinctTopology ? get_topology_id(cpuList[l3End])
-											  : (cpuList[l3End] / 16);
+											  : (cpuList[l3End] / 8);
 			if (nextTopo != topologyID)
 				break;
 			l3End++;
@@ -1624,7 +1624,7 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 		// Create a SchedulerNode for this L3 domain
 		int32 currentNodeID = nodeCount++;
 		int32 coresInCurrentNode = 0;
-		const int32 kMaxCoresPerNode = 16;
+		const int32 kMaxCoresPerNode = 32;
 
 		if (coresInL3 > 0) {
 			// Note: ensure we don't write past cpuCount.
