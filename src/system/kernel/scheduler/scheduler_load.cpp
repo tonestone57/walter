@@ -60,7 +60,7 @@ static void _LoadavgUpdate(void* data, int iteration) {
 	for (int i = 0; i < 3; i++) {
 		int retry = 0;
 		const int kMaxRetries = 32;
-		while (retry++ < kMaxRetries) {
+		while (retry < kMaxRetries) {
 			int32 oldLoad = LoadAcquire(sAverageRunnable.ldavg[i]);
 
 			// Note: the 128-bit intermediate is correct, but the final
@@ -79,6 +79,7 @@ static void _LoadavgUpdate(void* data, int iteration) {
 			if (AtomicTestAndSet(sAverageRunnable.ldavg[i], newLoad, oldLoad) == oldLoad) {
 				break;
 			}
+			retry++;
 			cpu_pause();
 		}
 	}
