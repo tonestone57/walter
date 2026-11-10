@@ -192,23 +192,24 @@ static CoreEntry* choose_core(const ThreadData* threadData, const CPUSet& mask,
 				SchedulerNode* node = &gSchedulerNodes[nodeIndex];
 				native_cpu_mask_t idlePackageMask = node->IdlePackageMask();
 
-			while (idlePackageMask != 0) {
-				int32 packageIndex = scheduler_flsnative(idlePackageMask) - 1;
-				idlePackageMask &= ~((native_cpu_mask_t)1 << packageIndex);
+				while (idlePackageMask != 0) {
+					int32 packageIndex = scheduler_flsnative(idlePackageMask) - 1;
+					idlePackageMask &= ~((native_cpu_mask_t)1 << packageIndex);
 
-				int32 globalPackageIndex =
-					node->PackageStartIndex() + packageIndex;
-				if (globalPackageIndex >= gPackageCount)
-					continue;
+					int32 globalPackageIndex =
+						node->PackageStartIndex() + packageIndex;
+					if (globalPackageIndex >= gPackageCount)
+						continue;
 
-				PackageEntry* package = &gPackageEntries[globalPackageIndex];
-				core = package->PeekMinimumLoadCore(cpu, &mask, preferredType);
-				if (core != NULL && core->GetLoad() == 0)
+					PackageEntry* package = &gPackageEntries[globalPackageIndex];
+					core = package->PeekMinimumLoadCore(cpu, &mask, preferredType);
+					if (core != NULL && core->GetLoad() == 0)
+						break;
+					core = NULL;
+				}
+				if (core != NULL)
 					break;
-				core = NULL;
 			}
-			if (core != NULL)
-				break;
 		}
 
 		if (core == NULL) {

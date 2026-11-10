@@ -299,9 +299,14 @@ public:
 		// Monotonic SVT update: ensures virtual time never regresses
 		// even if multiple CPUs update it concurrently.
 		bigtime_t old = (bigtime_t)LoadAcquire64(fSystemVirtualTime);
+		int retry = 0;
+		const int kMaxRetries = 64;
 		while (time > old) {
 			if ((bigtime_t)AtomicTestAndSet64(fSystemVirtualTime, (int64)time, (int64)old) == old)
 				break;
+			if (++retry >= kMaxRetries)
+				break;
+			cpu_pause();
 			old = (bigtime_t)LoadAcquire64(fSystemVirtualTime);
 		}
 	}

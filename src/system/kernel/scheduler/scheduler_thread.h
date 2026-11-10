@@ -390,6 +390,12 @@ inline bigtime_t ThreadData::GetQuantumLeft() {
 inline void ThreadData::StartQuantum(bigtime_t now) {
 	SCHEDULER_ENTER_FUNCTION();
 	StoreRelease64(fQuantumStart, (int64)now);
+	// Decentralized lazy quantum recalculation: pick up the updated
+	// quantum length lazily at the start of the thread's quantum rather
+	// than forcing an expensive global lock-held scan across all threads.
+	if (!IsRealTime()) {
+		_UpdateEffectivePriority(now);
+	}
 }
 
 inline bool ThreadData::HasQuantumEnded(bool wasPreempted, bool hasYielded,

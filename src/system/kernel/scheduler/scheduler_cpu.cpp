@@ -57,24 +57,32 @@ UpdateIdleCoreLFB(CoreEntry* core, bool idle)
 		AtomicOr64(gIdleNodeSummary, (int64)(1ULL << nodeID));
 	} else {
 		AtomicAnd64(gIdleCoresInNode[nodeID], (int64)~mask);
-		// Double-check: if the entire node is now active, clear summary bit.
-		// Using a loop to handle potential race between cores.
+		// Node Summary Clearing Race Resolution:
+		// When the last idle core in a node becomes active, it must clear its bit in
+		// gIdleCoresInNode[nodeID] and potentially clear its summary bit in gIdleNodeSummary.
+		// If another core concurrently goes idle, a naive write can lose the idle state.
+		// To resolve this, UpdateIdleCoreLFB uses a post-CAS re-verification loop: after clearing
+		// the node summary bit, it immediately re-reads gIdleCoresInNode[nodeID]; if any core
+		// went idle in the race window, it restores the summary bit using AtomicOr64.
 		int retry = 0;
 		const int kMaxRetries = 64;
-		while (retry++ < kMaxRetries) {
+		while (retry < kMaxRetries) {
 			uint64 cores = (uint64)LoadAcquire64(gIdleCoresInNode[nodeID]);
-			if (cores != 0) break;
+			if (cores != 0)
+				break;
 
 			uint64 summary = (uint64)LoadAcquire64(gIdleNodeSummary);
-			if (!(summary & (1ULL << nodeID))) break;
+			if (!(summary & (1ULL << nodeID)))
+				break;
 
 			if ((uint64)AtomicTestAndSet64(gIdleNodeSummary, (int64)(summary & ~(1ULL << nodeID)), (int64)summary) == summary) {
-				// Race check: if a core in this node went idle between our
+				// Post-CAS re-verification loop: if a core in this node went idle between our
 				// LoadAcquire and the CAS, the summary bit must be restored.
 				if ((uint64)LoadAcquire64(gIdleCoresInNode[nodeID]) != 0)
 					AtomicOr64(gIdleNodeSummary, (int64)(1ULL << nodeID));
 				break;
 			}
+			retry++;
 			cpu_pause();
 		}
 	}
@@ -2153,18 +2161,19 @@ static int dump_idle_cores(int /* argc */, char** /* argv */) {
 				if (nodeIndex >= gNodeCount)
 					continue;
 
-			native_cpu_mask_t packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
-			while (packageMask != 0) {
-				int32 packageIndex = scheduler_flsnative(packageMask) - 1;
-				packageMask &= ~((native_cpu_mask_t)1 << packageIndex);
+				native_cpu_mask_t packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
+				while (packageMask != 0) {
+					int32 packageIndex = scheduler_flsnative(packageMask) - 1;
+					packageMask &= ~((native_cpu_mask_t)1 << packageIndex);
 
-				int32 globalPackageIndex =
-					gSchedulerNodes[nodeIndex].PackageStartIndex() +
-					packageIndex;
-				if (globalPackageIndex < gPackageCount) {
-					kprintf("%-4" B_PRId32 " ", nodeIndex);
-					DebugDumper::DumpIdleCoresInPackage(
-						&gPackageEntries[globalPackageIndex]);
+					int32 globalPackageIndex =
+						gSchedulerNodes[nodeIndex].PackageStartIndex() +
+						packageIndex;
+					if (globalPackageIndex < gPackageCount) {
+						kprintf("%-4" B_PRId32 " ", nodeIndex);
+						DebugDumper::DumpIdleCoresInPackage(
+							&gPackageEntries[globalPackageIndex]);
+					}
 				}
 			}
 		}
