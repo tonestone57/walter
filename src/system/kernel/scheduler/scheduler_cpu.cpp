@@ -2153,18 +2153,19 @@ static int dump_idle_cores(int /* argc */, char** /* argv */) {
 				if (nodeIndex >= gNodeCount)
 					continue;
 
-			native_cpu_mask_t packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
-			while (packageMask != 0) {
-				int32 packageIndex = scheduler_flsnative(packageMask) - 1;
-				packageMask &= ~((native_cpu_mask_t)1 << packageIndex);
+				native_cpu_mask_t packageMask = gSchedulerNodes[nodeIndex].IdlePackageMask();
+				while (packageMask != 0) {
+					int32 packageIndex = scheduler_flsnative(packageMask) - 1;
+					packageMask &= ~((native_cpu_mask_t)1 << packageIndex);
 
-				int32 globalPackageIndex =
-					gSchedulerNodes[nodeIndex].PackageStartIndex() +
-					packageIndex;
-				if (globalPackageIndex < gPackageCount) {
-					kprintf("%-4" B_PRId32 " ", nodeIndex);
-					DebugDumper::DumpIdleCoresInPackage(
-						&gPackageEntries[globalPackageIndex]);
+					int32 globalPackageIndex =
+						gSchedulerNodes[nodeIndex].PackageStartIndex() +
+						packageIndex;
+					if (globalPackageIndex < gPackageCount) {
+						kprintf("%-4" B_PRId32 " ", nodeIndex);
+						DebugDumper::DumpIdleCoresInPackage(
+							&gPackageEntries[globalPackageIndex]);
+					}
 				}
 			}
 		}
