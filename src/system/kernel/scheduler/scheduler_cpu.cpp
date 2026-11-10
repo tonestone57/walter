@@ -129,6 +129,16 @@ struct LocalNodeStealAction {
 			victim->RunQueue()->IsBitmapEmpty())
 			return false;
 
+		// Lockless Lag Snooping: Check the candidate victim thread's lag
+		// before acquiring locks or claiming bits. Real-Time threads bypass this.
+		if (victim->RunQueue()->GetRealTimeBitmap() == 0) {
+			ThreadData* candidate = victim->PeekThread();
+			if (candidate != NULL && !candidate->IsRealTime()) {
+				if (candidate->GetLag() < gL3LagThreshold)
+					return false;
+			}
+		}
+
 		int32 stolenPriority = -1;
 		// Lock-Free Bit-Stealing Phase 2: Atomic Steal Attempt
 		*stolen = victim->StealThreadLockless(stolenPriority, cpu->ID());
@@ -199,6 +209,16 @@ struct NUMARandomStealAction {
 			victim->RunQueue()->IsBitmapEmpty())
 			return false;
 
+		// Lockless Lag Snooping: Check the candidate victim thread's lag
+		// before acquiring locks or claiming bits. Real-Time threads bypass this.
+		if (victim->RunQueue()->GetRealTimeBitmap() == 0) {
+			ThreadData* candidate = victim->PeekThread();
+			if (candidate != NULL && !candidate->IsRealTime()) {
+				if (candidate->GetLag() < gNUMANodeLagThreshold)
+					return false;
+			}
+		}
+
 		int32 stolenPriority = -1;
 		// Lock-Free Bit-Stealing Phase 2: Atomic Steal Attempt
 		*stolen = victim->StealThreadLockless(stolenPriority, cpu->ID());
@@ -265,6 +285,32 @@ struct GlobalRandomStealAction {
 		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
 			victim->RunQueue()->IsBitmapEmpty())
 			return false;
+
+		// Lockless Lag Snooping: Check the candidate victim thread's lag
+		// before acquiring locks or claiming bits. Real-Time threads bypass this.
+		if (victim->RunQueue()->GetRealTimeBitmap() == 0) {
+			ThreadData* candidate = victim->PeekThread();
+			if (candidate != NULL && !candidate->IsRealTime()) {
+				int32 myNUMA = -1;
+				CoreEntry* myCore = cpu->Core();
+				if (myCore != NULL && myCore->Package() != NULL &&
+					myCore->Package()->Node() != NULL) {
+					myNUMA = myCore->Package()->Node()->NUMAID();
+				}
+
+				int32 victimNUMA = -1;
+				if (entry->Node() != NULL)
+					victimNUMA = entry->Node()->NUMAID();
+
+				bool crossNUMA =
+					(myNUMA != -1 && victimNUMA != -1 && myNUMA != victimNUMA);
+				int64 threshold =
+					crossNUMA ? gGlobalLagThreshold : gNUMANodeLagThreshold;
+
+				if (candidate->GetLag() < threshold)
+					return false;
+			}
+		}
 
 		int32 stolenPriority = -1;
 		// Lock-Free Bit-Stealing Phase 2: Atomic Steal Attempt
@@ -970,6 +1016,16 @@ ThreadData* CPUEntry::_TryStealWorkL3(bigtime_t now) {
 		if (victim->RunQueue()->GetRealTimeBitmap() == 0 &&
 			victim->RunQueue()->IsBitmapEmpty())
 			continue;
+
+		// Lockless Lag Snooping: Check the candidate victim thread's lag
+		// before acquiring locks or claiming bits. Real-Time threads bypass this.
+		if (victim->RunQueue()->GetRealTimeBitmap() == 0) {
+			ThreadData* candidate = victim->PeekThread();
+			if (candidate != NULL && !candidate->IsRealTime()) {
+				if (candidate->GetLag() < gL3LagThreshold)
+					continue;
+			}
+		}
 
 		int32 stolenPriority = -1;
 		ThreadData* stolen =
