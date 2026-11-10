@@ -446,7 +446,10 @@ static const int32 kFallbackL3ClusterSize = 8;
 
 struct TopologyComparator {
 	bool distinctTopology;
-	TopologyComparator(bool distinct) : distinctTopology(distinct) {}
+	const uint64* cpuFrequencies;
+
+	TopologyComparator(bool distinct, const uint64* freqs = NULL)
+		: distinctTopology(distinct), cpuFrequencies(freqs) {}
 
 	int32 GetTopoKey(int32 cpu) const {
 		return distinctTopology ? get_topology_id(cpu) : (cpu / kFallbackL3ClusterSize);
@@ -457,6 +460,13 @@ struct TopologyComparator {
 		int32 topoB = GetTopoKey(b);
 		if (topoA != topoB)
 			return topoA < topoB;
+
+		// Heterogeneous Core Isolation: Segregate different core types
+		// (e.g. big Performance vs little Efficiency cores) into distinct clusters
+		if (cpuFrequencies != NULL) {
+			if (cpuFrequencies[a] != cpuFrequencies[b])
+				return cpuFrequencies[a] > cpuFrequencies[b];
+		}
 
 		// SMT Sibling Co-Location: Keep physical core siblings clustered together
 		int32 coreA = gCPU[a].topology_id[CPU_TOPOLOGY_CORE];
@@ -1589,8 +1599,21 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 		}
 	}
 
-	// Sort by L3 Topology ID
-	TopologyComparator comparator(distinctTopology);
+	// Sample CPU frequencies for heterogeneous core isolation
+	uint64* freqs = new (std::nothrow) uint64[cpuCount];
+	ArrayDeleter<uint64> freqsDeleter(freqs);
+	bool hasHeteroFreqs = false;
+	if (freqs != NULL) {
+		uint64 firstFreq = cpu_frequency(0);
+		for (int32 i = 0; i < cpuCount; i++) {
+			freqs[i] = cpu_frequency(i);
+			if (freqs[i] != firstFreq && freqs[i] != 0)
+				hasHeteroFreqs = true;
+		}
+	}
+
+	// Sort by L3 Topology ID and core frequency
+	TopologyComparator comparator(distinctTopology, hasHeteroFreqs ? freqs : NULL);
 
 	std::sort(cpuList, cpuList + cpuCount, comparator);
 
@@ -1601,19 +1624,31 @@ static status_t build_topology_mappings(int32& cpuCount, int32& coreCount,
 	while (l3Start < cpuCount) {
 		int32 topologyID = distinctTopology ? get_topology_id(cpuList[l3Start])
 											: (cpuList[l3Start] / kFallbackL3ClusterSize);
+		uint64 coreFreq = (hasHeteroFreqs && freqs != NULL) ? freqs[cpuList[l3Start]] : 0;
 		int32 l3End = l3Start + 1;
 
-		// Find end of current L3 domain
+		// Find end of current L3 domain and core type cluster
 		while (l3End < cpuCount) {
 			int32 nextTopo = distinctTopology ? get_topology_id(cpuList[l3End])
 											  : (cpuList[l3End] / kFallbackL3ClusterSize);
 			if (nextTopo != topologyID)
 				break;
+			if (hasHeteroFreqs && freqs != NULL && freqs[cpuList[l3End]] != coreFreq)
+				break;
 			l3End++;
 		}
 
 		int32 coresInL3 = l3End - l3Start;
+
+		// Dynamic Cluster Sizing Based on L3 Cache / Domain Size:
+		// Larger L3 domains (e.g. 8-core CCX or >=8 cores) scale cluster size
+		// to 8 to avoid unnecessary splitting and maximize cache sharing.
+		// Smaller domains scale to 2-4 cores to reduce queue lock contention.
 		int32 targetClusterSize = 4;
+		if (coresInL3 >= 8)
+			targetClusterSize = 8;
+		else if (coresInL3 <= 3)
+			targetClusterSize = coresInL3;
 
 		// Calculate balanced cluster sizes
 		// Formula: Round to nearest integer to find ideal cluster count.
