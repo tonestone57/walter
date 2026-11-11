@@ -46,7 +46,10 @@ void __riscv64_setup_system_time(uint64 conversionFactor);
 static inline void
 arch_cpu_pause(void)
 {
-	// TODO: CPU pause
+	// RISC-V Zihintpause extension hint encoded as FENCE with pred=W, succ=0
+	// (0x0100000F). Recognized as a hint by cores supporting pause, and
+	// safely executed as a nop/fence on older RISC-V cores.
+	__asm__ __volatile__(".insn i 0x0F, 0, x0, x0, 0x010" : : : "memory");
 }
 
 

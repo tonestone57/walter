@@ -116,7 +116,13 @@ void arch_cpu_invalidate_TLB_page(addr_t page);
 static inline void
 arch_cpu_pause(void)
 {
-	// TODO: ARM Priority pause call
+#if defined(__ARM_ARCH_7__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7R__) || \
+	defined(__ARM_ARCH_7M__) || (defined(__ARM_ARCH) && __ARM_ARCH >= 7) || \
+	defined(__ARM_ARCH_6K__) || defined(__ARM_ARCH_6ZK__)
+	__asm__ __volatile__("yield" : : : "memory");
+#else
+	__asm__ __volatile__("nop" : : : "memory");
+#endif
 }
 
 
